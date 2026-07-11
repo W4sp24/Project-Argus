@@ -7,10 +7,25 @@
 
 | Field | Value |
 |---|---|
-| Active phase | P1 — RAG + chat |
-| Status | NOT STARTED (P0.5 complete pending 2 human steps) |
-| Last green commit | feat/p0.5-dev-journal head (17 pytest green, web build green, 8 routes) |
-| Next action | Plan + execute P1 per playbook §5 (watcher, extract, chunk, embed, retrieve, agent chat) |
+| Active phase | P1.5 — Coursework engine |
+| Status | NOT STARTED (P1 complete) |
+| Last green commit | feat/p1-rag-chat head (35 pytest green, web build green) |
+| Next action | Plan + execute P1.5 per playbook §5 (study guides, practice exams, quiz mode, syllabus import) |
+
+## P1 exit criteria evidence (2026-07-12)
+
+```
+pytest -> 35 passed, incl.: private/no-ai never indexed (I3); pdf chunk carries
+  page meta; retrieval returns seeded fact; recency boost orders daily notes;
+  wikilink expansion; ws streams >1 delta chunk
+friday reindex (Scientia) -> Indexed 4 chunks from 2 files
+Manual QA (real agent, subscription auth, model claude-opus-4-8):
+  "What folders does my vault use?" -> cited answer [15-Courses/CS000/course.md] [Welcome.md]
+  "When is my dentist appointment?" -> "That's not in your notes." + suggestion
+npm run build -> 8 routes; streaming chat UI with citation chips -> obsidian:// links
+Note: agent cold start ~20s (embedding model) — mitigated with background warm()
+  at first ws connection.
+```
 
 ## P0.5 exit criteria evidence (2026-07-12)
 
@@ -45,8 +60,8 @@ npm run build       -> compiled; routes /, /today, /tasks, /chat, /study, /revie
 |---|---|---|
 | P0 — Foundation | ✅ DONE (fa16fc0) | repo scaffold, vault template, health API, web shell |
 | P0.5 — Build journal & Obsidian dev loop | ✅ DONE (2 human steps open) | hooks, /log-session, journal API, Journal page |
-| P1 — RAG + chat | NEXT | |
-| P1.5 — Coursework engine | PENDING | |
+| P1 — RAG + chat | ✅ DONE | local embeddings, hybrid retrieval, streaming cited chat |
+| P1.5 — Coursework engine | NEXT | |
 | P2 — Tasks + calendar | PENDING | gcal OAuth = expected human stop |
 | P3 — Planner + approvals | PENDING | |
 | P4 — Briefings + insights | PENDING | |

@@ -48,6 +48,16 @@ here, not asked.
   MCP for narratives; the command allows direct file writes as fallback so the loop
   works before the REST plugin exists. The deterministic stub is hook-written either
   way.
+- **D-013 — 90-Meta excluded from RAG.** The journal zone is served by the journal
+  API (D2); keeping it out of the RAG index prevents dev-session noise from
+  polluting daily-life retrieval. Revisit if journal-aware chat is wanted later.
+- **D-014 — Chat runner is dependency-injected.** `/ws/chat` takes an async-iterator
+  runner; tests stream canned deltas without touching the agent SDK. The real
+  runner background-warms the embedding index at first connection (cold model load
+  inside a tool call blocked the agent's event loop for ~20s).
+- **D-015 — Token-count proxy in chunker.** Playbook targets ~350 tokens/chunk;
+  implemented as 260 words (≈350 tokens) with 40-word overlap — avoids a tokenizer
+  dependency for marginal precision.
 - **D-005 — Python env.** `uv` not installed; standard `python -m venv .venv` + pip.
   Heavy RAG deps (chromadb, sentence-transformers/torch) are an optional extra
   (`[rag]`) installed at P1 so P0 stays fast and open-source setup stays minimal.

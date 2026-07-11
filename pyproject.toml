@@ -16,6 +16,8 @@ dependencies = [
     "python-frontmatter>=1.1",
     "watchdog>=4.0",
     "keyring>=25.0",
+    "claude-agent-sdk>=0.1",
+    "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
