@@ -101,6 +101,18 @@ class ChatAgent:
         self._settings = settings
         self._index = VaultIndex(settings.db_path.parent / "chroma")
 
+    def warm(self) -> None:
+        """Load the embedding model + chroma now, off the chat hot path.
+
+        The first vault tool call otherwise pays ~20s of model loading inside
+        the agent's event loop.
+        """
+        import contextlib
+
+        # Warming is best-effort; real errors surface on actual queries.
+        with contextlib.suppress(Exception):
+            self._index.query("warmup", n_results=1)
+
     async def stream_chat(self, message: str) -> AsyncIterator[str]:
         """Yield text deltas for one user message (I5: subscription auth)."""
         from claude_agent_sdk import (

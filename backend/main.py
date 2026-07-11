@@ -34,14 +34,24 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class VaultInfo(BaseModel):
+    """Vault identity for building obsidian:// deep links client-side."""
+
+    name: str
+
+
 ChatRunner = Callable[[str], AsyncIterator[str]]
 
 
 def _default_chat_runner(settings: Settings) -> ChatRunner:
     """Lazily build the real agent so the app boots without agent deps."""
+    import threading
+
     from backend.agent.runtime import ChatAgent
 
-    return ChatAgent(settings).stream_chat
+    agent = ChatAgent(settings)
+    threading.Thread(target=agent.warm, daemon=True).start()
+    return agent.stream_chat
 
 
 def create_app(settings: Settings | None = None, chat_runner: ChatRunner | None = None) -> FastAPI:
@@ -66,6 +76,10 @@ def create_app(settings: Settings | None = None, chat_runner: ChatRunner | None 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse()
+
+    @app.get("/api/vault", response_model=VaultInfo)
+    def vault_info() -> VaultInfo:
+        return VaultInfo(name=resolved.vault_path.name)
 
     @app.get("/api/notes", response_model=list[NoteInfo])
     def notes() -> list[NoteInfo]:
