@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+*.tsbuildinfo
+npm-debug.log*
+
+# FRIDAY local data (lives next to the vault, never in the repo)
+.friday/
+demo-vault/
+
+# Secrets & config
+.env
+credentials.json
+token.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
