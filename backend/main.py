@@ -1,12 +1,14 @@
 """FRIDAY FastAPI application.
 
-REST endpoints for the dashboard. CORS is restricted to the local Next.js dev
-server. Run with ``uvicorn backend.main:app --port 8000``.
+REST endpoints + the /ws/chat WebSocket for the dashboard. CORS is restricted
+to the local Next.js dev server. Run with ``uvicorn backend.main:app --port 8000``.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Request
+from collections.abc import AsyncIterator, Callable
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -32,8 +34,22 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build the FastAPI app around the given (or default) settings."""
+ChatRunner = Callable[[str], AsyncIterator[str]]
+
+
+def _default_chat_runner(settings: Settings) -> ChatRunner:
+    """Lazily build the real agent so the app boots without agent deps."""
+    from backend.agent.runtime import ChatAgent
+
+    return ChatAgent(settings).stream_chat
+
+
+def create_app(settings: Settings | None = None, chat_runner: ChatRunner | None = None) -> FastAPI:
+    """Build the FastAPI app around the given (or default) settings.
+
+    ``chat_runner`` is injectable so tests can stream canned deltas without
+    touching the real agent SDK.
+    """
     resolved = settings or Settings.load()
     app = FastAPI(title="FRIDAY", version="0.1.0")
     app.add_middleware(
@@ -74,6 +90,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if note is None:
             raise HTTPException(status_code=404, detail="note not found")
         return note
+
+    @app.websocket("/ws/chat")
+    async def ws_chat(websocket: WebSocket) -> None:
+        """Bridge agent streaming deltas to the browser.
+
+        Frames out: {type: "delta", text} ... {type: "done"} | {type: "error", detail}.
+        """
+        await websocket.accept()
+        runner = chat_runner or _default_chat_runner(resolved)
+        try:
+            while True:
+                payload = await websocket.receive_json()
+                message = str(payload.get("message", "")).strip()
+                if not message:
+                    await websocket.send_json({"type": "error", "detail": "empty message"})
+                    continue
+                try:
+                    async for delta in runner(message):
+                        await websocket.send_json({"type": "delta", "text": delta})
+                    await websocket.send_json({"type": "done"})
+                except Exception as exc:  # agent errors must reach the UI, not kill the socket
+                    await websocket.send_json({"type": "error", "detail": str(exc)})
+        except WebSocketDisconnect:
+            return
 
     return app
 
