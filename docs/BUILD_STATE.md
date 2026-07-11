@@ -38,7 +38,7 @@ npm run build       -> compiled; routes /, /today, /tasks, /chat, /study, /revie
 
 | Item | Needed from | Status |
 |---|---|---|
-| GitHub remote (repo not pre-created; `gh` CLI not installed) | Ethan | OPEN — local commits only until a remote URL is provided |
+| GitHub remote (repo not pre-created; `gh` CLI not installed) | Ethan | ✅ RESOLVED — origin = github.com/W4sp24/Project-Argus; main + phase branches pushed |
 | Obsidian Local REST API plugin + API key (P0.5 MCP) | Ethan | OPEN |
 | Google OAuth `credentials.json` (P2) | Ethan | OPEN (expected stop) |
 | Todoist API token (P2) | Ethan | OPEN (expected stop) |
