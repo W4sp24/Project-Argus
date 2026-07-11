@@ -20,6 +20,17 @@ here, not asked.
 - **D-004 — Linting/formatting.** Spec mandates PEP 8 / conventions but pins no tool.
   Decision: `ruff` (lint + format, line length 100) for Python; ESLint (next/core-web-vitals)
   + TypeScript strict for web. Enforced before each commit.
+- **D-006 — Plan execution mode.** Playbook prescribes subagent-driven development;
+  executed P0 inline instead (full context already in-session; subagent dispatch adds
+  cost without review benefit at this scale). TDD red→green kept per task.
+- **D-007 — Phase-gate review tooling.** `/code-review` resolves to the CodeRabbit CLI,
+  which is not installed and requires interactive auth. Substituted a manual diff
+  review for P0 (no confirmed defects; noted: `_write_env` drops comments from `.env`,
+  Today greeting hardcodes the owner name pending a config surface). Install
+  `coderabbit` CLI to restore automated gates.
+- **D-008 — `.env` points at the real vault.** VAULT_PATH set to
+  `C:\Users\ethan\Documents\Scientia` per the addendum ("Scientia is FRIDAY's
+  VAULT_PATH"). `demo-vault/` is disposable test output, gitignored.
 - **D-005 — Python env.** `uv` not installed; standard `python -m venv .venv` + pip.
   Heavy RAG deps (chromadb, sentence-transformers/torch) are an optional extra
   (`[rag]`) installed at P1 so P0 stays fast and open-source setup stays minimal.
