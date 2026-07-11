@@ -36,9 +36,7 @@ class InitError(RuntimeError):
 
 
 def _run_git(args: list[str], cwd: Path) -> None:
-    result = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False
-    )
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise InitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
 
