@@ -6,12 +6,21 @@ server. Run with ``uvicorn backend.main:app --port 8000``.
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.config import ConfigError, Settings
+from backend.journal import (
+    JournalNote,
+    JournalPathError,
+    JournalProject,
+    JournalSession,
+    list_projects,
+    list_sessions,
+    read_note,
+)
 from backend.notes import NoteInfo, list_notes
 
 ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -45,6 +54,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/notes", response_model=list[NoteInfo])
     def notes() -> list[NoteInfo]:
         return list_notes(resolved.vault_path)
+
+    # Dev journal — read-only by contract (D1): no write endpoints exist.
+
+    @app.get("/api/journal/projects", response_model=list[JournalProject])
+    def journal_projects() -> list[JournalProject]:
+        return list_projects(resolved.vault_path)
+
+    @app.get("/api/journal/sessions", response_model=list[JournalSession])
+    def journal_sessions(project: str | None = None) -> list[JournalSession]:
+        return list_sessions(resolved.vault_path, project)
+
+    @app.get("/api/journal/note", response_model=JournalNote)
+    def journal_note(path: str) -> JournalNote:
+        try:
+            note = read_note(resolved.vault_path, path)
+        except JournalPathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        return note
 
     return app
 

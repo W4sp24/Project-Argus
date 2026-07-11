@@ -84,6 +84,50 @@ body {
   @apply bg-gradient-to-r from-primary-soft via-accent to-signal bg-clip-text text-transparent;
 }
 
+/* Rendered markdown inside journal/detail panes */
+.prose-journal h1,
+.prose-journal h2,
+.prose-journal h3 {
+  @apply mb-2 mt-5 font-display font-medium text-ink first:mt-0;
+}
+.prose-journal h1 {
+  @apply text-xl;
+}
+.prose-journal h2 {
+  @apply text-lg;
+}
+.prose-journal h3 {
+  @apply text-base;
+}
+.prose-journal p {
+  @apply mb-3;
+}
+.prose-journal ul,
+.prose-journal ol {
+  @apply mb-3 ml-5 list-disc space-y-1;
+}
+.prose-journal ol {
+  @apply list-decimal;
+}
+.prose-journal code {
+  @apply rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.85em] text-primary-soft;
+}
+.prose-journal pre {
+  @apply mb-3 overflow-x-auto rounded-xl border border-white/10 bg-black/30 p-4;
+}
+.prose-journal pre code {
+  @apply bg-transparent p-0 text-ink-muted;
+}
+.prose-journal a {
+  @apply text-primary-soft underline decoration-primary-soft/40 underline-offset-2;
+}
+.prose-journal blockquote {
+  @apply mb-3 border-l-2 border-primary/40 pl-4 italic text-ink-faint;
+}
+.prose-journal hr {
+  @apply my-4 border-white/10;
+}
+
 ::selection {
   background: rgba(139, 92, 246, 0.4);
 }

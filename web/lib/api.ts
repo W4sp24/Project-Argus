@@ -23,3 +23,46 @@ export interface NoteInfo {
 export function useNotes() {
   return useSWR<NoteInfo[]>("/api/notes", fetcher);
 }
+
+export interface JournalProject {
+  slug: string;
+  title: string;
+  updated: string;
+  sessions: number;
+  open_threads: number;
+  path: string;
+}
+
+export interface JournalSession {
+  date: string;
+  project: string;
+  branch: string | null;
+  files: number;
+  has_narrative: boolean;
+  path: string;
+}
+
+export interface JournalNote {
+  path: string;
+  markdown: string;
+  obsidian_uri: string;
+}
+
+/** Dev-journal projects (90-Meta/projects), most recently updated first. */
+export function useJournalProjects() {
+  return useSWR<JournalProject[]>("/api/journal/projects", fetcher);
+}
+
+/** Dev-journal sessions, newest first, optionally scoped to one project. */
+export function useJournalSessions(project?: string) {
+  const query = project ? `?project=${encodeURIComponent(project)}` : "";
+  return useSWR<JournalSession[]>(`/api/journal/sessions${query}`, fetcher);
+}
+
+/** One journal note's raw markdown + obsidian:// deep link. */
+export function useJournalNote(path?: string) {
+  return useSWR<JournalNote>(
+    path ? `/api/journal/note?path=${encodeURIComponent(path)}` : null,
+    fetcher,
+  );
+}
