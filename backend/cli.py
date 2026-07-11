@@ -84,6 +84,16 @@ def main(argv: list[str] | None = None) -> int:
         "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file to record VAULT_PATH in"
     )
 
+    reindex_parser = subparsers.add_parser("reindex", help="rebuild the RAG index from scratch")
+    reindex_parser.add_argument(
+        "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
+    )
+
+    watch_parser = subparsers.add_parser("watch", help="watch the vault and keep the index fresh")
+    watch_parser.add_argument(
+        "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -94,6 +104,28 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"Vault created at {created.resolve()}")
         print(f"VAULT_PATH written to {args.env_file}")
+        return 0
+
+    if args.command in ("reindex", "watch"):
+        from backend.config import Settings
+        from backend.rag.index import VaultIndex
+
+        settings = Settings.load(args.env_file)
+        index = VaultIndex(settings.db_path.parent / "chroma")
+
+        if args.command == "reindex":
+            counts = index.reindex_all(settings.vault_path)
+            print(f"Indexed {sum(counts.values())} chunks from {len(counts)} files.")
+            return 0
+
+        from backend.rag.watcher import watch_vault
+
+        print(f"Watching {settings.vault_path} (Ctrl+C to stop)")
+        watch_vault(
+            settings.vault_path,
+            index,
+            on_update=lambda rel, count: print(f"  reindexed {rel} ({count} chunks)"),
+        )
         return 0
     return 2
 
