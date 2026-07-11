@@ -100,7 +100,9 @@ def list_projects(vault_path: Path) -> list[JournalProject]:
     """All visible project notes, most recently updated first."""
     projects_root = vault_path / JOURNAL_DIR / "projects"
     session_counts: dict[str, int] = {}
-    for _, _, project in _iter_session_files(vault_path):
+    for file_path, _, project in _iter_session_files(vault_path):
+        if _load_visible(file_path) is None:  # D2: private sessions don't even count
+            continue
         session_counts[project] = session_counts.get(project, 0) + 1
 
     projects: list[JournalProject] = []

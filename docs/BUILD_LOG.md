@@ -31,6 +31,23 @@ here, not asked.
 - **D-008 — `.env` points at the real vault.** VAULT_PATH set to
   `C:\Users\ethan\Documents\Scientia` per the addendum ("Scientia is FRIDAY's
   VAULT_PATH"). `demo-vault/` is disposable test output, gitignored.
+- **D-009 — Scientia scaffold.** Scientia was a flat 2-file vault; added the PARA
+  zones non-destructively (existing files untouched, root daily note left in place
+  for Ethan to move) plus `90-Meta/`, and git-initialized the vault (I2 groundwork).
+- **D-010 — Hook wiring is user-run.** The permission classifier blocks Claude from
+  editing `~/.claude/settings.json` to install auto-run hooks (self-modification
+  guardrail). Shipped `claude-integration/setup.ps1` instead: installs hooks +
+  /log-session and merges the settings snippet non-destructively. Hook scripts and
+  the command ARE installed to `~/.claude/{hooks,commands}` already; only the
+  settings.json wiring needs Ethan.
+- **D-011 — no-ai matching is substring-conservative.** A note whose *body text*
+  mentions the literal `#no-ai` tag is treated as private (false-positive-safe,
+  false-negative-unsafe). Docs in the vault reference the tag as "no-ai" without
+  the hash to stay visible.
+- **D-012 — /log-session works MCP-or-direct.** Addendum D3 prescribes the Obsidian
+  MCP for narratives; the command allows direct file writes as fallback so the loop
+  works before the REST plugin exists. The deterministic stub is hook-written either
+  way.
 - **D-005 — Python env.** `uv` not installed; standard `python -m venv .venv` + pip.
   Heavy RAG deps (chromadb, sentence-transformers/torch) are an optional extra
   (`[rag]`) installed at P1 so P0 stays fast and open-source setup stays minimal.

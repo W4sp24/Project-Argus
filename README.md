@@ -52,6 +52,20 @@ tests/          pytest suite
 docs/           specs, build state, decision log, phase plans
 ```
 
+## Claude Code dev loop (optional)
+
+The `claude-integration/` folder journals your Claude Code sessions into the vault's
+`90-Meta/` zone and surfaces them on the dashboard's **Journal** page:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File claude-integration\setup.ps1 -VaultPath "C:\path\to\your\vault"
+```
+
+That installs two session hooks (objective stubs, written even with Obsidian closed)
+and a `/log-session` command (narrative writeups on demand). For vault access from
+Claude via MCP, install Obsidian's **Local REST API** community plugin and register
+its key: `claude mcp add obsidian -s user -e OBSIDIAN_API_KEY=<key> -e OBSIDIAN_HOST=127.0.0.1 -e OBSIDIAN_PORT=27124 -- uvx mcp-obsidian`.
+
 ## Privacy
 
 - Indexing, embeddings, and storage are fully local.
