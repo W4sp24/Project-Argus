@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.claude\\hooks\\session-start-context.ps1\"",
+            "shell": "powershell",
+            "timeout": 15,
+            "statusMessage": "Loading project context from the vault"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.claude\\hooks\\session-end-journal.ps1\"",
+            "shell": "powershell",
+            "timeout": 20,
+            "statusMessage": "Journaling session to the vault"
+          }
+        ]
+      }
+    ]
+  }
+}
