@@ -78,7 +78,7 @@ Every call: git pre-apply snapshot first, then apply, then an audit line under `
 
 ## 5. Vault cleanup & structure optimization (one-time, reviewed)
 
-Enumerate → show Ethan → act only on confirmation → via writer with snapshot:
+Enumerate → show Ethan → act only on confirmation. In-vault content goes through the writer with snapshot; `90-Meta/` items are dev-owned (the app writer refuses that path per Section 4) and are handled by dev tooling directly as vault git commits:
 
 **Test-artifact removal:**
 - `15-Courses/CS000/` (QA test course + test uploads)
