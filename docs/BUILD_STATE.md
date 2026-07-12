@@ -7,10 +7,25 @@
 
 | Field | Value |
 |---|---|
-| Active phase | P1.5 — Coursework engine |
-| Status | NOT STARTED (P1 complete) |
-| Last green commit | feat/p1-rag-chat head (35 pytest green, web build green) |
-| Next action | Plan + execute P1.5 per playbook §5 (study guides, practice exams, quiz mode, syllabus import) |
+| Active phase | P2 — Tasks + calendar merge |
+| Status | NOT STARTED (P1.5 complete) |
+| Last green commit | feat/p1.5-coursework head (44 pytest green, web build green) |
+| Next action | Plan + execute P2 per playbook §5 (task parser, gcal OAuth [HUMAN STOP: credentials.json], todoist, Today/Tasks pages) |
+
+## P1.5 exit criteria evidence (2026-07-12)
+
+```
+pytest -> 44 passed, incl.: uncited question dropped (I6); syllabus dates ->
+  suggestion rows only (I1); grader writes review-queue.md; upload lands in
+  materials/; quiz endpoint hides answers
+Manual (real agent + real lecture PDF, CM8 Plate Tectonics):
+  10-question exam generated -> exam_id=1, ALL 10 questions cite real pages
+  (p.3-p.9 of CM8-Plate-Tectonics.pdf), written to
+  15-Courses/ES101/study/exam-2026-07-12-10q.md (+key)
+  grade_attempt(3 right / 7 wrong) -> 3/10, weak topics appended to
+  15-Courses/ES101/study/review-queue.md as unchecked boxes
+npm run build -> /study 3.06 kB, quiz mode UI compiled
+```
 
 ## P1 exit criteria evidence (2026-07-12)
 
@@ -61,8 +76,8 @@ npm run build       -> compiled; routes /, /today, /tasks, /chat, /study, /revie
 | P0 — Foundation | ✅ DONE (fa16fc0) | repo scaffold, vault template, health API, web shell |
 | P0.5 — Build journal & Obsidian dev loop | ✅ DONE (2 human steps open) | hooks, /log-session, journal API, Journal page |
 | P1 — RAG + chat | ✅ DONE | local embeddings, hybrid retrieval, streaming cited chat |
-| P1.5 — Coursework engine | NEXT | |
-| P2 — Tasks + calendar | PENDING | gcal OAuth = expected human stop |
+| P1.5 — Coursework engine | ✅ DONE | cited exams, guides, quiz+grading, syllabus import |
+| P2 — Tasks + calendar | NEXT | gcal OAuth = expected human stop |
 | P3 — Planner + approvals | PENDING | |
 | P4 — Briefings + insights | PENDING | |
 
