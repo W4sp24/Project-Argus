@@ -140,7 +140,7 @@ npm run build       -> compiled; routes /, /today, /tasks, /chat, /study, /revie
 | P1.5 — Coursework engine | ✅ DONE | cited exams, guides, quiz+grading, syllabus import |
 | P2 — Tasks + calendar | ✅ DONE (connector live checks await creds) | writer (I1/I2), parser, agenda merge, capture |
 | P3 — Planner + approvals | ✅ DONE (gcal live insert awaits creds) | suggestion queue, writer.apply, planner agent, review UI, /plan |
-| P4 — Briefings + insights | NEXT | |
+| P4 — Briefings + insights + hardening | ✅ DONE | 07:00 briefing, insights charts, audit, doctor, e2e |
 
 ## Blockers
 
