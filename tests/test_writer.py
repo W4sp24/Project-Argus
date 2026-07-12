@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from backend.writer import WriterError, append_capture
+from backend import writer
+from backend.writer import (
+    WriterConflict,
+    WriterError,
+    WriterForbidden,
+    WriterMissing,
+    append_capture,
+    guard_user_path,
+)
 
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
 
@@ -75,3 +83,58 @@ def test_single_writer_source_proof() -> None:
         if "00-Inbox" in text and WRITE_CALL_RE.search(text):
             offenders.append(module.name)
     assert not offenders, f"I1 violation: {offenders} write near the inbox target"
+
+
+# --- Task line operations (P5) ---
+
+
+def test_guard_rejects_private_meta_and_traversal(vault: Path):
+    for bad in ("99-Private/x.md", "90-Meta/sessions/x.md", "../escape.md", "C:/abs.md"):
+        with pytest.raises(WriterForbidden):
+            guard_user_path(vault, bad)
+
+
+def test_toggle_task_line_checks_and_stamps_done_date(vault: Path):
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir()
+    note.write_text("# P\n\n- [ ] ship it 📅 2026-07-20\n", encoding="utf-8")
+    new_line = writer.toggle_task_line(vault, "20-Projects/p.md", 3, "- [ ] ship it 📅 2026-07-20")
+    assert new_line.startswith("- [x] ship it")
+    assert "✅" in new_line
+    assert new_line in note.read_text(encoding="utf-8")
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=vault, capture_output=True, text=True
+    ).stdout
+    assert "argus: pre-apply snapshot" in log
+
+
+def test_toggle_task_line_unchecks_and_strips_done_date(vault: Path):
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir()
+    note.write_text("- [x] done thing ✅ 2026-07-12\n", encoding="utf-8")
+    old_line = "- [x] done thing ✅ 2026-07-12"
+    new_line = writer.toggle_task_line(vault, "20-Projects/p.md", 1, old_line)
+    assert new_line == "- [ ] done thing"
+    assert "✅" not in note.read_text(encoding="utf-8")
+
+
+def test_task_line_drift_raises_conflict_and_leaves_file(vault: Path):
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir()
+    note.write_text("- [ ] real line\n", encoding="utf-8")
+    with pytest.raises(WriterConflict):
+        writer.update_task_line(vault, "20-Projects/p.md", 1, "- [ ] stale line", "- [ ] new")
+    assert note.read_text(encoding="utf-8") == "- [ ] real line\n"
+
+
+def test_delete_task_line_removes_line(vault: Path):
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir()
+    note.write_text("- [ ] keep\n- [ ] drop\n", encoding="utf-8")
+    writer.delete_task_line(vault, "20-Projects/p.md", 2, "- [ ] drop")
+    assert note.read_text(encoding="utf-8") == "- [ ] keep\n"
+
+
+def test_task_ops_on_missing_file_raise_missing(vault: Path):
+    with pytest.raises(WriterMissing):
+        writer.toggle_task_line(vault, "20-Projects/nope.md", 1, "- [ ] x")
