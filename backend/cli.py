@@ -98,6 +98,11 @@ def main(argv: list[str] | None = None) -> int:
     connect_parser.add_argument("service", choices=["gcal", "todoist"])
     connect_parser.add_argument("token", nargs="?", help="API token (todoist only)")
 
+    doctor_parser = subparsers.add_parser("doctor", help="check that this install is healthy")
+    doctor_parser.add_argument(
+        "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -131,6 +136,23 @@ def main(argv: list[str] | None = None) -> int:
             on_update=lambda rel, count: print(f"  reindexed {rel} ({count} chunks)"),
         )
         return 0
+
+    if args.command == "doctor":
+        from backend.config import ConfigError, Settings
+        from backend.doctor import run_checks
+
+        settings = Settings.load(args.env_file)
+        try:
+            _ = settings.vault_path  # raises ConfigError when VAULT_PATH is unset
+        except ConfigError as exc:
+            print(f"FAIL vault — {exc}", file=sys.stderr)
+            return 1
+        checks = run_checks(settings)
+        for check in checks:
+            print(f"{check.status:<4} {check.name:<10} {check.detail}")
+        failed = [check for check in checks if check.status == "FAIL"]
+        print(f"\n{'unhealthy' if failed else 'healthy'}: {len(failed)} failure(s)")
+        return 1 if failed else 0
 
     if args.command == "connect":
         if args.service == "gcal":
