@@ -276,6 +276,29 @@ def _apply_note_diff(vault_path: Path, payload: dict) -> str:
     return f"note edit in {rel_path}"
 
 
+def update_note(vault_path: Path, rel_path: str, expected_content: str, new_content: str) -> None:
+    """Replace a note's full content iff it still matches what the client read."""
+    note = guard_user_path(vault_path, rel_path)
+    if not note.is_file():
+        raise WriterMissing(f"{rel_path} does not exist")
+    current = note.read_text(encoding="utf-8")
+    if current != expected_content:
+        raise WriterConflict(f"{rel_path} has changed since you loaded it — refresh")
+    _git_snapshot(vault_path, f"edit note {rel_path}")
+    note.write_text(new_content, encoding="utf-8")
+    _argus_log(vault_path, f"edited note {rel_path}")
+
+
+def delete_note(vault_path: Path, rel_path: str) -> None:
+    """Delete one note (user-initiated); the pre-apply snapshot is the undo."""
+    note = guard_user_path(vault_path, rel_path)
+    if not note.is_file():
+        raise WriterMissing(f"{rel_path} does not exist")
+    _git_snapshot(vault_path, f"delete note {rel_path}")
+    note.unlink()
+    _argus_log(vault_path, f"deleted note {rel_path}")
+
+
 def apply_suggestion(
     conn: sqlite3.Connection,
     vault_path: Path,

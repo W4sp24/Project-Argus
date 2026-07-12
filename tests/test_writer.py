@@ -25,8 +25,7 @@ def _git(vault: Path, *args: str) -> str:
     ).stdout
 
 
-@pytest.fixture()
-def vault(tmp_path: Path) -> Path:
+def _make_vault(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     root.mkdir()
     (root / "Welcome.md").write_text("# Hi\n", encoding="utf-8")
@@ -34,6 +33,11 @@ def vault(tmp_path: Path) -> Path:
     subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, check=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=root, capture_output=True, check=True)
     return root
+
+
+@pytest.fixture()
+def vault(tmp_path: Path) -> Path:
+    return _make_vault(tmp_path)
 
 
 def test_capture_appends_task_line(vault: Path) -> None:
@@ -145,3 +149,48 @@ def test_delete_task_line_removes_line(vault: Path):
 def test_task_ops_on_missing_file_raise_missing(vault: Path):
     with pytest.raises(WriterMissing):
         writer.toggle_task_line(vault, "20-Projects/nope.md", 1, "- [ ] x")
+
+
+# --- Note update/delete (P5) ---
+
+
+def test_update_note_cas_applies_and_logs(tmp_path):
+    vault = _make_vault(tmp_path)
+    note = vault / "00-Inbox" / "n.md"
+    note.parent.mkdir()
+    note.write_text("old body\n", encoding="utf-8")
+    writer.update_note(vault, "00-Inbox/n.md", "old body\n", "new body\n")
+    assert note.read_text(encoding="utf-8") == "new body\n"
+    daily = vault / "10-Daily"
+    assert any("## Argus log" in p.read_text(encoding="utf-8") for p in daily.glob("*.md"))
+
+
+def test_update_note_conflict_on_drift(tmp_path):
+    vault = _make_vault(tmp_path)
+    note = vault / "00-Inbox" / "n.md"
+    note.parent.mkdir()
+    note.write_text("actual\n", encoding="utf-8")
+    with pytest.raises(WriterConflict):
+        writer.update_note(vault, "00-Inbox/n.md", "what the client saw\n", "new\n")
+    assert note.read_text(encoding="utf-8") == "actual\n"
+
+
+def test_delete_note_removes_file_after_snapshot(tmp_path):
+    vault = _make_vault(tmp_path)
+    note = vault / "00-Inbox" / "n.md"
+    note.parent.mkdir()
+    note.write_text("bye\n", encoding="utf-8")
+    writer.delete_note(vault, "00-Inbox/n.md")
+    assert not note.exists()
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=vault, capture_output=True, text=True
+    ).stdout
+    assert "argus: pre-apply snapshot (delete note 00-Inbox/n.md)" in log
+
+
+def test_delete_note_refuses_protected_and_missing(tmp_path):
+    vault = _make_vault(tmp_path)
+    with pytest.raises(WriterForbidden):
+        writer.delete_note(vault, "99-Private/secret.md")
+    with pytest.raises(WriterMissing):
+        writer.delete_note(vault, "00-Inbox/ghost.md")
