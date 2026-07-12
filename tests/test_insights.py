@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend.config import Settings
 from backend.db import connect, init_schema
-from backend.insights import insights_summary
+from backend.insights import HEATMAP_DAYS, heatmap_summary, insights_summary
 from backend.main import create_app
 
 TODAY = date(2026, 7, 13)
@@ -96,3 +97,64 @@ def test_insights_endpoint(vault: Path, tmp_path: Path) -> None:
     payload = client.get("/api/insights").json()
     assert len(payload["completion_trend"]) == 14
     assert payload["configured"] == {"gcal": False}
+
+
+@pytest.fixture()
+def settings_and_conn(tmp_path: Path) -> tuple[Settings, sqlite3.Connection]:
+    """A clean tmp vault + initialized db, for tests that build their own vault content."""
+    vault_dir = tmp_path / "hm_vault"
+    vault_dir.mkdir()
+    settings = Settings(_vault_path=vault_dir)
+    connection = connect(tmp_path / "hm.db")
+    init_schema(connection)
+    yield settings, connection
+    connection.close()
+
+
+def test_heatmap_counts_tasks_notes_study_captures(settings_and_conn):
+    settings, conn = settings_and_conn  # adapt name to the file's existing fixture
+    vault = settings.vault_path
+    subprocess.run(["git", "init"], cwd=vault, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=vault, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=vault, capture_output=True)
+
+    today = date(2026, 7, 13)
+    (vault / "20-Projects").mkdir(exist_ok=True)
+    (vault / "20-Projects" / "p.md").write_text(
+        "- [x] done ✅ 2026-07-13\n- [x] older ✅ 2026-07-10\n", encoding="utf-8"
+    )
+    (vault / "00-Inbox").mkdir(exist_ok=True)
+    (vault / "00-Inbox" / "capture-2026-07-13.md").write_text(
+        "- [ ] captured thing ➕ 2026-07-13\n", encoding="utf-8"
+    )
+    conn.execute(
+        "INSERT INTO exams (course, title, questions_json) VALUES ('CS', 'T', '[]')"
+    )
+    conn.execute(
+        "INSERT INTO attempts (exam_id, score, total, answers_json, created_at)"
+        " VALUES (1, 8, 10, '[]', '2026-07-13 10:00:00')"
+    )
+    conn.commit()
+
+    result = heatmap_summary(settings, conn, today=today)
+    assert len(result.days) == HEATMAP_DAYS
+    assert result.days[-1].date == "2026-07-13"
+    latest = result.days[-1]
+    assert latest.tasks == 1
+    assert latest.captures == 1
+    assert latest.study == 1
+    assert latest.total == latest.tasks + latest.notes + latest.study + latest.captures
+    by_date = {d.date: d for d in result.days}
+    assert by_date["2026-07-10"].tasks == 1
+
+
+def test_heatmap_excludes_private(settings_and_conn):
+    settings, conn = settings_and_conn
+    vault = settings.vault_path
+    subprocess.run(["git", "init"], cwd=vault, capture_output=True, check=True)
+    (vault / "99-Private").mkdir(exist_ok=True)
+    (vault / "99-Private" / "secret.md").write_text(
+        "- [x] secret ✅ 2026-07-13\n", encoding="utf-8"
+    )
+    result = heatmap_summary(settings, conn, today=date(2026, 7, 13))
+    assert result.days[-1].tasks == 0
