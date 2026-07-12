@@ -176,7 +176,7 @@ def _note_touches_by_day(settings: Settings) -> dict[str, int]:
         if not line or day is None:
             continue
         path = PurePosixPath(line)
-        if path.suffix != ".md" or (path.parts and path.parts[0] in EXCLUDED_TOP_DIRS):
+        if path.suffix != ".md" or any(part in EXCLUDED_TOP_DIRS for part in path.parts):
             continue
         counts[day] = counts.get(day, 0) + 1
     return counts

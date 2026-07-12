@@ -158,3 +158,26 @@ def test_heatmap_excludes_private(settings_and_conn):
     )
     result = heatmap_summary(settings, conn, today=date(2026, 7, 13))
     assert result.days[-1].tasks == 0
+
+
+def test_heatmap_notes_counts_git_touches_and_excludes_private(settings_and_conn):
+    settings, conn = settings_and_conn
+    vault = settings.vault_path
+    subprocess.run(["git", "init"], cwd=vault, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=vault, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=vault, capture_output=True)
+
+    (vault / "20-Projects").mkdir(exist_ok=True)
+    (vault / "20-Projects" / "a.md").write_text("# A\n", encoding="utf-8")
+    (vault / "99-Private").mkdir(exist_ok=True)
+    (vault / "99-Private" / "s.md").write_text("# S\n", encoding="utf-8")
+    (vault / "20-Projects" / "img.png").write_bytes(b"x")
+    subprocess.run(["git", "add", "-A"], cwd=vault, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=vault, capture_output=True)
+
+    today = date.today()  # the commit lands on the real current date
+    result = heatmap_summary(settings, conn, today=today)
+    latest = result.days[-1]
+    assert latest.date == today.isoformat()
+    # Exactly one countable note touch: a.md (99-Private excluded, .png not md).
+    assert latest.notes == 1
