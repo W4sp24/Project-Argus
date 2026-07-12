@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from backend.briefing import Composer, compose_briefing
 from backend.config import Settings
 from backend.db import connect, init_schema
+from backend.insights import InsightsSummary, insights_summary
 from backend.writer import BRIEFING_HEADING, write_briefing
 
 
@@ -53,5 +54,14 @@ def build_briefing_router(settings: Settings, composer: Composer | None) -> APIR
         if markdown is None:
             raise HTTPException(status_code=404, detail="no briefing yet today")
         return BriefingResponse(date=today, path=f"10-Daily/{today}.md", markdown=markdown)
+
+    @router.get("/insights", response_model=InsightsSummary)
+    def insights() -> InsightsSummary:
+        conn = connect(settings.db_path)
+        init_schema(conn)
+        try:
+            return insights_summary(settings, conn)
+        finally:
+            conn.close()
 
     return router
