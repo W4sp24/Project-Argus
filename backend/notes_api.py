@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import NoReturn
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -41,7 +43,7 @@ class NewLine(BaseModel):
     new_line: str
 
 
-def _raise_http(exc: WriterError, current_content: str | None = None) -> None:
+def _raise_http(exc: WriterError, current_content: str | None = None) -> NoReturn:
     if isinstance(exc, WriterForbidden):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, WriterMissing):
@@ -72,7 +74,9 @@ def build_notes_router(settings: Settings) -> APIRouter:
                 settings.vault_path, request.path, request.expected_content, request.new_content
             )
         except WriterConflict as exc:
-            current = (settings.vault_path / request.path).read_text(encoding="utf-8")
+            current = guard_user_path(settings.vault_path, request.path).read_text(
+                encoding="utf-8"
+            )
             _raise_http(exc, current_content=current)
         except WriterError as exc:
             _raise_http(exc)
