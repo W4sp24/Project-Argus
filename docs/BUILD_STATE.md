@@ -7,10 +7,31 @@
 
 | Field | Value |
 |---|---|
-| Active phase | P4 — Briefings + insights |
-| Status | NOT STARTED (P3 complete; gcal live insert awaits credentials) |
-| Last green commit | feat/p3-planner-approvals head (65 pytest green, web build green) |
-| Next action | Plan + execute P4 per playbook §5 (morning/evening briefings, insights page) |
+| Active phase | — (roadmap P0–P4 complete) |
+| Status | ALL PHASES DONE — maintenance/backlog mode (connector credentials still open) |
+| Last green commit | feat/p4-briefings-insights head (72 pytest + 1 Playwright e2e green, web build green) |
+| Next action | Optional: Ethan provides gcal/Todoist credentials + runs setup.ps1; `/code-review ultra` follow-up; then backlog features |
+
+## P4 exit criteria evidence (2026-07-12)
+
+```
+pytest -> 72 passed, incl.: briefing buckets/exam-countdown/weak-topics; render
+  omits empty sections; composer failure falls back deterministically; write_briefing
+  replaces (never duplicates) its section + snapshots first (I2); scheduler registers
+  07:00+03:00 jobs without starting; production scheduler wired to opus composer
+  (regression test from review finding); insights trend/overdue/calendar/streak with
+  99-Private excluded (I3); audit roundtrip + paths-only proof + planner logging;
+  doctor healthy/broken-vault exit codes
+npx playwright test -> 1 passed (22.5s): capture typed into real /today UI ->
+  00-Inbox file; Approve clicked on real /review UI -> note line edited, vault git
+  gained "friday: pre-apply snapshot (apply suggestion ...)", FRIDAY log appended
+Manual (real Scientia): run_briefing_job(composer=agent_composer) -> opus-composed
+  "## Briefing" in 10-Daily/2026-07-12.md (weak topics from real review queue;
+  existing task line + FRIDAY log preserved); GET /api/briefing serves it (810 chars)
+friday doctor -> 5 OK + 2 WARN (gcal/todoist await credentials), exit 0
+npm run build -> 12 routes; /insights 112 kB (4 charts + tiles), /today 3.07 kB
+Review gate: manual diff review (D-031) -> 1 CONFIRMED finding, fixed (D-029)
+```
 
 ## P3 exit criteria evidence (2026-07-12)
 

@@ -100,3 +100,25 @@ here, not asked.
 - **D-026 — Preferences note is vault-owned config.** `30-Areas/assistant-preferences.md`
   (seeded in vault-template and Scientia) is read by the planner every run — editing
   a note in Obsidian IS configuring the assistant; no settings UI needed.
+- **D-027 — Audit stores path lists ONLY (I3).** Every agent entry point (chat
+  search/read, planner context, briefing composer, exam generation) logs entry point +
+  model + sorted path set to the `audit` table; prompt text is never persisted.
+  Logging is best-effort by construction — a broken audit can never break chat.
+- **D-028 — Briefing composition is one opus pass with a deterministic net.**
+  Playbook names haiku for summarization steps; skipped — the inputs are small
+  structured facts, not documents. Any composer failure (or empty output) falls back
+  to `render_briefing`, so the 07:00 job can never produce nothing.
+- **D-029 — Scheduler attaches only to the module-level app.** `create_app` takes a
+  `scheduler_factory`; only `backend.main`'s production instance passes one, so no
+  test ever spawns background threads. Phase review caught that the production
+  factory forgot the agent composer (cron briefings would have used the fallback) —
+  fixed with a regression test.
+- **D-030 — E2E provisions its own vault inside the webServer command.** The
+  Playwright backend command (`e2e/start-backend.mjs`) creates a throwaway vault via
+  `friday init` + seeds a suggestion, then runs uvicorn from a workdir whose `.env`
+  points at it; `reuseExistingServer: false` guarantees a dev backend aimed at a REAL
+  vault can never be picked up by tests.
+- **D-031 — P4 review gate.** CodeRabbit CLI still not installed; performed a manual
+  diff review of the phase (1 CONFIRMED finding, fixed — see D-029). `/code-review
+  ultra` on the full repo is user-triggered/billed and left to Ethan as an optional
+  follow-up.
