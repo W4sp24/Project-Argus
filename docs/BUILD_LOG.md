@@ -79,3 +79,24 @@ here, not asked.
 - **D-005 — Python env.** `uv` not installed; standard `python -m venv .venv` + pip.
   Heavy RAG deps (chromadb, sentence-transformers/torch) are an optional extra
   (`[rag]`) installed at P1 so P0 stays fast and open-source setup stays minimal.
+- **D-022 — Suggestion queue = existing table + one migration.** P1.5's syllabus
+  import already used `suggestions`; P3 layers a typed model (`backend/suggestions.py`)
+  over it and adds `dismiss_reason` via an idempotent `ALTER` in `init_schema`, so
+  pre-P3 databases migrate on first touch. Dismissal reasons are fed back into the
+  planner context so it stops re-proposing rejected ideas.
+- **D-023 — Drift-safe applies.** Task edits verify `old_line` (strip-compared) at
+  the exact line; note edits are unified diffs applied with full context/`-` line
+  verification. Any mismatch raises `WriterError` BEFORE the file is written — the
+  file stays untouched and the row stays pending, surfaced to the UI as a 409.
+- **D-024 — Planner is propose-only by construction (I1).** The planner agent gets
+  ONLY the three `mcp__planner__propose_*` tools (Bash/Write/Edit/Read/Glob/Grep
+  disallowed); its context (agenda, task buckets, review queues, preferences note,
+  dismissal feedback) is assembled server-side rather than giving the agent read
+  access. Its only side effect is rows in the suggestions table.
+- **D-025 — gcal scope readonly → events.** `apply_suggestion(schedule)` needs
+  insert; FRIDAY-created blocks carry `colorId 3` (grape) + a description marker so
+  they're visually distinct and machine-identifiable. The stored OAuth token (when
+  credentials arrive) must be granted the wider scope at connect time.
+- **D-026 — Preferences note is vault-owned config.** `30-Areas/assistant-preferences.md`
+  (seeded in vault-template and Scientia) is read by the planner every run — editing
+  a note in Obsidian IS configuring the assistant; no settings UI needed.

@@ -7,10 +7,33 @@
 
 | Field | Value |
 |---|---|
-| Active phase | P3 — Planner + suggest-then-approve |
-| Status | NOT STARTED (P2 complete; gcal/todoist live checks await credentials) |
-| Last green commit | feat/p2-tasks-calendar head (56 pytest green, web build green) |
-| Next action | Plan + execute P3 per playbook §5 (propose_* tools, suggestion queue, Review UI, writer.apply) |
+| Active phase | P4 — Briefings + insights |
+| Status | NOT STARTED (P3 complete; gcal live insert awaits credentials) |
+| Last green commit | feat/p3-planner-approvals head (65 pytest green, web build green) |
+| Next action | Plan + execute P4 per playbook §5 (morning/evening briefings, insights page) |
+
+## P3 exit criteria evidence (2026-07-12)
+
+```
+pytest -> 65 passed, incl.: apply(schedule) hits injected gcal AND vault git log
+  grows by exactly 1 (I2); dismissed reason stored + retrievable + surfaced in
+  dismissal_feedback; drifted note diff fails clean (file byte-identical, row
+  still pending); double-apply rejected; planner tool handlers insert rows
+  without the SDK; /api/plan -> /api/review -> dismiss roundtrip
+Manual (real vault Scientia, real agent claude-opus-4-8):
+  run_planner("Plan tomorrow") -> 1 schedule suggestion: two 50-min ES101
+  Plate-Tectonics study blocks (weak topic, 3/10 exam) + breaks + overdue-task
+  block — planner respected assistant-preferences.md and the review queue
+  approve task suggestion #2 (reschedule "Test FRIDAY task board" 07-12 -> 07-13)
+  -> vault git gained "friday: pre-apply snapshot (apply suggestion #2 (task))"
+  BEFORE the edit (8799f8c); daily note line edited; "## FRIDAY log" audit line
+  appended to 10-Daily/2026-07-12.md
+  approve of the schedule suggestion -> 409 "Google Calendar is not connected"
+  (expected: gcal live insert BLOCKED on credentials; row stays pending)
+npm run build -> /review 2.29 kB (kind-badged cards, red/green diff view),
+  /chat 2.67 kB (/plan intercept)
+Seeded: 30-Areas/assistant-preferences.md in vault-template + Scientia
+```
 
 ## P2 exit criteria evidence (2026-07-12)
 
@@ -95,8 +118,8 @@ npm run build       -> compiled; routes /, /today, /tasks, /chat, /study, /revie
 | P1 — RAG + chat | ✅ DONE | local embeddings, hybrid retrieval, streaming cited chat |
 | P1.5 — Coursework engine | ✅ DONE | cited exams, guides, quiz+grading, syllabus import |
 | P2 — Tasks + calendar | ✅ DONE (connector live checks await creds) | writer (I1/I2), parser, agenda merge, capture |
-| P3 — Planner + approvals | NEXT | |
-| P4 — Briefings + insights | PENDING | |
+| P3 — Planner + approvals | ✅ DONE (gcal live insert awaits creds) | suggestion queue, writer.apply, planner agent, review UI, /plan |
+| P4 — Briefings + insights | NEXT | |
 
 ## Blockers
 

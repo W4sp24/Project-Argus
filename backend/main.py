@@ -59,6 +59,7 @@ def create_app(
     chat_runner: ChatRunner | None = None,
     generator: Callable | None = None,
     index_factory: Callable | None = None,
+    planner: Callable | None = None,
 ) -> FastAPI:
     """Build the FastAPI app around the given (or default) settings.
 
@@ -133,6 +134,15 @@ def create_app(
     from backend.tasks.api import build_tasks_router
 
     app.include_router(build_tasks_router(resolved))
+
+    def _default_planner():
+        from backend.agent.planner import run_planner
+
+        return run_planner
+
+    from backend.review_api import build_review_router
+
+    app.include_router(build_review_router(resolved, planner or _default_planner()))
 
     @app.websocket("/ws/chat")
     async def ws_chat(websocket: WebSocket) -> None:

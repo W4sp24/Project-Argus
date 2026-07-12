@@ -51,9 +51,41 @@ export default function ChatPage() {
 
   useEffect(() => () => socketRef.current?.close(), []);
 
+  async function runPlanner(instruction: string) {
+    setBusy(true);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", text: `/plan ${instruction}` },
+      { role: "friday", text: "", pending: true },
+    ]);
+    try {
+      const response = await fetch("/api/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: instruction || "Plan my day" }),
+      });
+      const payload = await response.json();
+      const text = response.ok
+        ? `Planned! ${payload.created} suggestion${payload.created === 1 ? "" : "s"} waiting on the Review page.`
+        : `Planning failed: ${payload.detail}`;
+      setMessages((prev) => [...prev.slice(0, -1), { role: "friday", text }]);
+    } catch {
+      setMessages((prev) => [
+        ...prev.slice(0, -1),
+        { role: "friday", text: "Planning failed — is the backend running?" },
+      ]);
+    }
+    setBusy(false);
+  }
+
   function send(text: string) {
     const message = text.trim();
     if (!message || busy) return;
+    if (message.startsWith("/plan")) {
+      setInput("");
+      runPlanner(message.replace(/^\/plan\s*/, ""));
+      return;
+    }
     setBusy(true);
     setOffline(false);
     setInput("");

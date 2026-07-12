@@ -14,7 +14,9 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+# Read events in P2; insert approved schedule blocks in P3 (writer-gated, I1).
+SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+FRIDAY_COLOR_ID = "3"  # grape — FRIDAY-created blocks are visually distinct
 CREDENTIALS_FILE = Path("credentials.json")
 KEYRING_SERVICE = "friday-gcal"
 KEYRING_USER = "token"
@@ -74,6 +76,23 @@ def _service():
         creds.refresh(Request())
         keyring.set_password(KEYRING_SERVICE, KEYRING_USER, creds.to_json())
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+
+def insert_event(title: str, start: str, end: str, service=None) -> None:
+    """Insert one FRIDAY block. Only ``backend.writer`` may call this (I1)."""
+    service = service or _service()
+    if service is None:
+        raise RuntimeError("Google Calendar is not connected — run `friday connect gcal`")
+    service.events().insert(
+        calendarId="primary",
+        body={
+            "summary": title,
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+            "colorId": FRIDAY_COLOR_ID,
+            "description": "Scheduled by FRIDAY (approved suggestion)",
+        },
+    ).execute()
 
 
 def list_events(day: date, service=None) -> list[CalendarEvent]:
