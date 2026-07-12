@@ -153,6 +153,10 @@ def create_app(
 
     app.include_router(build_tasks_router(resolved))
 
+    from backend.notes_api import build_notes_router
+
+    app.include_router(build_notes_router(resolved))
+
     def _default_planner():
         from backend.agent.planner import run_planner
 
