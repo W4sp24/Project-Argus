@@ -67,4 +67,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
 def init_schema(conn: sqlite3.Connection) -> None:
     """Create all tables if they do not exist yet. Safe to call repeatedly."""
     conn.executescript(SCHEMA)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(suggestions)")}
+    if "dismiss_reason" not in columns:  # lightweight migration for pre-P3 databases
+        conn.execute("ALTER TABLE suggestions ADD COLUMN dismiss_reason TEXT")
     conn.commit()
