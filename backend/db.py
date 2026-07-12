@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS tasks_cache (
     tags      TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS audit (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    entry_point TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    paths_json  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS attempts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),

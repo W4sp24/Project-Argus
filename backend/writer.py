@@ -72,6 +72,43 @@ def append_capture(vault_path: Path, text: str) -> str:
     return f"{INBOX_DIR}/capture-{today}.md"
 
 
+# --- Morning briefing (P4) ---------------------------------------------------
+
+BRIEFING_HEADING = "## Briefing"
+
+
+def write_briefing(vault_path: Path, markdown: str) -> str:
+    """Write/replace the ``## Briefing`` section in today's daily note.
+
+    Re-running replaces the existing section (the 07:00 job is idempotent).
+    Returns the note's vault-relative path.
+    """
+    _git_snapshot(vault_path, "morning briefing")
+
+    daily = vault_path / DAILY_DIR
+    daily.mkdir(parents=True, exist_ok=True)
+    today = date.today().isoformat()
+    note = daily / f"{today}.md"
+    if not note.exists():
+        note.write_text(f"# {today}\n", encoding="utf-8")
+
+    lines = note.read_text(encoding="utf-8").splitlines()
+    section = [BRIEFING_HEADING, "", markdown.rstrip("\n"), ""]
+
+    start = next((i for i, line in enumerate(lines) if line.strip() == BRIEFING_HEADING), None)
+    if start is not None:
+        end = next(
+            (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines)
+        )
+        lines[start:end] = section
+    else:
+        insert_at = 1 if lines and lines[0].startswith("# ") else 0
+        lines[insert_at:insert_at] = [""] + section if insert_at else section
+
+    note.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+    return f"{DAILY_DIR}/{today}.md"
+
+
 # --- Suggestion application (P3): the approval gate's one executor ----------
 
 

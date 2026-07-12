@@ -60,14 +60,32 @@ def create_app(
     generator: Callable | None = None,
     index_factory: Callable | None = None,
     planner: Callable | None = None,
+    briefing_composer: Callable | None = None,
+    scheduler_factory: Callable | None = None,
 ) -> FastAPI:
     """Build the FastAPI app around the given (or default) settings.
 
-    ``chat_runner``, ``generator``, and ``index_factory`` are injectable so
-    tests run with fakes instead of the agent SDK / embedding model.
+    ``chat_runner``, ``generator``, ``index_factory``, ``planner``, and
+    ``briefing_composer`` are injectable so tests run with fakes instead of
+    the agent SDK / embedding model. ``scheduler_factory`` is only passed by
+    the module-level app below — test apps never start background threads.
     """
+    from contextlib import asynccontextmanager
+
     resolved = settings or Settings.load()
-    app = FastAPI(title="FRIDAY", version="0.1.0")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        scheduler = scheduler_factory(resolved) if scheduler_factory else None
+        if scheduler is not None:
+            scheduler.start()
+        try:
+            yield
+        finally:
+            if scheduler is not None:
+                scheduler.shutdown(wait=False)
+
+    app = FastAPI(title="FRIDAY", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
@@ -144,6 +162,15 @@ def create_app(
 
     app.include_router(build_review_router(resolved, planner or _default_planner()))
 
+    def _default_composer() -> Callable:
+        from backend.briefing import agent_composer
+
+        return agent_composer
+
+    from backend.briefing_api import build_briefing_router
+
+    app.include_router(build_briefing_router(resolved, briefing_composer or _default_composer()))
+
     @app.websocket("/ws/chat")
     async def ws_chat(websocket: WebSocket) -> None:
         """Bridge agent streaming deltas to the browser.
@@ -171,4 +198,11 @@ def create_app(
     return app
 
 
-app = create_app()
+def _production_scheduler(settings: Settings):
+    from backend.briefing import agent_composer
+    from backend.scheduler import build_scheduler
+
+    return build_scheduler(settings, composer=agent_composer)
+
+
+app = create_app(scheduler_factory=_production_scheduler)
