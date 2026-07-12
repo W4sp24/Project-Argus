@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from backend import suggestions as queue
+from backend.audit import log_prompt_conn
 from backend.config import Settings
 from backend.db import connect, init_schema
 from backend.suggestions import dismissal_feedback
@@ -98,16 +99,20 @@ def _planner_context(settings: Settings, conn: sqlite3.Connection, instruction: 
     events = [event.model_dump() for event in gcal.list_events(today)]
     external = [task.model_dump() for task in todoist.list_tasks()]
 
+    sent_paths: list[str] = []
     review_queues: list[str] = []
     for queue_file in settings.vault_path.glob("15-Courses/*/study/review-queue.md"):
         review_queues.append(queue_file.read_text(encoding="utf-8")[-2000:])
+        sent_paths.append(queue_file.relative_to(settings.vault_path).as_posix())
 
     preferences_path = settings.vault_path / PREFERENCES_NOTE
-    preferences = (
-        preferences_path.read_text(encoding="utf-8")
-        if preferences_path.is_file()
-        else "(no preferences note yet — assume 50-minute focus blocks, breaks between)"
-    )
+    if preferences_path.is_file():
+        preferences = preferences_path.read_text(encoding="utf-8")
+        sent_paths.append(PREFERENCES_NOTE)
+    else:
+        preferences = "(no preferences note yet — assume 50-minute focus blocks, breaks between)"
+
+    log_prompt_conn(conn, "planner", MODEL, sent_paths)
 
     payload = {
         "today": today.isoformat(),

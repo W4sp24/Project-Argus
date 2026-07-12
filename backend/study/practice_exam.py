@@ -191,6 +191,14 @@ async def generate_practice_exam(
     if not corpus:
         raise StudyError(f"no indexed material for course {course} — upload to materials/ first")
 
+    from backend.audit import log_prompt_conn
+
+    log_prompt_conn(
+        conn,
+        "study",
+        "claude-opus-4-8",
+        [str(chunk["meta"].get("path")) for chunk in corpus if chunk["meta"].get("path")],
+    )
     raw = await generator(exam_prompt(course, corpus, topics, n, difficulty))
     exam, dropped = build_exam(course, raw, corpus)
     if not exam.questions:

@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from backend.audit import log_prompt
 from backend.config import Settings
 from backend.rag.index import VaultIndex
 from backend.rag.paths import is_indexable
@@ -50,6 +51,12 @@ def build_vault_tools(settings: Settings, index: VaultIndex) -> list[Any]:
         )
         if not hits:
             return _tool_text({"results": [], "note": "no matches in the vault"})
+        log_prompt(
+            settings.db_path,
+            "chat",
+            MODEL,
+            [str(hit["meta"].get("path")) for hit in hits if hit["meta"].get("path")],
+        )
         return _tool_text(
             {
                 "results": [
@@ -79,6 +86,7 @@ def build_vault_tools(settings: Settings, index: VaultIndex) -> list[Any]:
         file_path = settings.vault_path / rel_path
         if not file_path.is_file():
             return _tool_text(f"error: no note at {rel_path}")
+        log_prompt(settings.db_path, "chat", MODEL, [rel_path])
         return _tool_text(file_path.read_text(encoding="utf-8", errors="ignore")[:MAX_NOTE_CHARS])
 
     @tool(

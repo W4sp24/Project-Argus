@@ -152,8 +152,17 @@ def compose_briefing(
     today: date | None = None,
 ) -> str:
     """Build the briefing, letting ``composer`` write prose when available."""
-    data = briefing_data(settings, conn, today or date.today())
+    resolved_today = today or date.today()
+    data = briefing_data(settings, conn, resolved_today)
     if composer is not None:
+        from backend.audit import log_prompt_conn
+
+        yesterday_note = f"10-Daily/{(resolved_today - timedelta(days=1)).isoformat()}.md"
+        queue_paths = [
+            path.relative_to(settings.vault_path).as_posix()
+            for path in settings.vault_path.glob("15-Courses/*/study/review-queue.md")
+        ]
+        log_prompt_conn(conn, "briefing", "claude-opus-4-8", [yesterday_note, *queue_paths])
         try:
             return composer(data)
         except Exception:  # a dead agent must never kill the 07:00 job

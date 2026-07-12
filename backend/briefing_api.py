@@ -7,6 +7,7 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.audit import AuditEntry, recent
 from backend.briefing import Composer, compose_briefing
 from backend.config import Settings
 from backend.db import connect, init_schema
@@ -61,6 +62,15 @@ def build_briefing_router(settings: Settings, composer: Composer | None) -> APIR
         init_schema(conn)
         try:
             return insights_summary(settings, conn)
+        finally:
+            conn.close()
+
+    @router.get("/audit", response_model=list[AuditEntry])
+    def audit_log() -> list[AuditEntry]:
+        conn = connect(settings.db_path)
+        init_schema(conn)
+        try:
+            return recent(conn)
         finally:
             conn.close()
 
