@@ -54,11 +54,16 @@ def _default_chat_runner(settings: Settings) -> ChatRunner:
     return agent.stream_chat
 
 
-def create_app(settings: Settings | None = None, chat_runner: ChatRunner | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    chat_runner: ChatRunner | None = None,
+    generator: Callable | None = None,
+    index_factory: Callable | None = None,
+) -> FastAPI:
     """Build the FastAPI app around the given (or default) settings.
 
-    ``chat_runner`` is injectable so tests can stream canned deltas without
-    touching the real agent SDK.
+    ``chat_runner``, ``generator``, and ``index_factory`` are injectable so
+    tests run with fakes instead of the agent SDK / embedding model.
     """
     resolved = settings or Settings.load()
     app = FastAPI(title="FRIDAY", version="0.1.0")
@@ -104,6 +109,26 @@ def create_app(settings: Settings | None = None, chat_runner: ChatRunner | None 
         if note is None:
             raise HTTPException(status_code=404, detail="note not found")
         return note
+
+    def _default_index_factory() -> object:
+        from backend.rag.index import VaultIndex
+
+        return VaultIndex(resolved.db_path.parent / "chroma")
+
+    def _default_generator() -> Callable:
+        from backend.agent.generate import agent_generate
+
+        return agent_generate
+
+    from backend.study.api import build_study_router
+
+    app.include_router(
+        build_study_router(
+            resolved,
+            generator or _default_generator(),
+            index_factory or _default_index_factory,
+        )
+    )
 
     @app.websocket("/ws/chat")
     async def ws_chat(websocket: WebSocket) -> None:

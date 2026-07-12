@@ -21,6 +21,24 @@ CREATE TABLE IF NOT EXISTS suggestions (
                  CHECK (status IN ('pending', 'applied', 'dismissed')),
     applied_at   TEXT
 );
+
+CREATE TABLE IF NOT EXISTS exams (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    course         TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    questions_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attempts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    exam_id      INTEGER NOT NULL REFERENCES exams(id),
+    score        INTEGER NOT NULL,
+    total        INTEGER NOT NULL,
+    answers_json TEXT NOT NULL,
+    weak_topics  TEXT NOT NULL DEFAULT ''
+);
 """
 
 
