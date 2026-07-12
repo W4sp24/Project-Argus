@@ -123,7 +123,7 @@ def _append_review_queue(vault_path: Path, exam: Exam, weak_topics: list[str], s
     if not queue.exists():
         queue.write_text(
             f"# {exam.course} — review queue\n\n"
-            "Topics FRIDAY thinks you should revisit, from missed exam questions.\n",
+            "Topics Argus thinks you should revisit, from missed exam questions.\n",
             encoding="utf-8",
         )
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")

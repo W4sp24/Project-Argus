@@ -13,7 +13,7 @@ from pathlib import Path
 import frontmatter
 from pydantic import BaseModel
 
-EXCLUDED_DIRS = {".obsidian", ".friday", ".git", ".trash", "99-Private"}
+EXCLUDED_DIRS = {".obsidian", ".argus", ".git", ".trash", "99-Private"}
 
 
 class NoteInfo(BaseModel):

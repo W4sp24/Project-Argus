@@ -13,8 +13,8 @@ web/out/
 *.tsbuildinfo
 npm-debug.log*
 
-# FRIDAY local data (lives next to the vault, never in the repo)
-.friday/
+# Argus local data (lives next to the vault, never in the repo)
+.argus/
 demo-vault/
 
 # Secrets & config

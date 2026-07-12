@@ -51,14 +51,14 @@ def test_write_briefing_replaces_section_not_duplicates(vault: Path) -> None:
 
 def test_write_briefing_preserves_other_sections(vault: Path) -> None:
     note = vault / "10-Daily" / f"{TODAY}.md"
-    note.write_text(f"# {TODAY}\n\n## FRIDAY log\n\n- 09:00 — applied #1\n", encoding="utf-8")
+    note.write_text(f"# {TODAY}\n\n## Argus log\n\n- 09:00 — applied #1\n", encoding="utf-8")
 
     write_briefing(vault, "Good morning")
 
     content = note.read_text(encoding="utf-8")
-    assert "## FRIDAY log" in content
+    assert "## Argus log" in content
     assert "- 09:00 — applied #1" in content
-    assert content.index("## Briefing") < content.index("## FRIDAY log")
+    assert content.index("## Briefing") < content.index("## Argus log")
 
 
 @pytest.fixture()

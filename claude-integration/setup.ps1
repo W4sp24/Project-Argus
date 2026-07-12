@@ -1,4 +1,4 @@
-# FRIDAY dev-loop setup - installs the Claude Code session-journal hooks and
+# Argus dev-loop setup - installs the Claude Code session-journal hooks and
 # /log-session command at user scope (~/.claude/), and merges the hook wiring
 # into ~/.claude/settings.json (preserving everything already there).
 #
@@ -50,8 +50,8 @@ Write-Host "Updated $settingsPath (backup at settings.json.bak)"
 
 # 3. Optional: record a non-default vault path for the hooks.
 if ($VaultPath) {
-    [Environment]::SetEnvironmentVariable("FRIDAY_VAULT", $VaultPath, "User")
-    Write-Host "Set user env FRIDAY_VAULT=$VaultPath (hooks pick it up on next session)"
+    [Environment]::SetEnvironmentVariable("ARGUS_VAULT", $VaultPath, "User")
+    Write-Host "Set user env ARGUS_VAULT=$VaultPath (hooks pick it up on next session)"
 }
 
 Write-Host ""

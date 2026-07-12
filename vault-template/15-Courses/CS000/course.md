@@ -20,5 +20,5 @@ status: active
 ## Folders
 
 - `notes/` — your own lecture & reading notes (markdown)
-- `materials/` — drop slides, readings, and the syllabus here (PDF/PPTX/DOCX); FRIDAY indexes them automatically
-- `study/` — FRIDAY writes study guides, practice exams, and review queues here
+- `materials/` — drop slides, readings, and the syllabus here (PDF/PPTX/DOCX); Argus indexes them automatically
+- `study/` — Argus writes study guides, practice exams, and review queues here

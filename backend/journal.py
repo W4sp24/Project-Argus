@@ -1,6 +1,6 @@
 """Read-only access to the vault's dev journal (``90-Meta/``).
 
-The journal zone is dev-owned (invariant D1): Claude Code writes it, FRIDAY only
+The journal zone is dev-owned (invariant D1): Claude Code writes it, Argus only
 reads it. Every function here enforces the privacy contract (D2): notes tagged
 ``no-ai`` are invisible, and path input can never escape ``90-Meta/``.
 """

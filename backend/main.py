@@ -1,4 +1,4 @@
-"""FRIDAY FastAPI application.
+"""Argus FastAPI application.
 
 REST endpoints + the /ws/chat WebSocket for the dashboard. CORS is restricted
 to the local Next.js dev server. Run with ``uvicorn backend.main:app --port 8000``.
@@ -85,7 +85,7 @@ def create_app(
             if scheduler is not None:
                 scheduler.shutdown(wait=False)
 
-    app = FastAPI(title="FRIDAY", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Argus", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,

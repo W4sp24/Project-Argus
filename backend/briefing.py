@@ -133,7 +133,7 @@ def agent_composer(data: BriefingData) -> str:
     from backend.agent.generate import agent_generate
 
     prompt = (
-        "You are FRIDAY writing the user's morning briefing for their daily note.\n"
+        "You are Argus writing the user's morning briefing for their daily note.\n"
         "Rewrite the facts below as a short, warm, scannable markdown briefing "
         "(bold section labels, bullet lists, no H1/H2 headings). Do not invent "
         "events or tasks; keep every date exactly as given.\n\n"

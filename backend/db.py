@@ -1,6 +1,6 @@
-"""SQLite storage for FRIDAY.
+"""SQLite storage for Argus.
 
-One small database in the vault's ``.friday/`` folder holds suggestion rows,
+One small database in the vault's ``.argus/`` folder holds suggestion rows,
 sync state, and (later phases) exams and audit entries. Plain ``sqlite3`` in
 WAL mode — no ORM needed at this size.
 """
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS attempts (
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    """Open (creating if needed) the FRIDAY database at ``db_path``."""
+    """Open (creating if needed) the Argus database at ``db_path``."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

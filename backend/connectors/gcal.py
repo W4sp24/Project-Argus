@@ -2,7 +2,7 @@
 
 Setup is a human step: create a Desktop OAuth client in Google Cloud Console,
 save ``credentials.json`` in the repo root (gitignored), then run
-``friday connect gcal`` once to complete the browser consent flow. The token
+``argus connect gcal`` once to complete the browser consent flow. The token
 is stored in the OS keyring (invariant I4).
 """
 
@@ -16,14 +16,14 @@ from pydantic import BaseModel
 
 # Read events in P2; insert approved schedule blocks in P3 (writer-gated, I1).
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
-FRIDAY_COLOR_ID = "3"  # grape — FRIDAY-created blocks are visually distinct
+ARGUS_COLOR_ID = "3"  # grape — Argus-created blocks are visually distinct
 CREDENTIALS_FILE = Path("credentials.json")
-KEYRING_SERVICE = "friday-gcal"
+KEYRING_SERVICE = "argus-gcal"
 KEYRING_USER = "token"
 
 
 class CalendarEvent(BaseModel):
-    """One calendar event in FRIDAY's agenda shape."""
+    """One calendar event in Argus's agenda shape."""
 
     title: str
     start: str
@@ -79,18 +79,18 @@ def _service():
 
 
 def insert_event(title: str, start: str, end: str, service=None) -> None:
-    """Insert one FRIDAY block. Only ``backend.writer`` may call this (I1)."""
+    """Insert one Argus block. Only ``backend.writer`` may call this (I1)."""
     service = service or _service()
     if service is None:
-        raise RuntimeError("Google Calendar is not connected — run `friday connect gcal`")
+        raise RuntimeError("Google Calendar is not connected — run `argus connect gcal`")
     service.events().insert(
         calendarId="primary",
         body={
             "summary": title,
             "start": {"dateTime": start},
             "end": {"dateTime": end},
-            "colorId": FRIDAY_COLOR_ID,
-            "description": "Scheduled by FRIDAY (approved suggestion)",
+            "colorId": ARGUS_COLOR_ID,
+            "description": "Scheduled by Argus (approved suggestion)",
         },
     ).execute()
 

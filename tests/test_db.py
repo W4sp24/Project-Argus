@@ -9,7 +9,7 @@ from backend.db import connect, init_schema
 
 
 def test_connect_creates_parent_dirs_and_enables_wal(tmp_path: Path) -> None:
-    db_path = tmp_path / ".friday" / "friday.db"
+    db_path = tmp_path / ".argus" / "argus.db"
 
     conn = connect(db_path)
     try:

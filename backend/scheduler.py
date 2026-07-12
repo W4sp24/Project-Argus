@@ -17,7 +17,7 @@ from backend.db import connect, init_schema
 from backend.tasks.parser import refresh_cache
 from backend.writer import write_briefing
 
-logger = logging.getLogger("friday.scheduler")
+logger = logging.getLogger("argus.scheduler")
 
 BRIEFING_HOUR = 7
 REFRESH_HOUR = 3

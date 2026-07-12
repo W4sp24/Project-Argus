@@ -172,7 +172,7 @@ export default function TodayPage() {
         ) : briefingMissing ? (
           <div className="flex flex-wrap items-center gap-4">
             <p className="text-sm text-ink-muted">
-              No briefing yet today — FRIDAY writes one into your daily note at 07:00, or on
+              No briefing yet today — Argus writes one into your daily note at 07:00, or on
               demand.
             </p>
             <button
@@ -196,7 +196,7 @@ export default function TodayPage() {
                 ? "Nothing on the calendar today."
                 : "Connect Google Calendar to see your day: create a Desktop OAuth client, save credentials.json in the repo, then run "}
               {!agenda.configured.gcal && (
-                <span className="font-mono text-xs text-primary-soft">friday connect gcal</span>
+                <span className="font-mono text-xs text-primary-soft">argus connect gcal</span>
               )}
             </p>
           )}

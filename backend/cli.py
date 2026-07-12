@@ -1,6 +1,6 @@
-"""FRIDAY command-line interface.
+"""Argus command-line interface.
 
-Currently one command: ``friday init <path>`` — create a new vault from the
+Currently one command: ``argus init <path>`` — create a new vault from the
 bundled template, git-init it (groundwork for invariant I2: the writer commits
 the vault before every apply), and record ``VAULT_PATH`` in ``.env``.
 """
@@ -67,15 +67,15 @@ def init_vault(dest: Path, env_file: Path = DEFAULT_ENV_FILE) -> Path:
 
     _run_git(["init"], cwd=dest)
     _run_git(["add", "-A"], cwd=dest)
-    _run_git(["commit", "-m", "chore: initial vault from FRIDAY template"], cwd=dest)
+    _run_git(["commit", "-m", "chore: initial vault from Argus template"], cwd=dest)
 
     _write_env(env_file, dest)
     return dest
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point for the ``friday`` console script."""
-    parser = argparse.ArgumentParser(prog="friday", description="FRIDAY second-brain CLI")
+    """Entry point for the ``argus`` console script."""
+    parser = argparse.ArgumentParser(prog="argus", description="Argus second-brain CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init", help="create a new vault from the template")
@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             print("Google Calendar connected — token stored in the OS keyring.")
         else:
             if not args.token:
-                print("usage: friday connect todoist <api-token>", file=sys.stderr)
+                print("usage: argus connect todoist <api-token>", file=sys.stderr)
                 return 1
             from backend.connectors import todoist
 

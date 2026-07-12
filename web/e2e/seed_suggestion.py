@@ -7,7 +7,7 @@ from backend.db import connect, init_schema
 from backend.suggestions import insert_suggestion
 
 vault = Path(sys.argv[1])
-conn = connect(vault / ".friday" / "friday.db")
+conn = connect(vault / ".argus" / "argus.db")
 init_schema(conn)
 sid = insert_suggestion(
     conn,

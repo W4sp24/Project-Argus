@@ -1,6 +1,6 @@
 """Application settings loaded from a simple ``.env`` file.
 
-FRIDAY deliberately keeps configuration primitive: one ``KEY=VALUE`` file next
+Argus deliberately keeps configuration primitive: one ``KEY=VALUE`` file next
 to the repo root (``VAULT_PATH``, ``BACKEND_PORT``). Secrets never live here —
 they belong in the OS keyring (invariant I4).
 """
@@ -54,11 +54,11 @@ class Settings:
         """The Obsidian vault root. Accessing it unconfigured is an error."""
         if self._vault_path is None:
             raise ConfigError(
-                "VAULT_PATH is not configured. Run `friday init <path>` or set it in .env."
+                "VAULT_PATH is not configured. Run `argus init <path>` or set it in .env."
             )
         return self._vault_path
 
     @property
     def db_path(self) -> Path:
-        """SQLite database location — inside the vault's ``.friday/`` folder."""
-        return self.vault_path / ".friday" / "friday.db"
+        """SQLite database location — inside the vault's ``.argus/`` folder."""
+        return self.vault_path / ".argus" / "argus.db"

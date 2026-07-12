@@ -1,25 +1,27 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import useSWR from "swr";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import GlassCard from "@/components/GlassCard";
 import PageHeader from "@/components/PageHeader";
+import ChartSkeleton from "@/components/charts/ChartSkeleton";
+import { SERIES } from "@/components/charts/chartTheme";
 import { fetcher, useJournalSessions } from "@/lib/api";
 
-// Palette validated vs dark glass surface #17092e (dataviz six checks pass).
-const BAR_COLOR = "#8b5cf6";
-const SERIES = { violet: "#8b5cf6", cyan: "#0891b2", rose: "#e11d48" };
-const SURFACE = "#17092e";
+const BarChartPanel = dynamic(() => import("@/components/charts/BarChartPanel"), {
+  ssr: false,
+  loading: () => <ChartSkeleton />,
+});
+const StackedBarChartPanel = dynamic(() => import("@/components/charts/StackedBarChartPanel"), {
+  ssr: false,
+  loading: () => <ChartSkeleton />,
+});
+const LineChartPanel = dynamic(() => import("@/components/charts/LineChartPanel"), {
+  ssr: false,
+  loading: () => <ChartSkeleton />,
+});
+
+const BAR_COLOR = SERIES.violet;
 const DAYS_SHOWN = 14;
 
 interface InsightsSummary {
@@ -29,15 +31,6 @@ interface InsightsSummary {
   study: { streak_days: number; courses: { course: string; attempts: { date: string; pct: number }[] }[] };
   configured: { gcal: boolean };
 }
-
-const AXIS_TICK = { fill: "#6b5f94", fontSize: 10, fontFamily: "var(--font-mono)" };
-const TOOLTIP_STYLE = {
-  background: "rgba(23,9,46,0.95)",
-  border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: 12,
-  fontSize: 12,
-  color: "#ede9fe",
-};
 
 function shortDay(date: string): string {
   return date.slice(5).replace("-", "/");
@@ -115,41 +108,7 @@ export default function InsightsPage() {
         <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
           <GlassCard title={`Coding sessions — last ${DAYS_SHOWN} days`}>
             <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={activity} margin={{ top: 8, right: 4, left: -22, bottom: 0 }}>
-                  <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                  <XAxis
-                    dataKey="day"
-                    tick={{ fill: "#6b5f94", fontSize: 10, fontFamily: "var(--font-mono)" }}
-                    tickLine={false}
-                    axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
-                    interval={1}
-                  />
-                  <YAxis
-                    allowDecimals={false}
-                    tick={{ fill: "#6b5f94", fontSize: 10, fontFamily: "var(--font-mono)" }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <Tooltip
-                    cursor={{ fill: "rgba(139,92,246,0.08)" }}
-                    contentStyle={{
-                      background: "rgba(23,9,46,0.95)",
-                      border: "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: 12,
-                      fontSize: 12,
-                      color: "#ede9fe",
-                    }}
-                    labelStyle={{ color: "#9d8fc7", fontFamily: "var(--font-mono)" }}
-                  />
-                  <Bar
-                    dataKey="sessions"
-                    fill={BAR_COLOR}
-                    radius={[4, 4, 0, 0]}
-                    maxBarSize={18}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+              <BarChartPanel data={activity} dataKey="sessions" color={BAR_COLOR} />
             </div>
           </GlassCard>
 
@@ -175,31 +134,7 @@ export default function InsightsPage() {
         <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
           <GlassCard title="Tasks completed — last 14 days">
             <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={completion} margin={{ top: 8, right: 4, left: -22, bottom: 0 }}>
-                  <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                  <XAxis
-                    dataKey="day"
-                    tick={AXIS_TICK}
-                    tickLine={false}
-                    axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
-                    interval={1}
-                  />
-                  <YAxis
-                    allowDecimals={false}
-                    tick={AXIS_TICK}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <Tooltip cursor={{ fill: "rgba(139,92,246,0.08)" }} contentStyle={TOOLTIP_STYLE} />
-                  <Bar
-                    dataKey="completed"
-                    fill={SERIES.violet}
-                    radius={[4, 4, 0, 0]}
-                    maxBarSize={18}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+              <BarChartPanel data={completion} dataKey="completed" color={SERIES.violet} />
             </div>
           </GlassCard>
 
@@ -230,7 +165,7 @@ export default function InsightsPage() {
           {insights && !insights.configured.gcal ? (
             <p className="text-sm text-ink-muted">
               Connect Google Calendar (
-              <span className="font-mono text-xs text-primary-soft">friday connect gcal</span>) to
+              <span className="font-mono text-xs text-primary-soft">argus connect gcal</span>) to
               see meeting load against remaining focus hours.
             </p>
           ) : (
@@ -246,34 +181,7 @@ export default function InsightsPage() {
                 </span>
               </div>
               <div className="h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={calendar} margin={{ top: 8, right: 4, left: -22, bottom: 0 }}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                    <XAxis dataKey="day" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-                    <YAxis unit="h" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-                    <Tooltip
-                      cursor={{ fill: "rgba(139,92,246,0.08)" }}
-                      contentStyle={TOOLTIP_STYLE}
-                    />
-                    <Bar
-                      dataKey="events"
-                      stackId="day"
-                      fill={SERIES.violet}
-                      stroke={SURFACE}
-                      strokeWidth={2}
-                      maxBarSize={22}
-                    />
-                    <Bar
-                      dataKey="focus"
-                      stackId="day"
-                      fill={SERIES.cyan}
-                      stroke={SURFACE}
-                      strokeWidth={2}
-                      radius={[4, 4, 0, 0]}
-                      maxBarSize={22}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+                <StackedBarChartPanel data={calendar} />
               </div>
             </>
           )}
@@ -284,20 +192,7 @@ export default function InsightsPage() {
             <p className="text-sm text-ink-muted">Nothing overdue — inbox zero energy.</p>
           ) : (
             <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={overdue} margin={{ top: 8, right: 4, left: -22, bottom: 0 }}>
-                  <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                  <XAxis dataKey="day" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-                  <YAxis
-                    allowDecimals={false}
-                    tick={AXIS_TICK}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <Tooltip cursor={{ fill: "rgba(225,29,72,0.08)" }} contentStyle={TOOLTIP_STYLE} />
-                  <Bar dataKey="count" fill={SERIES.rose} radius={[4, 4, 0, 0]} maxBarSize={18} />
-                </BarChart>
-              </ResponsiveContainer>
+              <BarChartPanel data={overdue} dataKey="count" color={SERIES.rose} />
             </div>
           )}
         </GlassCard>
@@ -321,24 +216,13 @@ export default function InsightsPage() {
                 ))}
               </div>
               <div className="h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={scores} margin={{ top: 8, right: 8, left: -22, bottom: 0 }}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                    <XAxis dataKey="day" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-                    <YAxis domain={[0, 100]} unit="%" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    {(insights?.study.courses ?? []).map((course, i) => (
-                      <Line
-                        key={course.course}
-                        dataKey={course.course}
-                        stroke={courseColors[i % courseColors.length]}
-                        strokeWidth={2}
-                        dot={{ r: 4, strokeWidth: 0, fill: courseColors[i % courseColors.length] }}
-                        connectNulls
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
+                <LineChartPanel
+                  data={scores}
+                  series={(insights?.study.courses ?? []).map((course, i) => ({
+                    key: course.course,
+                    color: courseColors[i % courseColors.length],
+                  }))}
+                />
               </div>
             </>
           )}

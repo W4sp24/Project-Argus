@@ -1,4 +1,4 @@
-"""`friday doctor` — is this installation healthy?
+"""`argus doctor` — is this installation healthy?
 
 Each check reports OK (working), WARN (degraded but usable — e.g. a
 connector waiting on credentials), or FAIL (something the user must fix).
@@ -85,9 +85,9 @@ def _check_keyring() -> Check:
         import keyring
 
         probe = f"probe-{uuid.uuid4().hex[:8]}"
-        keyring.set_password("friday-doctor", probe, "ok")
-        value = keyring.get_password("friday-doctor", probe)
-        keyring.delete_password("friday-doctor", probe)
+        keyring.set_password("argus-doctor", probe, "ok")
+        value = keyring.get_password("argus-doctor", probe)
+        keyring.delete_password("argus-doctor", probe)
         if value != "ok":
             return Check(name="keyring", status="WARN", detail="probe read back wrong value")
         return Check(name="keyring", status="OK", detail="OS keyring stores secrets (I4)")
@@ -100,11 +100,11 @@ def _check_connector(name: str) -> Check:
         if name == "gcal":
             from backend.connectors import gcal as connector
 
-            hint = "create OAuth credentials.json, then `friday connect gcal`"
+            hint = "create OAuth credentials.json, then `argus connect gcal`"
         else:
             from backend.connectors import todoist as connector
 
-            hint = "`friday connect todoist <api-token>`"
+            hint = "`argus connect todoist <api-token>`"
         if connector.configured():
             return Check(name=name, status="OK", detail="connected")
         return Check(name=name, status="WARN", detail=f"not connected — {hint}")

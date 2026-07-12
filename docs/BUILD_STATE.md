@@ -1,4 +1,4 @@
-# FRIDAY — Build State
+# Argus — Build State
 
 > Machine-readable position tracker. Updated at every task boundary.
 > Resume protocol: read this file, `BUILD_LOG.md`, and the active phase prompt in
@@ -8,9 +8,9 @@
 | Field | Value |
 |---|---|
 | Active phase | — (roadmap P0–P4 complete) |
-| Status | ALL PHASES DONE — maintenance/backlog mode (connector credentials still open) |
-| Last green commit | feat/p4-briefings-insights head (72 pytest + 1 Playwright e2e green, web build green) |
-| Next action | Optional: Ethan provides gcal/Todoist credentials + runs setup.ps1; `/code-review ultra` follow-up; then backlog features |
+| Status | ALL PHASES DONE — maintenance/backlog mode (connector credentials still open); rebranded FRIDAY → Argus (D-032, D-033) 2026-07-12 |
+| Last green commit | feat/p4-briefings-insights head (72 pytest + 1 Playwright e2e green, web build green) — rebrand pass not yet committed |
+| Next action | Optional: Ethan provides gcal/Todoist credentials + runs setup.ps1 (now sets `ARGUS_VAULT`); `/code-review ultra` follow-up; then backlog features |
 
 ## P4 exit criteria evidence (2026-07-12)
 

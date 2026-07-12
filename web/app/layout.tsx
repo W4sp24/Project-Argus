@@ -16,7 +16,7 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FRIDAY",
+  title: "Argus",
   description: "Your second brain, on your machine. Built on Obsidian.",
 };
 

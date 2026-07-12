@@ -62,7 +62,7 @@ def test_apply_schedule_hits_gcal_and_snapshots_vault(
     assert _git_log(vault).count("\n") == before + 1, "I2: vault git log must grow by 1"
     assert applied.status == "applied"
     daily = next((vault / "10-Daily").glob("*.md"))
-    assert "## FRIDAY log" in daily.read_text(encoding="utf-8")
+    assert "## Argus log" in daily.read_text(encoding="utf-8")
 
 
 def test_apply_task_edit_verifies_old_line(conn: sqlite3.Connection, vault: Path) -> None:

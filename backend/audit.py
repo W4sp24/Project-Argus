@@ -1,7 +1,7 @@
 """Audit trail of every agent prompt: WHICH vault files were sent, never text.
 
 Rows record entry point, model, and a path list only (I3 — content stays
-local; the audit answers "what did FRIDAY read?" without copying it).
+local; the audit answers "what did Argus read?" without copying it).
 Logging is best-effort by design: a broken audit must never break chat.
 """
 

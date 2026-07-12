@@ -1,1 +1,1 @@
-"""FRIDAY backend package."""
+"""Argus backend package."""

@@ -8,7 +8,7 @@ EXCLUDED_TOP_DIRS = {
     "99-Private",  # I3: never indexed, never sent to any model
     "90-Meta",  # D2: dev journal is served by the journal API, not RAG
     ".obsidian",
-    ".friday",
+    ".argus",
     ".git",
     ".trash",
 }

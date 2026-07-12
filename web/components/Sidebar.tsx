@@ -91,7 +91,7 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-/** Fixed glass rail with FRIDAY's breathing core orb and the six pages. */
+/** Fixed glass rail with Argus's breathing core orb and the six pages. */
 export default function Sidebar() {
   const pathname = usePathname();
 
@@ -100,21 +100,25 @@ export default function Sidebar() {
       <Link
         href="/today"
         className="mb-0 hidden items-center gap-3 px-2 md:mb-8 md:flex"
-        aria-label="FRIDAY home"
+        aria-label="Argus home"
       >
         <span className="relative flex h-9 w-9 items-center justify-center">
-          <span className="absolute inset-0 animate-breathe rounded-full bg-gradient-to-br from-primary via-accent to-signal opacity-70 blur-[6px]" />
+          {/* Static glow. Any perpetual animation inside a backdrop-filter
+              layer forces the backdrop re-blur every frame (~55% of a GPU
+              core, measured idle) — so nothing in the glass rail animates
+              at rest. breathe stays for transient use (chat thinking dots). */}
+          <span className="absolute -inset-1 rounded-full bg-[radial-gradient(circle,rgba(167,139,250,0.85),rgba(217,70,239,0.4)_55%,transparent_72%)] opacity-70" />
           <span className="relative h-5 w-5 rounded-full bg-gradient-to-br from-primary-soft to-accent shadow-[0_0_12px_rgba(167,139,250,0.8)]" />
         </span>
         <span>
-          <span className="block font-display text-lg font-semibold tracking-wide">FRIDAY</span>
+          <span className="block font-display text-lg font-semibold tracking-wide">Argus</span>
           <span className="block font-mono text-[10px] uppercase tracking-[0.2em] text-ink-faint">
             second brain
           </span>
         </span>
       </Link>
 
-      <nav className="flex w-full items-center justify-around gap-1 md:flex-col md:items-stretch">
+      <nav className="flex w-full items-center justify-between gap-0.5 md:flex-col md:items-stretch md:justify-start md:gap-1">
         {NAV_ITEMS.map((item) => {
           const active = pathname.startsWith(item.href);
           return (
@@ -122,14 +126,15 @@ export default function Sidebar() {
               key={item.href}
               href={item.href}
               aria-current={active ? "page" : undefined}
-              className={`flex flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs transition-colors md:flex-row md:gap-3 md:text-sm ${
+              aria-label={item.name}
+              className={`flex flex-1 flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-xs transition-colors md:flex-none md:flex-row md:gap-3 md:px-3 md:text-sm ${
                 active
                   ? "bg-gradient-to-r from-primary/25 to-accent/15 text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
                   : "text-ink-muted hover:bg-white/5 hover:text-ink"
               }`}
             >
               <span className={active ? "text-primary-soft" : ""}>{item.icon}</span>
-              {item.name}
+              <span className="sr-only md:not-sr-only">{item.name}</span>
             </Link>
           );
         })}

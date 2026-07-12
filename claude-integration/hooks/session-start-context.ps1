@@ -4,14 +4,14 @@
 #
 # Deterministic file read, no model, works offline. Failures exit 0 silently.
 #
-# Vault root: $env:FRIDAY_VAULT overrides the default below.
+# Vault root: $env:ARGUS_VAULT overrides the default below.
 
 $ErrorActionPreference = "Stop"
 
 try {
     $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
 
-    $vault = $env:FRIDAY_VAULT
+    $vault = $env:ARGUS_VAULT
     if (-not $vault) { $vault = "C:\Users\ethan\Documents\Scientia" }
 
     $cwd = if ($payload.cwd) { $payload.cwd } else { (Get-Location).Path }

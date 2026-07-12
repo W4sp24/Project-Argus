@@ -1,4 +1,4 @@
-# FRIDAY — Build Log
+# Argus — Build Log
 
 Decision log. Per the Master Prompt: questions a spec reader could answer are decided
 here, not asked.
@@ -122,3 +122,28 @@ here, not asked.
   diff review of the phase (1 CONFIRMED finding, fixed — see D-029). `/code-review
   ultra` on the full repo is user-triggered/billed and left to Ethan as an optional
   follow-up.
+- **D-032 — Rebrand FRIDAY → Argus.** QA/UX/performance pass requested by Ethan
+  (repo was already named Project-Argus; product surface still said FRIDAY
+  everywhere). Renamed: CLI (`friday` → `argus` console script, package name in
+  `pyproject.toml`), git commit prefix (`friday:` → `argus:`), daily-note audit
+  heading (`## FRIDAY log` → `## Argus log`), the vault's hidden storage folder
+  (`.friday/friday.db` → `.argus/argus.db`, `.friday/chroma` → `.argus/chroma`),
+  keyring service names (`friday-*` → `argus-*` — safe, no connector was connected
+  yet so nothing persisted under the old names), the `FRIDAY_VAULT` env var
+  (→ `ARGUS_VAULT`, also unset so no migration needed), agent persona strings in
+  `backend/agent/prompts/*.md` and `backend/briefing.py`, and all UI copy/titles.
+  The real Scientia vault's `.friday/` folder was copied (not deleted) to `.argus/`
+  so the existing suggestion history and RAG index carried over — `argus doctor`
+  and a live `/review` check both confirmed the migrated data. Left untouched:
+  the three PDF spec files (binary, filenames cross-referenced elsewhere) and the
+  quoted historical evidence blocks in this log / BUILD_STATE.md / docs/plans/ —
+  those are a record of what the tests actually printed at the time and would be
+  inaccurate if rewritten; only their headers were updated.
+- **D-033 — Study-page drag-and-drop was missing; mobile nav overflowed.** Same QA
+  pass. The Study page copy promised "Drop slides and syllabi into a course" but
+  had no `onDrop` handler (click-to-browse only) — likely the source of "can't add
+  files" — fixed with real drag-and-drop + a file-type check. Separately, the
+  7-item bottom nav overflowed at common phone widths (measured: "Insights" fully
+  off-screen at 390px), fixed by switching to icon-only nav below `md`. Also
+  code-split `/insights` (recharts) and `/journal` (react-markdown) via
+  `next/dynamic`, cutting first-load JS from 205 kB/129 kB to ~96 kB each.

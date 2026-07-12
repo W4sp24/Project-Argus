@@ -1,0 +1,52 @@
+- generic [ref=f34e2]:
+  - complementary [ref=f34e3]:
+    - link "Argus home" [ref=f34e4] [cursor=pointer]:
+      - /url: /today
+      - generic [ref=f34e8]:
+        - generic [ref=f34e9]: Argus
+        - generic [ref=f34e10]: second brain
+    - navigation [ref=f34e11]:
+      - link "Today" [ref=f34e12] [cursor=pointer]:
+        - /url: /today
+      - link "Tasks" [ref=f34e18] [cursor=pointer]:
+        - /url: /tasks
+      - link "Chat" [ref=f34e24] [cursor=pointer]:
+        - /url: /chat
+      - link "Study" [ref=f34e29] [cursor=pointer]:
+        - /url: /study
+      - link "Journal" [ref=f34e35] [cursor=pointer]:
+        - /url: /journal
+      - link "Review" [ref=f34e40] [cursor=pointer]:
+        - /url: /review
+      - link "Insights" [ref=f34e46] [cursor=pointer]:
+        - /url: /insights
+    - paragraph [ref=f34e51]: local · private · yours
+  - main [ref=f34e52]:
+    - generic [ref=f34e53]:
+      - generic [ref=f34e54]:
+        - paragraph [ref=f34e55]: // TODAY · Sunday, July 12, 2026
+        - heading "Good evening, Ethan." [level=1] [ref=f34e56]
+      - generic [ref=f34e57]:
+        - paragraph [ref=f34e58]: // BRIEFING
+        - heading "Your morning briefing" [level=2] [ref=f34e59]
+        - paragraph [ref=f34e60]: Loading…
+      - generic [ref=f34e61]:
+        - generic [ref=f34e62]:
+          - paragraph [ref=f34e63]: // AGENDA
+          - heading "Schedule" [level=2] [ref=f34e64]
+          - list
+        - generic [ref=f34e65]:
+          - paragraph [ref=f34e66]: // CAPTURE
+          - heading "Quick capture" [level=2] [ref=f34e67]
+          - paragraph [ref=f34e68]: Drop a thought — it files into 00-Inbox/.
+          - generic [ref=f34e69]:
+            - textbox "e.g. email prof about thesis" [ref=f34e70]
+            - button "Save" [disabled] [ref=f34e71]
+        - generic [ref=f34e72]:
+          - paragraph [ref=f34e73]: // TASKS
+          - heading "Top 3 today" [level=2] [ref=f34e74]
+          - list
+        - generic [ref=f34e75]:
+          - paragraph [ref=f34e76]: // VAULT
+          - heading "Recent notes" [level=2] [ref=f34e77]
+          - paragraph [ref=f34e78]: The vault is quiet.

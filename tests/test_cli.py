@@ -1,4 +1,4 @@
-"""Tests for the `friday init` vault generator."""
+"""Tests for the `argus init` vault generator."""
 
 from pathlib import Path
 

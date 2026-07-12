@@ -1,0 +1,69 @@
+- generic [ref=f37e2]:
+  - complementary [ref=f37e3]:
+    - link "Argus home" [ref=f37e4] [cursor=pointer]:
+      - /url: /today
+      - generic [ref=f37e8]:
+        - generic [ref=f37e9]: Argus
+        - generic [ref=f37e10]: second brain
+    - navigation [ref=f37e11]:
+      - link "Today" [ref=f37e12] [cursor=pointer]:
+        - /url: /today
+      - link "Tasks" [ref=f37e18] [cursor=pointer]:
+        - /url: /tasks
+      - link "Chat" [ref=f37e24] [cursor=pointer]:
+        - /url: /chat
+      - link "Study" [ref=f37e29] [cursor=pointer]:
+        - /url: /study
+      - link "Journal" [ref=f37e35] [cursor=pointer]:
+        - /url: /journal
+      - link "Review" [ref=f37e40] [cursor=pointer]:
+        - /url: /review
+      - link "Insights" [ref=f37e46] [cursor=pointer]:
+        - /url: /insights
+    - paragraph [ref=f37e51]: local · private · yours
+  - main [ref=f37e52]:
+    - generic [ref=f37e53]:
+      - generic [ref=f37e54]:
+        - paragraph [ref=f37e55]: // INSIGHTS
+        - heading "How you're doing" [level=1] [ref=f37e56]
+        - paragraph [ref=f37e57]: Trends from your tasks, calendar, study sessions — and your builds.
+      - generic [ref=f37e58]:
+        - paragraph [ref=f37e59]: // DEVELOPMENT ACTIVITY
+        - generic [ref=f37e60]:
+          - heading "Coding sessions — last 14 days" [level=2] [ref=f37e62]
+          - generic [ref=f37e72]:
+            - generic [ref=f37e73]:
+              - paragraph [ref=f37e74]: SESSIONS · 7D
+              - paragraph [ref=f37e75]: "0"
+            - generic [ref=f37e76]:
+              - paragraph [ref=f37e77]: PROJECTS · 14D
+              - paragraph [ref=f37e78]: "0"
+            - generic [ref=f37e79]:
+              - paragraph [ref=f37e80]: FILES CHANGED · 14D
+              - paragraph [ref=f37e81]: "0"
+      - generic [ref=f37e82]:
+        - paragraph [ref=f37e83]: // LIFE METRICS
+        - generic [ref=f37e84]:
+          - heading "Tasks completed — last 14 days" [level=2] [ref=f37e86]
+          - generic [ref=f37e96]:
+            - generic [ref=f37e97]:
+              - paragraph [ref=f37e98]: STUDY STREAK
+              - paragraph [ref=f37e99]: —days
+            - generic [ref=f37e100]:
+              - paragraph [ref=f37e101]: OVERDUE OPEN
+              - paragraph [ref=f37e102]: —
+      - generic [ref=f37e103]:
+        - generic [ref=f37e104]:
+          - paragraph [ref=f37e105]: // CALENDAR
+          - heading "Calendar load vs focus time" [level=2] [ref=f37e106]
+          - generic [ref=f37e107]:
+            - generic [ref=f37e108]: events
+            - generic [ref=f37e110]: focus
+        - generic [ref=f37e121]:
+          - paragraph [ref=f37e122]: // OVERDUE
+          - heading "Overdue tasks by due date" [level=2] [ref=f37e123]
+          - paragraph [ref=f37e124]: Nothing overdue — inbox zero energy.
+        - generic [ref=f37e125]:
+          - paragraph [ref=f37e126]: // STUDY
+          - heading "Practice-exam scores" [level=2] [ref=f37e127]
+          - paragraph [ref=f37e128]: Take a practice exam on the Study page and score trends per course appear here.

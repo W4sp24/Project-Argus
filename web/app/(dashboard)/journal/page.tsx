@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
+import dynamic from "next/dynamic";
 import GlassCard from "@/components/GlassCard";
 import {
   useJournalNote,
@@ -9,6 +9,11 @@ import {
   useJournalSessions,
   type JournalSession,
 } from "@/lib/api";
+
+const ReactMarkdown = dynamic(() => import("react-markdown"), {
+  ssr: false,
+  loading: () => <p className="text-sm text-ink-faint">Loading note…</p>,
+});
 
 function relativeDay(iso: string): string {
   const today = new Date();

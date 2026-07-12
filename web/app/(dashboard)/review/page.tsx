@@ -97,7 +97,7 @@ export default function ReviewPage() {
       {suggestions && suggestions.length === 0 && (
         <GlassCard label="QUEUE" title="Nothing pending">
           <p className="text-sm text-ink-muted">
-            Ask FRIDAY to <span className="font-mono text-xs text-primary-soft">/plan</span> your
+            Ask Argus to <span className="font-mono text-xs text-primary-soft">/plan</span> your
             day in Chat, or import a syllabus — proposals land here.
           </p>
         </GlassCard>

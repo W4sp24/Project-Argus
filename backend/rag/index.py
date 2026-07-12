@@ -1,7 +1,7 @@
 """Embedding + vector store for the vault (ChromaDB, local embeddings).
 
 Everything stays on this machine: bge-small-en-v1.5 runs on CPU and ChromaDB
-persists under the vault's ``.friday/chroma`` directory. IDs are
+persists under the vault's ``.argus/chroma`` directory. IDs are
 ``sha1(path::index)`` so re-indexing a file is an idempotent delete+add.
 """
 

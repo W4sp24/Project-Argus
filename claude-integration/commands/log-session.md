@@ -6,7 +6,7 @@ Log this session to the Obsidian vault's dev journal. Follow these rules exactly
 
 ## Where
 
-- Vault root: `$FRIDAY_VAULT` if set, else `C:\Users\ethan\Documents\Scientia`.
+- Vault root: `$ARGUS_VAULT` if set, else `C:\Users\ethan\Documents\Scientia`.
 - Project slug = lowercased basename of the current working directory.
 - Session note: `90-Meta/sessions/<yyyy>/<yyyy-MM-dd>-<slug>.md` (today's date).
   If it does not exist yet, create it with frontmatter

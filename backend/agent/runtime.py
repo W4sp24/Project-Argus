@@ -1,4 +1,4 @@
-"""FRIDAY's chat agent: claude-agent-sdk with in-process vault tools.
+"""Argus's chat agent: claude-agent-sdk with in-process vault tools.
 
 Auth is the user's Claude subscription login (invariant I5) — ANTHROPIC_API_KEY
 is never set here. Tools are read-only (P1 agent); every result carries the
@@ -133,16 +133,16 @@ class ChatAgent:
         )
 
         server = create_sdk_mcp_server(
-            "friday", tools=build_vault_tools(self._settings, self._index)
+            "argus", tools=build_vault_tools(self._settings, self._index)
         )
         options = ClaudeAgentOptions(
             model=MODEL,
             system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
-            mcp_servers={"friday": server},
+            mcp_servers={"argus": server},
             allowed_tools=[
-                "mcp__friday__search_vault",
-                "mcp__friday__read_note",
-                "mcp__friday__list_tasks",
+                "mcp__argus__search_vault",
+                "mcp__argus__read_note",
+                "mcp__argus__list_tasks",
             ],
             disallowed_tools=["Bash", "Write", "Edit"],  # read-only agent (P1)
             include_partial_messages=True,

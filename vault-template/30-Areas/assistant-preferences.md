@@ -2,12 +2,12 @@
 type: area
 title: Assistant preferences
 created: "{{date}}"
-tags: [areas, friday]
+tags: [areas, argus]
 ---
 
 # Assistant preferences
 
-> FRIDAY's planner reads this note before proposing your day. Edit it in
+> Argus's planner reads this note before proposing your day. Edit it in
 > Obsidian — you are literally configuring your own assistant's behavior.
 
 ## Class / fixed schedule

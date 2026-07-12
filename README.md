@@ -1,11 +1,11 @@
-# FRIDAY — your second brain, on your machine
+# Argus — your second brain, on your machine
 
 A local, Jarvis-style assistant built on an [Obsidian](https://obsidian.md) vault:
 chat grounded in your own notes, a unified task + calendar day view, a coursework
 engine that turns your real lecture materials into cited practice exams, an AI day
 planner that only ever *proposes* (you approve every change), and a morning briefing
 written into your daily note at 07:00. Your vault stays plain markdown you own —
-delete FRIDAY tomorrow and your second brain stays.
+delete Argus tomorrow and your second brain stays.
 
 ![status](https://img.shields.io/badge/status-v0.1-8b5cf6)
 ![python](https://img.shields.io/badge/python-3.12-8b5cf6)
@@ -25,15 +25,16 @@ Next.js dashboard  ←→  FastAPI backend  ←→  Obsidian vault (markdown, si
 - **Chat** grounded in your vault — every answer carries citations that deep-link
   back into Obsidian; "that's not in your notes" instead of hallucinations.
 - **Today** — live agenda (vault tasks + Google Calendar + Todoist), quick capture
-  to `00-Inbox/`, and the morning **briefing** (07:00 job or on-demand): schedule,
-  due/overdue, yesterday's leftovers, exam countdowns, weak topics.
+  to `00-Inbox/` (click, or drag a file straight onto a course card on **Study**),
+  and the morning **briefing** (07:00 job or on-demand): schedule, due/overdue,
+  yesterday's leftovers, exam countdowns, weak topics.
 - **Planner** — type `/plan tomorrow` in chat; the agent proposes schedule blocks,
   task edits, and note edits into a **Review** queue. Approve applies them through
   a single audited writer (with a git snapshot of the vault first); dismissing with
   a reason teaches the planner your preferences.
-- **Study** — upload lecture PDFs/slides, generate study guides and practice exams
-  where every question cites a real page, take them in quiz mode, and let missed
-  topics feed your review queue (and your briefing, and your planner).
+- **Study** — upload or drag-and-drop lecture PDFs/slides, generate study guides and
+  practice exams where every question cites a real page, take them in quiz mode, and
+  let missed topics feed your review queue (and your briefing, and your planner).
 - **Tasks** — Obsidian Tasks syntax parsed vault-wide into overdue/today/week/someday.
 - **Insights** — task completion trend, overdue chart, calendar load vs focus time,
   study streak, practice-exam scores per course, plus your coding-session activity.
@@ -42,7 +43,8 @@ Next.js dashboard  ←→  FastAPI backend  ←→  Obsidian vault (markdown, si
 
 ## Quickstart
 
-Prerequisites: Python 3.12+, Node 18+, git.
+Prerequisites: Python 3.12+, Node 18+, git. (Windows: PowerShell works fine for all
+commands below; there's no `gh`/`uv` dependency for the core app.)
 
 ```bash
 git clone <this-repo> && cd <repo>
@@ -53,35 +55,40 @@ python -m venv .venv
 pip install -e ".[dev]"
 
 # 2. Create (or point at) your vault
-friday init ./my-vault          # new vault from the template, or set VAULT_PATH in .env
+argus init ./my-vault           # new vault from the template, or set VAULT_PATH in .env
                                  # to an existing Obsidian vault
 
 # 3. Run
 uvicorn backend.main:app --port 8000      # API on :8000
-cd web && npm install && npm run dev       # dashboard on :3000
+cd web && npm install && npm run dev       # dashboard — next dev picks :3000, or the next
+                                            # free port if something's already listening
 ```
 
-Open <http://localhost:3000>, then check the install:
+Open <http://localhost:3000> (check your terminal for the actual port Next.js picked),
+then verify the install:
 
 ```bash
-friday doctor                   # vault, git, db, chroma, keyring, connectors
+argus doctor                    # vault, git, db, chroma, keyring, connectors
 ```
 
 Optional extras:
 
 ```bash
 pip install -e ".[rag]"         # chat/RAG stack (embeddings, chroma, pdf extraction)
-friday reindex                  # build the search index over your vault
-friday connect gcal             # Google Calendar (needs a Desktop OAuth credentials.json)
-friday connect todoist <token>  # Todoist personal API token
+argus reindex                   # build the search index over your vault
+argus connect gcal              # Google Calendar (needs a Desktop OAuth credentials.json)
+argus connect todoist <token>   # Todoist personal API token
 ```
+
+Both connectors are optional — everything else works without them, and `argus doctor`
+reports them as `WARN` (not `FAIL`) until you connect them.
 
 ## Project layout
 
 ```
 backend/        FastAPI app, CLI, storage (Python 3.12, type-hinted, ruff)
 web/            Next.js 14 dashboard (TypeScript, Tailwind)
-vault-template/ PARA-style vault skeleton copied by `friday init`
+vault-template/ PARA-style vault skeleton copied by `argus init`
 tests/          pytest suite
 docs/           specs, build state, decision log, phase plans
 ```
@@ -112,6 +119,7 @@ its key: `claude mcp add obsidian -s user -e OBSIDIAN_API_KEY=<key> -e OBSIDIAN_
 pytest                 # backend tests
 ruff check backend tests && ruff format --check backend tests
 cd web && npm run lint && npm run build
+cd web && npm run e2e  # Playwright end-to-end (capture -> approve -> vault roundtrip)
 ```
 
 Conventional commits (`feat(scope): …`). See `docs/BUILD_STATE.md` for the current

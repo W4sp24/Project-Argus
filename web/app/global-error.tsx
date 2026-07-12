@@ -37,7 +37,7 @@ export default function GlobalError({
           <p style={{ fontSize: 12, letterSpacing: 2, color: "#6b5f94", margin: 0 }}>
             {"// FATAL"}
           </p>
-          <h2 style={{ margin: "8px 0 12px", fontWeight: 600 }}>FRIDAY hit a wall</h2>
+          <h2 style={{ margin: "8px 0 12px", fontWeight: 600 }}>Argus hit a wall</h2>
           <p style={{ fontSize: 14, color: "#9d8fc7", margin: 0 }}>
             {error.message || "The app shell itself failed to render."}
           </p>

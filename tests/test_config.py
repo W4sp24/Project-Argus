@@ -16,7 +16,7 @@ def test_load_reads_vault_path_and_derives_db_path(tmp_path: Path) -> None:
     settings = Settings.load(env_file)
 
     assert settings.vault_path == vault
-    assert settings.db_path == vault / ".friday" / "friday.db"
+    assert settings.db_path == vault / ".argus" / "argus.db"
     assert settings.backend_port == 8000
 
 

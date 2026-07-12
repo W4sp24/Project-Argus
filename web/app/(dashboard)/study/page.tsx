@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type DragEvent } from "react";
 import useSWR from "swr";
 import GlassCard from "@/components/GlassCard";
 import PageHeader from "@/components/PageHeader";
@@ -52,7 +52,15 @@ export default function StudyPage() {
 
   const [status, setStatus] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [dragOverCourse, setDragOverCourse] = useState<string | null>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  const ACCEPTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md"];
+
+  function isAcceptedFile(file: File) {
+    const name = file.name.toLowerCase();
+    return ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext));
+  }
 
   // Quiz state
   const [quiz, setQuiz] = useState<{ examId: number; questions: QuizQuestion[] } | null>(null);
@@ -61,6 +69,10 @@ export default function StudyPage() {
   const [result, setResult] = useState<AttemptResult | null>(null);
 
   async function upload(course: string, file: File) {
+    if (!isAcceptedFile(file)) {
+      setStatus(`"${file.name}" isn't a supported type — use ${ACCEPTED_EXTENSIONS.join(", ")}.`);
+      return;
+    }
     setBusyAction(`upload-${course}`);
     setStatus(null);
     const body = new FormData();
@@ -75,6 +87,25 @@ export default function StudyPage() {
     );
     setBusyAction(null);
     refreshCourses();
+  }
+
+  function handleDragOver(course: string, event: DragEvent) {
+    event.preventDefault();
+    if (busyAction !== null) return;
+    setDragOverCourse(course);
+  }
+
+  function handleDragLeave(course: string, event: DragEvent) {
+    event.preventDefault();
+    if (dragOverCourse === course) setDragOverCourse(null);
+  }
+
+  function handleDrop(course: string, event: DragEvent) {
+    event.preventDefault();
+    setDragOverCourse(null);
+    if (busyAction !== null) return;
+    const file = event.dataTransfer.files?.[0];
+    if (file) upload(course, file);
   }
 
   async function generate(kind: "guide" | "exam", course: string) {
@@ -242,7 +273,7 @@ export default function StudyPage() {
       <PageHeader
         label="STUDY"
         title="Course hub"
-        subtitle="Drop slides and syllabi into a course — FRIDAY turns them into study guides and cited practice exams."
+        subtitle="Drop slides and syllabi into a course — Argus turns them into study guides and cited practice exams."
       />
 
       {status && (
@@ -253,10 +284,25 @@ export default function StudyPage() {
 
       <div className="grid gap-4 md:grid-cols-2">
         {(courses ?? []).map((course) => (
-          <GlassCard key={course.code} label={course.code} title={course.title}>
+          <GlassCard
+            key={course.code}
+            label={course.code}
+            title={course.title}
+            className={
+              dragOverCourse === course.code
+                ? "border-primary-soft/60 bg-primary/10 ring-1 ring-primary-soft/40"
+                : ""
+            }
+            onDragOver={(event) => handleDragOver(course.code, event)}
+            onDragLeave={(event) => handleDragLeave(course.code, event)}
+            onDrop={(event) => handleDrop(course.code, event)}
+          >
             <p className="mb-4 font-mono text-[11px] text-ink-faint">
               {course.materials} material{course.materials === 1 ? "" : "s"} · {course.notes} note
               {course.notes === 1 ? "" : "s"}
+              {dragOverCourse === course.code && (
+                <span className="ml-2 text-primary-soft">— drop to upload</span>
+              )}
             </p>
             <div className="flex flex-wrap gap-2">
               <input

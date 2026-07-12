@@ -33,9 +33,9 @@ test("capture → approve → vault roundtrip", async ({ page }) => {
   expect(fs.readFileSync(target, "utf-8")).not.toContain("2026-07-20");
 
   const gitLog = execSync("git log --oneline", { cwd: vault, encoding: "utf-8" });
-  expect(gitLog).toContain("friday: pre-apply snapshot (apply suggestion");
+  expect(gitLog).toContain("argus: pre-apply snapshot (apply suggestion");
 
-  // The FRIDAY log audit line landed in today's daily note.
+  // The Argus log audit line landed in today's daily note.
   const daily = path.join(vault, "10-Daily", `${localToday()}.md`);
-  await expect.poll(() => fs.readFileSync(daily, "utf-8")).toContain("## FRIDAY log");
+  await expect.poll(() => fs.readFileSync(daily, "utf-8")).toContain("## Argus log");
 });

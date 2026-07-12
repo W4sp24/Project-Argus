@@ -22,7 +22,7 @@ from backend.suggestions import Suggestion
 
 INBOX_DIR = "00-Inbox"
 DAILY_DIR = "10-Daily"
-FRIDAY_LOG_HEADING = "## FRIDAY log"
+ARGUS_LOG_HEADING = "## Argus log"
 
 
 class WriterError(RuntimeError):
@@ -40,7 +40,7 @@ def _git_snapshot(vault_path: Path, reason: str) -> None:
     )
     # --allow-empty: the snapshot marks the pre-apply point even on a clean tree.
     subprocess.run(
-        ["git", "commit", "--allow-empty", "-m", f"friday: pre-apply snapshot ({reason})"],
+        ["git", "commit", "--allow-empty", "-m", f"argus: pre-apply snapshot ({reason})"],
         cwd=vault_path,
         capture_output=True,
         text=True,
@@ -112,8 +112,8 @@ def write_briefing(vault_path: Path, markdown: str) -> str:
 # --- Suggestion application (P3): the approval gate's one executor ----------
 
 
-def _friday_log(vault_path: Path, line: str) -> None:
-    """Append an audit line under '## FRIDAY log' in today's daily note."""
+def _argus_log(vault_path: Path, line: str) -> None:
+    """Append an audit line under '## Argus log' in today's daily note."""
     daily = vault_path / DAILY_DIR
     daily.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
@@ -123,10 +123,10 @@ def _friday_log(vault_path: Path, line: str) -> None:
     content = note.read_text(encoding="utf-8")
     stamp = datetime.now().strftime("%H:%M")
     entry = f"- {stamp} — {line}"
-    if FRIDAY_LOG_HEADING in content:
+    if ARGUS_LOG_HEADING in content:
         content = content.rstrip("\n") + f"\n{entry}\n"
     else:
-        content = content.rstrip("\n") + f"\n\n{FRIDAY_LOG_HEADING}\n\n{entry}\n"
+        content = content.rstrip("\n") + f"\n\n{ARGUS_LOG_HEADING}\n\n{entry}\n"
     note.write_text(content, encoding="utf-8")
 
 
@@ -234,7 +234,7 @@ def apply_suggestion(
     else:  # pragma: no cover - kind is DB-constrained
         raise WriterError(f"unknown suggestion kind {suggestion.kind}")
 
-    _friday_log(vault_path, f"applied #{suggestion_id}: {summary}")
+    _argus_log(vault_path, f"applied #{suggestion_id}: {summary}")
     suggestion_queue.mark_applied(conn, suggestion_id)
     applied = suggestion_queue.get(conn, suggestion_id)
     assert applied is not None

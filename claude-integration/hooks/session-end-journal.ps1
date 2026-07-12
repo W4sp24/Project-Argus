@@ -4,14 +4,14 @@
 # Deterministic by design (invariant D3): plain filesystem append, no model, works
 # with Obsidian closed. Must NEVER break a session: every failure exits 0 silently.
 #
-# Vault root: $env:FRIDAY_VAULT overrides the default below.
+# Vault root: $env:ARGUS_VAULT overrides the default below.
 
 $ErrorActionPreference = "Stop"
 
 try {
     $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
 
-    $vault = $env:FRIDAY_VAULT
+    $vault = $env:ARGUS_VAULT
     if (-not $vault) { $vault = "C:\Users\ethan\Documents\Scientia" }
     if (-not (Test-Path $vault)) { exit 0 }
 

@@ -5,7 +5,7 @@ import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 
 interface ChatMessage {
-  role: "user" | "friday";
+  role: "user" | "argus";
   text: string;
   pending?: boolean;
 }
@@ -56,7 +56,7 @@ export default function ChatPage() {
     setMessages((prev) => [
       ...prev,
       { role: "user", text: `/plan ${instruction}` },
-      { role: "friday", text: "", pending: true },
+      { role: "argus", text: "", pending: true },
     ]);
     try {
       const response = await fetch("/api/plan", {
@@ -68,11 +68,11 @@ export default function ChatPage() {
       const text = response.ok
         ? `Planned! ${payload.created} suggestion${payload.created === 1 ? "" : "s"} waiting on the Review page.`
         : `Planning failed: ${payload.detail}`;
-      setMessages((prev) => [...prev.slice(0, -1), { role: "friday", text }]);
+      setMessages((prev) => [...prev.slice(0, -1), { role: "argus", text }]);
     } catch {
       setMessages((prev) => [
         ...prev.slice(0, -1),
-        { role: "friday", text: "Planning failed — is the backend running?" },
+        { role: "argus", text: "Planning failed — is the backend running?" },
       ]);
     }
     setBusy(false);
@@ -92,7 +92,7 @@ export default function ChatPage() {
     setMessages((prev) => [
       ...prev,
       { role: "user", text: message },
-      { role: "friday", text: "", pending: true },
+      { role: "argus", text: "", pending: true },
     ]);
 
     const ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/chat`);
@@ -114,7 +114,7 @@ export default function ChatPage() {
         setMessages((prev) => {
           const next = [...prev];
           next[next.length - 1] = {
-            role: "friday",
+            role: "argus",
             text: `Something went wrong: ${frame.detail}`,
             pending: false,
           };
@@ -161,7 +161,7 @@ export default function ChatPage() {
               </div>
               {offline && (
                 <p className="text-sm text-accent">
-                  Can&apos;t reach FRIDAY — start the backend with{" "}
+                  Can&apos;t reach Argus — start the backend with{" "}
                   <span className="font-mono text-xs">uvicorn backend.main:app --port 8000</span>
                 </p>
               )}
@@ -181,7 +181,7 @@ export default function ChatPage() {
                 }`}
               >
                 {message.pending ? (
-                  <span className="flex gap-1.5 py-1" aria-label="FRIDAY is thinking">
+                  <span className="flex gap-1.5 py-1" aria-label="Argus is thinking">
                     {[0, 1, 2].map((dot) => (
                       <span
                         key={dot}
@@ -217,7 +217,7 @@ export default function ChatPage() {
             <input
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder={busy ? "FRIDAY is answering…" : "Ask about anything in your vault"}
+              placeholder={busy ? "Argus is answering…" : "Ask about anything in your vault"}
               disabled={busy}
               className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm placeholder:text-ink-faint focus:border-primary-soft/50 focus:outline-none disabled:opacity-50"
             />

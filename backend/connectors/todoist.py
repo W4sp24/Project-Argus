@@ -1,14 +1,14 @@
 """Todoist (read-only in P2). Token lives in the OS keyring (I4).
 
 Setup: Todoist → Settings → Integrations → Developer → API token, then
-``friday connect todoist <token>``.
+``argus connect todoist <token>``.
 """
 
 from __future__ import annotations
 
 from backend.tasks.parser import TaskItem
 
-KEYRING_SERVICE = "friday-todoist"
+KEYRING_SERVICE = "argus-todoist"
 KEYRING_USER = "token"
 
 
@@ -35,7 +35,7 @@ def connect(token: str) -> None:
 
 
 def list_tasks(api=None) -> list[TaskItem]:
-    """Open Todoist tasks mapped to FRIDAY's task shape; [] when unconfigured."""
+    """Open Todoist tasks mapped to Argus's task shape; [] when unconfigured."""
     if api is None:
         token = _stored_token()
         if token is None:
