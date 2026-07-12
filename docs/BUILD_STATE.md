@@ -7,10 +7,27 @@
 
 | Field | Value |
 |---|---|
-| Active phase | P2 — Tasks + calendar merge |
-| Status | NOT STARTED (P1.5 complete) |
-| Last green commit | feat/p1.5-coursework head (44 pytest green, web build green) |
-| Next action | Plan + execute P2 per playbook §5 (task parser, gcal OAuth [HUMAN STOP: credentials.json], todoist, Today/Tasks pages) |
+| Active phase | P3 — Planner + suggest-then-approve |
+| Status | NOT STARTED (P2 complete; gcal/todoist live checks await credentials) |
+| Last green commit | feat/p2-tasks-calendar head (56 pytest green, web build green) |
+| Next action | Plan + execute P3 per playbook §5 (propose_* tools, suggestion queue, Review UI, writer.apply) |
+
+## P2 exit criteria evidence (2026-07-12)
+
+```
+pytest -> 56 passed, incl.: parser handles due/priority/done/tags/scheduled
+  fixtures; agenda merges correctly (mocked connectors); capture appends via
+  writer only (source-scan proof test + endpoint spy)
+Manual (live backend + real Scientia vault):
+  task "- [ ] Test FRIDAY task board 📅 2026-07-12 ⏫ #friday" in the daily
+  note -> appears in /api/agenda tasks+top_tasks with parsed due/priority/tags
+  POST /api/capture -> 00-Inbox/capture-2026-07-12.md; vault git log gained
+  "friday: pre-apply snapshot (quick capture)" BEFORE the write (I2)
+npm run build -> /today 2.58 kB, /tasks 1.46 kB
+BLOCKED on Ethan (expected stop): Google OAuth credentials.json (then
+  `friday connect gcal`) and Todoist API token (`friday connect todoist <tok>`)
+  for the live connector halves; code paths degrade gracefully until then.
+```
 
 ## P1.5 exit criteria evidence (2026-07-12)
 
@@ -77,8 +94,8 @@ npm run build       -> compiled; routes /, /today, /tasks, /chat, /study, /revie
 | P0.5 — Build journal & Obsidian dev loop | ✅ DONE (2 human steps open) | hooks, /log-session, journal API, Journal page |
 | P1 — RAG + chat | ✅ DONE | local embeddings, hybrid retrieval, streaming cited chat |
 | P1.5 — Coursework engine | ✅ DONE | cited exams, guides, quiz+grading, syllabus import |
-| P2 — Tasks + calendar | NEXT | gcal OAuth = expected human stop |
-| P3 — Planner + approvals | PENDING | |
+| P2 — Tasks + calendar | ✅ DONE (connector live checks await creds) | writer (I1/I2), parser, agenda merge, capture |
+| P3 — Planner + approvals | NEXT | |
 | P4 — Briefings + insights | PENDING | |
 
 ## Blockers

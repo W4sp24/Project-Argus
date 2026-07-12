@@ -94,6 +94,10 @@ def main(argv: list[str] | None = None) -> int:
         "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
     )
 
+    connect_parser = subparsers.add_parser("connect", help="connect an external service")
+    connect_parser.add_argument("service", choices=["gcal", "todoist"])
+    connect_parser.add_argument("token", nargs="?", help="API token (todoist only)")
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -126,6 +130,22 @@ def main(argv: list[str] | None = None) -> int:
             index,
             on_update=lambda rel, count: print(f"  reindexed {rel} ({count} chunks)"),
         )
+        return 0
+
+    if args.command == "connect":
+        if args.service == "gcal":
+            from backend.connectors import gcal
+
+            gcal.connect()
+            print("Google Calendar connected — token stored in the OS keyring.")
+        else:
+            if not args.token:
+                print("usage: friday connect todoist <api-token>", file=sys.stderr)
+                return 1
+            from backend.connectors import todoist
+
+            todoist.connect(args.token)
+            print("Todoist connected — token stored in the OS keyring.")
         return 0
     return 2
 

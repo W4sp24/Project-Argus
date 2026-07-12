@@ -68,6 +68,14 @@ here, not asked.
 - **D-018 — Study generator injected app-wide.** Same DI pattern as the chat
   runner: `create_app(generator=, index_factory=)` so /api/study tests run on
   fakes; the real generator is a one-shot tool-less agent query.
+- **D-019 — Vault git via subprocess, not GitPython.** Playbook names GitPython;
+  `writer.py` and `cli.py` already shell out to git consistently, one less dep.
+- **D-020 — Connectors degrade gracefully.** gcal/todoist return `[]` +
+  `configured: false` until credentials exist, so the app is fully usable
+  offline and the human OAuth stop doesn't block the phase.
+- **D-021 — Single-writer proof is a test.** `test_single_writer_source_proof`
+  scans backend sources: only writer.py (plus the cli installer and the study
+  I1-exemption) may combine inbox references with write calls.
 - **D-005 — Python env.** `uv` not installed; standard `python -m venv .venv` + pip.
   Heavy RAG deps (chromadb, sentence-transformers/torch) are an optional extra
   (`[rag]`) installed at P1 so P0 stays fast and open-source setup stays minimal.

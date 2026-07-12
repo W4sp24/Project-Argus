@@ -30,6 +30,18 @@ CREATE TABLE IF NOT EXISTS exams (
     questions_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS tasks_cache (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    path      TEXT NOT NULL,
+    line      INTEGER NOT NULL,
+    text      TEXT NOT NULL,
+    done      INTEGER NOT NULL DEFAULT 0,
+    due       TEXT,
+    scheduled TEXT,
+    priority  TEXT,
+    tags      TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS attempts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
