@@ -58,6 +58,16 @@ here, not asked.
 - **D-015 — Token-count proxy in chunker.** Playbook targets ~350 tokens/chunk;
   implemented as 260 words (≈350 tokens) with 40-word overlap — avoids a tokenizer
   dependency for marginal precision.
+- **D-016 — Citation enforcement is quote-based.** Exam questions must carry a
+  verbatim quote; validation normalizes and substring-matches against the cited
+  chunk. Stricter than path-only checking — catches right-file/wrong-fact
+  hallucinations.
+- **D-017 — Syllabus parsing is deterministic (regex), not agent-based.** Dated
+  deadline lines are extractable without a model; keeps the import instant, free,
+  and unit-testable. An agent pass can be layered on later if recall disappoints.
+- **D-018 — Study generator injected app-wide.** Same DI pattern as the chat
+  runner: `create_app(generator=, index_factory=)` so /api/study tests run on
+  fakes; the real generator is a one-shot tool-less agent query.
 - **D-005 — Python env.** `uv` not installed; standard `python -m venv .venv` + pip.
   Heavy RAG deps (chromadb, sentence-transformers/torch) are an optional extra
   (`[rag]`) installed at P1 so P0 stays fast and open-source setup stays minimal.
