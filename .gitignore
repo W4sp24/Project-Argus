@@ -27,3 +27,6 @@ token.json
 Thumbs.db
 desktop.ini
 .claude/
+
+# Brainstorming companion sessions
+.superpowers/
