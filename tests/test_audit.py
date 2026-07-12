@@ -41,7 +41,8 @@ def test_audit_stores_paths_only_no_content(db_path: Path, conn: sqlite3.Connect
     log_prompt(db_path, "chat", "m", ["note.md"])
 
     row = conn.execute("SELECT * FROM audit").fetchone()
-    stored = json.dumps({key: row[key] for key in row.keys()})
+    # sqlite3.Row iterates VALUES, so `key in row` would be wrong here.
+    stored = json.dumps({key: row[key] for key in row.keys()})  # noqa: SIM118
     assert secret not in stored
     assert json.loads(row["paths_json"]) == ["note.md"]
 
