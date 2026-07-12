@@ -13,7 +13,8 @@ from backend.study.syllabus import parse_syllabus
 
 CORPUS = [
     {
-        "text": "Plate tectonics: the lithosphere is divided into plates that move over the asthenosphere.",
+        "text": "Plate tectonics: the lithosphere is divided into plates "
+        "that move over the asthenosphere.",
         "meta": {"path": "15-Courses/ES101/materials/deck.pdf", "page": 3, "course": "ES101"},
     },
     {

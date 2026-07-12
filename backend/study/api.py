@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import threading
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -77,7 +77,9 @@ def build_study_router(
         return courses(settings.vault_path)
 
     @router.post("/upload")
-    async def upload(course: str = Form(...), file: UploadFile = Form(...)) -> dict[str, str]:
+    async def upload(
+        course: Annotated[str, Form()], file: UploadFile
+    ) -> dict[str, str]:
         course_dir = settings.vault_path / "15-Courses" / SAFE_NAME_RE.sub("", course)
         if not course_dir.is_dir():
             raise HTTPException(status_code=404, detail=f"no course folder {course}")
