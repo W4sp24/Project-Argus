@@ -25,6 +25,7 @@ from backend.suggestions import Suggestion
 INBOX_DIR = "00-Inbox"
 DAILY_DIR = "10-Daily"
 ARGUS_LOG_HEADING = "## Argus log"
+_EXCLUDED_CASEFOLD = {name.casefold() for name in EXCLUDED_TOP_DIRS}
 
 
 class WriterError(RuntimeError):
@@ -67,7 +68,7 @@ def guard_user_path(vault_path: Path, rel_path: str) -> Path:
     candidate = Path(rel_path)
     if candidate.is_absolute() or ".." in candidate.parts:
         raise WriterForbidden(f"path {rel_path!r} is not vault-relative")
-    if candidate.parts and candidate.parts[0] in EXCLUDED_TOP_DIRS:
+    if candidate.parts and candidate.parts[0].casefold() in _EXCLUDED_CASEFOLD:
         raise WriterForbidden(f"{candidate.parts[0]}/ is protected and cannot be edited")
     resolved = (vault_path / candidate).resolve()
     if vault_path.resolve() not in resolved.parents:

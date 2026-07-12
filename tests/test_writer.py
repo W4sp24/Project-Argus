@@ -94,6 +94,13 @@ def test_guard_rejects_private_meta_and_traversal(vault: Path):
             guard_user_path(vault, bad)
 
 
+def test_guard_rejects_case_variants_of_protected_dirs(vault: Path):
+    """NTFS case-insensitivity bypass: reject lowercase variants of protected dirs."""
+    for bad in ("99-private/x.md", "90-META/sessions/x.md", "99-PRIVATE/y.md"):
+        with pytest.raises(WriterForbidden):
+            guard_user_path(vault, bad)
+
+
 def test_toggle_task_line_checks_and_stamps_done_date(vault: Path):
     note = vault / "20-Projects" / "p.md"
     note.parent.mkdir()
