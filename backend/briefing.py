@@ -126,6 +126,25 @@ def render_briefing(data: BriefingData) -> str:
     return f"Briefing for {data.date}\n\n" + "\n\n".join(parts)
 
 
+def agent_composer(data: BriefingData) -> str:
+    """The production composer: one tool-less opus pass over the day's facts."""
+    import asyncio
+
+    from backend.agent.generate import agent_generate
+
+    prompt = (
+        "You are FRIDAY writing the user's morning briefing for their daily note.\n"
+        "Rewrite the facts below as a short, warm, scannable markdown briefing "
+        "(bold section labels, bullet lists, no H1/H2 headings). Do not invent "
+        "events or tasks; keep every date exactly as given.\n\n"
+        f"FACTS:\n{render_briefing(data)}\n\nDATA (JSON):\n{data.model_dump_json(indent=1)}"
+    )
+    text = asyncio.run(agent_generate(prompt)).strip()
+    if not text:
+        raise RuntimeError("composer returned empty text")
+    return text
+
+
 def compose_briefing(
     settings: Settings,
     conn: sqlite3.Connection,
