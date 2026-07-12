@@ -199,9 +199,10 @@ def create_app(
 
 
 def _production_scheduler(settings: Settings):
+    from backend.briefing import agent_composer
     from backend.scheduler import build_scheduler
 
-    return build_scheduler(settings)
+    return build_scheduler(settings, composer=agent_composer)
 
 
 app = create_app(scheduler_factory=_production_scheduler)

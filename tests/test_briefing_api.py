@@ -96,3 +96,12 @@ def test_build_scheduler_registers_jobs_without_starting() -> None:
     jobs = {job.id for job in scheduler.get_jobs()}
     assert jobs == {"morning-briefing", "nightly-task-refresh"}
     assert not scheduler.running
+
+
+def test_production_scheduler_composes_with_the_agent() -> None:
+    from backend.briefing import agent_composer
+    from backend.main import _production_scheduler
+
+    scheduler = _production_scheduler(Settings(_vault_path=Path("unused")))
+    job = scheduler.get_job("morning-briefing")
+    assert job.args[1] is agent_composer, "07:00 briefing must use opus prose, not the fallback"
