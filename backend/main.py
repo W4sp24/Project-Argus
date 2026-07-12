@@ -130,6 +130,10 @@ def create_app(
         )
     )
 
+    from backend.tasks.api import build_tasks_router
+
+    app.include_router(build_tasks_router(resolved))
+
     @app.websocket("/ws/chat")
     async def ws_chat(websocket: WebSocket) -> None:
         """Bridge agent streaming deltas to the browser.

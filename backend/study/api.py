@@ -77,9 +77,7 @@ def build_study_router(
         return courses(settings.vault_path)
 
     @router.post("/upload")
-    async def upload(
-        course: Annotated[str, Form()], file: UploadFile
-    ) -> dict[str, str]:
+    async def upload(course: Annotated[str, Form()], file: UploadFile) -> dict[str, str]:
         course_dir = settings.vault_path / "15-Courses" / SAFE_NAME_RE.sub("", course)
         if not course_dir.is_dir():
             raise HTTPException(status_code=404, detail=f"no course folder {course}")
