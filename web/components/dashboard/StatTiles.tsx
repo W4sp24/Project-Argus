@@ -5,7 +5,14 @@ import useSWR from "swr";
 import { fetcher, useInsights } from "@/lib/api";
 
 interface AgendaLite {
-  tasks: { due: string | null }[];
+  tasks: { due: string | null; scheduled: string | null }[];
+}
+
+function localToday(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
 }
 
 function Tile({ href, label, value, unit }: { href: string; label: string; value: string | number; unit?: string }) {
@@ -30,9 +37,16 @@ export default function StatTiles() {
   const { data: insights } = useInsights();
   const { data: agenda } = useSWR<AgendaLite>("/api/agenda", fetcher);
 
-  const today = new Date().toISOString().slice(0, 10);
-  const dueToday = agenda?.tasks.filter((task) => task.due === today).length ?? "–";
-  const overdue = agenda ? agenda.tasks.length - (typeof dueToday === "number" ? dueToday : 0) : "–";
+  const today = localToday();
+  const anchor = (task: { due: string | null; scheduled: string | null }) =>
+    task.due ?? task.scheduled;
+  const dueToday = agenda ? agenda.tasks.filter((task) => anchor(task) === today).length : "–";
+  const overdue = agenda
+    ? agenda.tasks.filter((task) => {
+        const date = anchor(task);
+        return date !== null && date < today;
+      }).length
+    : "–";
   const doneToday =
     insights?.completion_trend.find((day) => day.date === today)?.completed ?? "–";
   const streak = insights?.study.streak_days ?? "–";
