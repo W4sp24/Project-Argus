@@ -34,6 +34,16 @@ function eventTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+/** Rebuild a task line with a new description, preserving checkbox + metadata verbatim. */
+function spliceDescription(raw: string, text: string): string | null {
+  const match = raw.match(/^(\s*[-*]\s+\[[ xX]\]\s+)(.*)$/);
+  if (!match) return null;
+  const metaRe =
+    /(?:📅|🗓|⏳|✅|➕)\s*\d{4}-\d{2}-\d{2}|\[(?:due|scheduled|prio(?:rity)?):[^\]]*\]|[🔺⏫🔼🔽]|#[\w/-]+|<!--.*?-->/g;
+  const metas = match[2].match(metaRe) ?? [];
+  return `${match[1]}${text}${metas.length ? ` ${metas.join(" ")}` : ""}`;
+}
+
 export default function AgendaCard() {
   const { data: agenda, mutate } = useSWR<Agenda>("/api/agenda", fetcher);
   const [editing, setEditing] = useState<string | null>(null);
@@ -87,8 +97,11 @@ export default function AgendaCard() {
     if (!text) return;
     try {
       await withRawLine(task, async (raw) => {
-        const suffix = raw.includes("📅") ? "" : task.due ? ` 📅 ${task.due}` : "";
-        const newLine = raw.replace(task.text, text) || `- [ ] ${text}${suffix}`;
+        const newLine = spliceDescription(raw, text);
+        if (newLine === null) {
+          flash("Couldn't edit this line — it isn't a task checkbox anymore");
+          return;
+        }
         await mutateJSON("/api/tasks/line/update", {
           path: task.path,
           line: task.line,
