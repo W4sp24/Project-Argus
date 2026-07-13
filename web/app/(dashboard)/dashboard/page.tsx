@@ -1,6 +1,7 @@
 "use client";
 
 import GlassCard from "@/components/GlassCard";
+import AgendaCard from "@/components/dashboard/AgendaCard";
 import BriefingCard from "@/components/dashboard/BriefingCard";
 import CaptureCard from "@/components/dashboard/CaptureCard";
 import Heatmap from "@/components/dashboard/Heatmap";
@@ -38,10 +39,7 @@ export default function DashboardPage() {
         <div className="flex min-w-0 flex-col gap-4">
           <BriefingCard />
           <StatTiles />
-          {/* Task 10 replaces this placeholder with <AgendaCard /> */}
-          <GlassCard label="AGENDA" title="Schedule">
-            <p className="text-sm text-ink-faint">Agenda coming online…</p>
-          </GlassCard>
+          <AgendaCard />
           <Heatmap />
           <CaptureCard />
         </div>

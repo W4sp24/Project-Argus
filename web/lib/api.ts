@@ -12,6 +12,39 @@ export async function fetcher<T>(url: string): Promise<T> {
   return response.json();
 }
 
+export class ApiError extends Error {
+  status: number;
+  payload: unknown;
+  constructor(status: number, payload: unknown, message: string) {
+    super(message);
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+/** JSON mutation helper — throws ApiError with the response payload on non-2xx. */
+export async function mutateJSON<T>(
+  url: string,
+  body: unknown,
+  method: "POST" | "PUT" | "DELETE" = "POST",
+): Promise<T> {
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = (payload as { detail?: unknown }).detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : ((detail as { message?: string })?.message ?? `Request failed: ${response.status}`);
+    throw new ApiError(response.status, payload, message);
+  }
+  return payload as T;
+}
+
 export interface NoteInfo {
   path: string;
   title: string;
