@@ -126,3 +126,15 @@ export interface HeatmapDay {
 export function useHeatmap() {
   return useSWR<{ days: HeatmapDay[] }>("/api/insights/heatmap", fetcher);
 }
+
+export interface ActivityEvent {
+  when: string;
+  kind: "note" | "approval" | "exam";
+  title: string;
+  path: string | null;
+}
+
+/** Latest vault edits, approvals, and exam attempts, newest first. */
+export function useActivity() {
+  return useSWR<ActivityEvent[]>("/api/activity", fetcher);
+}
