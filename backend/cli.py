@@ -80,6 +80,18 @@ def needs_build(web_dir: Path) -> bool:
     return not (web_dir / ".next" / "BUILD_ID").is_file()
 
 
+def _stop(proc: subprocess.Popen) -> None:
+    """Stop a launched server, including its children (npm.cmd wraps node.exe)."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False
+        )
+    else:
+        proc.terminate()
+
+
 def run_web(port: int, backend_port: int, force_build: bool) -> int:
     """Serve the production dashboard: uvicorn + `next start` side by side."""
     npm = shutil.which("npm")
@@ -88,9 +100,12 @@ def run_web(port: int, backend_port: int, force_build: bool) -> int:
         return 1
     if force_build or needs_build(WEB_DIR):
         print("Building the dashboard (one-time; rerun with --build after UI changes)…")
-        build = subprocess.run([npm, "run", "build"], cwd=WEB_DIR, check=False)
-        if build.returncode != 0:
-            return build.returncode
+        try:
+            build = subprocess.run([npm, "run", "build"], cwd=WEB_DIR, check=False)
+            if build.returncode != 0:
+                return build.returncode
+        except KeyboardInterrupt:
+            return 130
     backend = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.main:app", "--port", str(backend_port)],
         cwd=WEB_DIR.parent,
@@ -105,9 +120,8 @@ def run_web(port: int, backend_port: int, force_build: bool) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        for proc in (backend, frontend):
-            if proc.poll() is None:
-                proc.terminate()
+        _stop(backend)
+        _stop(frontend)
     return 0
 
 
