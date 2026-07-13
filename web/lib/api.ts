@@ -79,3 +79,17 @@ export interface InsightsSummary {
 export function useInsights() {
   return useSWR<InsightsSummary>("/api/insights", fetcher);
 }
+
+export interface HeatmapDay {
+  date: string;
+  total: number;
+  tasks: number;
+  notes: number;
+  study: number;
+  captures: number;
+}
+
+/** 53 weeks of daily productivity events for the GitHub-style grid. */
+export function useHeatmap() {
+  return useSWR<{ days: HeatmapDay[] }>("/api/insights/heatmap", fetcher);
+}

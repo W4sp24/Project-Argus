@@ -3,6 +3,7 @@
 import GlassCard from "@/components/GlassCard";
 import BriefingCard from "@/components/dashboard/BriefingCard";
 import CaptureCard from "@/components/dashboard/CaptureCard";
+import Heatmap from "@/components/dashboard/Heatmap";
 import StatTiles from "@/components/dashboard/StatTiles";
 
 function formatToday(): string {
@@ -41,10 +42,7 @@ export default function DashboardPage() {
           <GlassCard label="AGENDA" title="Schedule">
             <p className="text-sm text-ink-faint">Agenda coming online…</p>
           </GlassCard>
-          {/* Task 9 replaces this placeholder with <Heatmap /> */}
-          <GlassCard label="ACTIVITY" title="A year at a glance">
-            <p className="text-sm text-ink-faint">Heatmap coming online…</p>
-          </GlassCard>
+          <Heatmap />
           <CaptureCard />
         </div>
 
