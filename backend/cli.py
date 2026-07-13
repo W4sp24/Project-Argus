@@ -11,12 +11,14 @@ import argparse
 import shutil
 import subprocess
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
 from backend.config import DEFAULT_ENV_FILE, parse_env_file
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "vault-template"
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 EMPTY_FOLDERS = [
     "00-Inbox",
     "10-Daily",
@@ -73,6 +75,42 @@ def init_vault(dest: Path, env_file: Path = DEFAULT_ENV_FILE) -> Path:
     return dest
 
 
+def needs_build(web_dir: Path) -> bool:
+    """True when the Next.js production build is absent."""
+    return not (web_dir / ".next" / "BUILD_ID").is_file()
+
+
+def run_web(port: int, backend_port: int, force_build: bool) -> int:
+    """Serve the production dashboard: uvicorn + `next start` side by side."""
+    npm = shutil.which("npm")
+    if npm is None:
+        print("npm not found on PATH — install Node.js first", file=sys.stderr)
+        return 1
+    if force_build or needs_build(WEB_DIR):
+        print("Building the dashboard (one-time; rerun with --build after UI changes)…")
+        build = subprocess.run([npm, "run", "build"], cwd=WEB_DIR, check=False)
+        if build.returncode != 0:
+            return build.returncode
+    backend = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "backend.main:app", "--port", str(backend_port)],
+        cwd=WEB_DIR.parent,
+    )
+    frontend = subprocess.Popen(
+        [npm, "run", "start", "--", "-p", str(port)], cwd=WEB_DIR
+    )
+    print(f"Argus running: http://localhost:{port} (backend :{backend_port}) — Ctrl-C to stop")
+    try:
+        while backend.poll() is None and frontend.poll() is None:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for proc in (backend, frontend):
+            if proc.poll() is None:
+                proc.terminate()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``argus`` console script."""
     parser = argparse.ArgumentParser(prog="argus", description="Argus second-brain CLI")
@@ -102,6 +140,11 @@ def main(argv: list[str] | None = None) -> int:
     doctor_parser.add_argument(
         "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
     )
+
+    web_parser = subparsers.add_parser("web", help="serve the production dashboard")
+    web_parser.add_argument("--port", type=int, default=3000)
+    web_parser.add_argument("--backend-port", type=int, default=8000)
+    web_parser.add_argument("--build", action="store_true", help="force a rebuild first")
 
     args = parser.parse_args(argv)
 
@@ -169,6 +212,9 @@ def main(argv: list[str] | None = None) -> int:
             todoist.connect(args.token)
             print("Todoist connected — token stored in the OS keyring.")
         return 0
+
+    if args.command == "web":
+        return run_web(args.port, args.backend_port, args.build)
     return 2
 
 
