@@ -10,6 +10,9 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 60_000,
   retries: 0,
+  // All specs share one throwaway vault + backend process; running spec
+  // files in parallel workers races writes to the same markdown files.
+  workers: 1,
   reporter: [["list"]],
   use: {
     baseURL: "http://127.0.0.1:3100",

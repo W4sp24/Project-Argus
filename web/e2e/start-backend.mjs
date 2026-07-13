@@ -23,9 +23,22 @@ execFileSync(python, ["-m", "backend.cli", "init", vault, "--env-file", envFile]
   stdio: "inherit",
 });
 
+function localToday() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+// "Move the meeting" must stay on line 3 verbatim — seed_suggestion.py below
+// targets it by exact old_line text for the roundtrip apply test. Its due
+// date (2026-07-20) is intentionally a fixed fixture date, not "today", so
+// it lands outside the overdue/today agenda bucket and won't render on the
+// dashboard; "E2E delete me" is a separate, always-due-today task for the
+// dashboard delete-flow test.
 fs.writeFileSync(
   path.join(vault, "20-Projects", "e2e.md"),
-  "# E2E\n\n- [ ] Move the meeting 📅 2026-07-20\n",
+  `# E2E\n\n- [ ] Move the meeting 📅 2026-07-20\n- [ ] E2E check me off 📅 ${localToday()}\n- [ ] E2E delete me 📅 ${localToday()}\n- [x] already done ✅ ${localToday()}\n`,
   "utf-8",
 );
 
