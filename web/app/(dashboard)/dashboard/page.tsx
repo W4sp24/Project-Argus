@@ -3,6 +3,7 @@
 import GlassCard from "@/components/GlassCard";
 import BriefingCard from "@/components/dashboard/BriefingCard";
 import CaptureCard from "@/components/dashboard/CaptureCard";
+import StatTiles from "@/components/dashboard/StatTiles";
 
 function formatToday(): string {
   return new Date().toLocaleDateString("en-US", {
@@ -35,10 +36,7 @@ export default function DashboardPage() {
         {/* Left column: the day */}
         <div className="flex min-w-0 flex-col gap-4">
           <BriefingCard />
-          {/* Task 8 replaces this placeholder with <StatTiles /> */}
-          <GlassCard label="STATS" title="Productivity">
-            <p className="text-sm text-ink-faint">Stats coming online…</p>
-          </GlassCard>
+          <StatTiles />
           {/* Task 10 replaces this placeholder with <AgendaCard /> */}
           <GlassCard label="AGENDA" title="Schedule">
             <p className="text-sm text-ink-faint">Agenda coming online…</p>

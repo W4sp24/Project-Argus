@@ -66,3 +66,16 @@ export function useJournalNote(path?: string) {
     fetcher,
   );
 }
+
+export interface InsightsSummary {
+  completion_trend: { date: string; completed: number }[];
+  overdue: { date: string; count: number }[];
+  calendar: { date: string; event_hours: number; focus_hours: number }[];
+  study: { streak_days: number; courses: { course: string; attempts: { date: string; pct: number }[] }[] };
+  configured: { gcal: boolean };
+}
+
+/** Insights rollup for stat tiles and charts. */
+export function useInsights() {
+  return useSWR<InsightsSummary>("/api/insights", fetcher);
+}
