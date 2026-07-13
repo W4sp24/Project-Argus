@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from backend.config import Settings
 from backend.notes import list_notes
+from backend.rag.paths import EXCLUDED_TOP_DIRS
 
 
 class ActivityEvent(BaseModel):
@@ -22,12 +23,25 @@ def _sort_key(when: str) -> str:
     return when.replace(" ", "T")[:19]
 
 
+def _as_utc_iso(raw: str) -> str:
+    """Normalize a SQLite ``datetime('now')`` string (UTC, no offset) to an
+    unambiguous UTC ISO string so the frontend doesn't parse it as local time."""
+    if raw.endswith(("Z", "+00:00")):
+        return raw
+    return raw.replace(" ", "T") + "Z"
+
+
 def recent_activity(
     settings: Settings, conn: sqlite3.Connection, limit: int = 15
 ) -> list[ActivityEvent]:
     events: list[ActivityEvent] = []
 
-    for note in list_notes(settings.vault_path)[:limit]:
+    notes = [
+        note
+        for note in list_notes(settings.vault_path)
+        if note.path.split("/", 1)[0] not in EXCLUDED_TOP_DIRS
+    ][:limit]
+    for note in notes:
         events.append(
             ActivityEvent(when=note.modified, kind="note", title=note.title, path=note.path)
         )
@@ -40,7 +54,7 @@ def recent_activity(
     ):
         events.append(
             ActivityEvent(
-                when=row["applied_at"], kind="approval",
+                when=_as_utc_iso(row["applied_at"]), kind="approval",
                 title=f"approved {row['kind']}: {row['rationale'][:80]}",
             )
         )
@@ -53,7 +67,7 @@ def recent_activity(
     ):
         events.append(
             ActivityEvent(
-                when=row["created_at"], kind="exam",
+                when=_as_utc_iso(row["created_at"]), kind="exam",
                 title=f"{row['course']} practice exam {row['score']}/{row['total']}",
             )
         )

@@ -46,3 +46,15 @@ def test_activity_merges_notes_approvals_exams_newest_first(env):
 def test_activity_respects_limit(env):
     settings, conn = env
     assert len(recent_activity(settings, conn, limit=1)) == 1
+
+
+def test_activity_excludes_90_meta_notes(env):
+    settings, conn = env
+    (settings.vault_path / "90-Meta").mkdir(parents=True)
+    (settings.vault_path / "90-Meta" / "2026-07-13.md").write_text(
+        "# Dev journal\n", encoding="utf-8"
+    )
+
+    events = recent_activity(settings, conn, limit=10)
+
+    assert all(not (event.path or "").startswith("90-Meta/") for event in events)

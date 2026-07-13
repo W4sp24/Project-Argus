@@ -10,12 +10,21 @@ const out = execSync("npx next build", { encoding: "utf-8", stdio: ["ignore", "p
 console.log(out);
 
 const failures = [];
+let matchedAny = false;
 for (const line of out.split("\n")) {
   // e.g. "├ ○ /dashboard    12.3 kB    128 kB"
   const match = line.match(/[○ƒλ●]\s+(\/\S*)\s+[\d.]+\s*k?B\s+([\d.]+)\s*kB/);
   if (!match) continue;
+  matchedAny = true;
   const [, route, firstLoad] = match;
   if (parseFloat(firstLoad) > BUDGET_KB) failures.push(`${route}: ${firstLoad} kB > ${BUDGET_KB} kB`);
+}
+
+if (!matchedAny) {
+  console.error(
+    "\nPerf budget check parsed 0 routes from next build output — the parser regex may be stale for this Next.js version.",
+  );
+  process.exit(1);
 }
 
 if (failures.length > 0) {
