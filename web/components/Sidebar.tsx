@@ -22,8 +22,8 @@ const iconProps = {
 
 const NAV_ITEMS: NavItem[] = [
   {
-    href: "/today",
-    name: "Today",
+    href: "/dashboard",
+    name: "Dashboard",
     icon: (
       <svg {...iconProps} viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="4" />
@@ -98,7 +98,7 @@ export default function Sidebar() {
   return (
     <aside className="glass fixed inset-x-3 bottom-3 z-20 flex items-center justify-around px-2 py-2 md:inset-x-auto md:left-4 md:top-4 md:bottom-4 md:w-56 md:flex-col md:items-stretch md:justify-start md:px-4 md:py-6">
       <Link
-        href="/today"
+        href="/dashboard"
         className="mb-0 hidden items-center gap-3 px-2 md:mb-8 md:flex"
         aria-label="Argus home"
       >
