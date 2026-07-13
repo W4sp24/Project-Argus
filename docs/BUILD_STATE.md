@@ -7,10 +7,40 @@
 
 | Field | Value |
 |---|---|
-| Active phase | — (roadmap P0–P4 complete) |
-| Status | ALL PHASES DONE — maintenance/backlog mode (connector credentials still open); rebranded FRIDAY → Argus (D-032, D-033) 2026-07-12 |
-| Last green commit | feat/p4-briefings-insights head (72 pytest + 1 Playwright e2e green, web build green) — rebrand pass not yet committed |
-| Next action | Optional: Ethan provides gcal/Todoist credentials + runs setup.ps1 (now sets `ARGUS_VAULT`); `/code-review ultra` follow-up; then backlog features |
+| Active phase | — (roadmap P0–P5 complete) |
+| Status | ALL PHASES DONE — maintenance/backlog mode (connector credentials still open); P5 dashboard-first revamp on `feat/p5-dashboard-revamp` (D-034..D-037) 2026-07-13; Task 15 (vault cleanup) BLOCKED pending Ethan's per-item confirmation |
+| Last green commit | feat/p5-dashboard-revamp head (full pytest + ruff + web lint + perf:budget + Playwright e2e green) |
+| Next action | Ethan: review/merge PR for `feat/p5-dashboard-revamp`; approve or reject Task 15 vault-cleanup candidates; optional: gcal/Todoist credentials + setup.ps1; `/code-review ultra` follow-up |
+
+## P5 exit criteria evidence (2026-07-13)
+
+```
+.venv/Scripts/python.exe -m ruff check . -> All checks passed!
+.venv/Scripts/python.exe -m pytest -q -> 113 passed, incl.: writer guard_user_path
+  refuses 99-Private/90-Meta/traversal/absolute; toggle/update/delete task line
+  (drift -> WriterConflict, file untouched); update_note/delete_note CAS +
+  git snapshot before write; notes_api 403/404/409 error mapping; heatmap counts
+  tasks+notes+study+captures with 99-Private excluded from git-log scan; activity
+  feed merges notes/approvals/exams newest-first; needs_build() true/false on
+  BUILD_ID presence
+cd web && npm run lint -> No ESLint warnings or errors
+npm run perf:budget -> production build, all routes <= 135 kB first-load JS
+  (/ 87.6 kB, /dashboard 108 kB, /chat 95.5 kB, /insights 97.2 kB — heaviest
+  route well under the ~150 kB guard)
+npx playwright test -> 6 passed (22.0s): dashboard renders all widgets; heatmap
+  counts the seeded completion; check-off writes done-date after a git snapshot;
+  task delete removes the line, snapshot first; chat thread persists between
+  dock and chat tab; capture -> approve -> vault roundtrip (unchanged from P4)
+Review gate: task-by-task subagent review loop across all 16 tasks (writer CRUD,
+  notes API, heatmap/activity backends, argus web launcher, dashboard shell +
+  widgets, chat provider/dock, perf budget, e2e) — no live smoke test of the real
+  vault's `argus web`/uvicorn in this pass (an earlier task's manual boot already
+  triggered the real vault's 07:00 briefing job as an unintended side effect;
+  Playwright/perf:budget cover the production build without touching Scientia)
+Task 15 (vault cleanup) BLOCKED — candidates enumerated (15-Courses/CS000/,
+  two synthetic session stubs in 90-Meta/sessions/2026/2026-07-12-project-argus.md)
+  but not applied; requires Ethan's per-item yes before any vault deletion
+```
 
 ## P4 exit criteria evidence (2026-07-12)
 
@@ -141,6 +171,7 @@ npm run build       -> compiled; routes /, /today, /tasks, /chat, /study, /revie
 | P2 — Tasks + calendar | ✅ DONE (connector live checks await creds) | writer (I1/I2), parser, agenda merge, capture |
 | P3 — Planner + approvals | ✅ DONE (gcal live insert awaits creds) | suggestion queue, writer.apply, planner agent, review UI, /plan |
 | P4 — Briefings + insights + hardening | ✅ DONE | 07:00 briefing, insights charts, audit, doctor, e2e |
+| P5 — Dashboard-first revamp | ✅ DONE (Task 15 GATED) | dashboard home (Layout A), stat tiles, heatmap, interactive agenda, activity feed, direct vault edit/delete (writer CAS), `argus web` launcher, shared ChatProvider dock, perf budget, e2e; vault cleanup awaits Ethan's per-item confirmation |
 
 ## Blockers
 
