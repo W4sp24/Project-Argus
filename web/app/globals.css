@@ -56,9 +56,25 @@ body {
   .animate-drift,
   .animate-drift-slow,
   .animate-breathe,
-  .animate-rise {
+  .animate-rise,
+  .animate-msg-in {
     animation: none !important;
   }
+}
+
+/* Chat message entrance — transform/opacity only (cheap under backdrop-blur) */
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-msg-in {
+  animation: msg-in 150ms ease-out both;
 }
 
 /* Glass surfaces */
