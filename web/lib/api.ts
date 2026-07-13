@@ -12,6 +12,39 @@ export async function fetcher<T>(url: string): Promise<T> {
   return response.json();
 }
 
+export class ApiError extends Error {
+  status: number;
+  payload: unknown;
+  constructor(status: number, payload: unknown, message: string) {
+    super(message);
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+/** JSON mutation helper — throws ApiError with the response payload on non-2xx. */
+export async function mutateJSON<T>(
+  url: string,
+  body: unknown,
+  method: "POST" | "PUT" | "DELETE" = "POST",
+): Promise<T> {
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = (payload as { detail?: unknown }).detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : ((detail as { message?: string })?.message ?? `Request failed: ${response.status}`);
+    throw new ApiError(response.status, payload, message);
+  }
+  return payload as T;
+}
+
 export interface NoteInfo {
   path: string;
   title: string;
@@ -65,4 +98,43 @@ export function useJournalNote(path?: string) {
     path ? `/api/journal/note?path=${encodeURIComponent(path)}` : null,
     fetcher,
   );
+}
+
+export interface InsightsSummary {
+  completion_trend: { date: string; completed: number }[];
+  overdue: { date: string; count: number }[];
+  calendar: { date: string; event_hours: number; focus_hours: number }[];
+  study: { streak_days: number; courses: { course: string; attempts: { date: string; pct: number }[] }[] };
+  configured: { gcal: boolean };
+}
+
+/** Insights rollup for stat tiles and charts. */
+export function useInsights() {
+  return useSWR<InsightsSummary>("/api/insights", fetcher);
+}
+
+export interface HeatmapDay {
+  date: string;
+  total: number;
+  tasks: number;
+  notes: number;
+  study: number;
+  captures: number;
+}
+
+/** 53 weeks of daily productivity events for the GitHub-style grid. */
+export function useHeatmap() {
+  return useSWR<{ days: HeatmapDay[] }>("/api/insights/heatmap", fetcher);
+}
+
+export interface ActivityEvent {
+  when: string;
+  kind: "note" | "approval" | "exam";
+  title: string;
+  path: string | null;
+}
+
+/** Latest vault edits, approvals, and exam attempts, newest first. */
+export function useActivity() {
+  return useSWR<ActivityEvent[]>("/api/activity", fetcher);
 }

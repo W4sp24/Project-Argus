@@ -22,12 +22,25 @@ Next.js dashboard  ←→  FastAPI backend  ←→  Obsidian vault (markdown, si
 
 ## Features
 
+- **Dashboard** (home) — Layout-A command center: morning briefing (collapsible),
+  stat tiles (due/overdue/done/streak/focus hours), an interactive agenda you can
+  check off / edit / delete inline, a GitHub-style productivity heatmap (tasks +
+  notes + study + captures, 52 weeks), quick capture, a recent-activity feed, and
+  a docked mini chat — all on one screen, every widget interactive.
 - **Chat** grounded in your vault — every answer carries citations that deep-link
-  back into Obsidian; "that's not in your notes" instead of hallucinations.
-- **Today** — live agenda (vault tasks + Google Calendar + Todoist), quick capture
-  to `00-Inbox/` (click, or drag a file straight onto a course card on **Study**),
-  and the morning **briefing** (07:00 job or on-demand): schedule, due/overdue,
-  yesterday's leftovers, exam countdowns, weak topics.
+  back into Obsidian; "that's not in your notes" instead of hallucinations. One
+  shared conversation whether you use the dashboard dock or the full **Chat** tab.
+- **Vault edit & delete** — edit or delete your own notes and task lines straight
+  from the UI (agenda rows, captured inbox notes, Journal-adjacent notes). Every
+  change goes through the single writer with a git snapshot first (undo is
+  `git revert` away) and a compare-and-swap check that fails cleanly if the file
+  changed under you. `99-Private/` and `90-Meta/` are always refused, server-side.
+  AI-initiated changes still go through the suggest-then-approve **Review** queue —
+  direct edit/delete is for changes *you* make yourself.
+- **Today's flow** — quick capture to `00-Inbox/` (click, or drag a file straight
+  onto a course card on **Study**), and the morning **briefing** (07:00 job or
+  on-demand): schedule, due/overdue, yesterday's leftovers, exam countdowns, weak
+  topics.
 - **Planner** — type `/plan tomorrow` in chat; the agent proposes schedule blocks,
   task edits, and note edits into a **Review** queue. Approve applies them through
   a single audited writer (with a git snapshot of the vault first); dismissing with
@@ -37,7 +50,8 @@ Next.js dashboard  ←→  FastAPI backend  ←→  Obsidian vault (markdown, si
   let missed topics feed your review queue (and your briefing, and your planner).
 - **Tasks** — Obsidian Tasks syntax parsed vault-wide into overdue/today/week/someday.
 - **Insights** — task completion trend, overdue chart, calendar load vs focus time,
-  study streak, practice-exam scores per course, plus your coding-session activity.
+  study streak, practice-exam scores per course, the productivity heatmap (full-width),
+  plus your coding-session activity.
 - **Audit** — `/api/audit` lists exactly which vault files each agent prompt read
   (paths only, never content).
 
@@ -58,18 +72,23 @@ pip install -e ".[dev]"
 argus init ./my-vault           # new vault from the template, or set VAULT_PATH in .env
                                  # to an existing Obsidian vault
 
-# 3. Run
-uvicorn backend.main:app --port 8000      # API on :8000
-cd web && npm install && npm run dev       # dashboard — next dev picks :3000, or the next
-                                            # free port if something's already listening
+# 3. Build the dashboard once
+cd web && npm install && cd ..
+
+# 4. Run — daily-use production launcher (builds if needed, serves both together)
+argus web                       # dashboard on :3000, API on :8000, Ctrl-C stops both
 ```
 
-Open <http://localhost:3000> (check your terminal for the actual port Next.js picked),
-then verify the install:
+Open <http://localhost:3000> — the Dashboard is now the home page — then verify the
+install:
 
 ```bash
 argus doctor                    # vault, git, db, chroma, keyring, connectors
 ```
+
+`argus web` rebuilds the dashboard automatically the first time (or whenever
+`web/.next` is missing); pass `--build` to force a rebuild after pulling UI changes,
+or `--port`/`--backend-port` to change the defaults.
 
 Optional extras:
 
@@ -115,11 +134,20 @@ its key: `claude mcp add obsidian -s user -e OBSIDIAN_API_KEY=<key> -e OBSIDIAN_
 
 ## Development
 
+Daily use is `argus web` (above); for active development, run the backend and
+the Next.js dev server separately so you get hot reload:
+
+```bash
+uvicorn backend.main:app --port 8000      # API on :8000
+cd web && npm run dev                      # dashboard — next dev picks :3000, or the next
+                                            # free port if something's already listening
+```
+
 ```bash
 pytest                 # backend tests
 ruff check backend tests && ruff format --check backend tests
-cd web && npm run lint && npm run build
-cd web && npm run e2e  # Playwright end-to-end (capture -> approve -> vault roundtrip)
+cd web && npm run lint && npm run build && npm run perf:budget
+cd web && npm run e2e  # Playwright end-to-end (dashboard widgets, vault CRUD roundtrip, chat dock)
 ```
 
 Conventional commits (`feat(scope): …`). See `docs/BUILD_STATE.md` for the current

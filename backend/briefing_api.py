@@ -7,11 +7,12 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.activity import ActivityEvent, recent_activity
 from backend.audit import AuditEntry, recent
 from backend.briefing import Composer, compose_briefing
 from backend.config import Settings
 from backend.db import connect, init_schema
-from backend.insights import InsightsSummary, insights_summary
+from backend.insights import HeatmapResponse, InsightsSummary, heatmap_summary, insights_summary
 from backend.writer import BRIEFING_HEADING, write_briefing
 
 
@@ -62,6 +63,24 @@ def build_briefing_router(settings: Settings, composer: Composer | None) -> APIR
         init_schema(conn)
         try:
             return insights_summary(settings, conn)
+        finally:
+            conn.close()
+
+    @router.get("/insights/heatmap", response_model=HeatmapResponse)
+    def insights_heatmap() -> HeatmapResponse:
+        conn = connect(settings.db_path)
+        init_schema(conn)
+        try:
+            return heatmap_summary(settings, conn)
+        finally:
+            conn.close()
+
+    @router.get("/activity", response_model=list[ActivityEvent])
+    def activity() -> list[ActivityEvent]:
+        conn = connect(settings.db_path)
+        init_schema(conn)
+        try:
+            return recent_activity(settings, conn)
         finally:
             conn.close()
 

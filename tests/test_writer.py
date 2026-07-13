@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from backend.writer import WriterError, append_capture
+from backend import writer
+from backend.writer import (
+    WriterConflict,
+    WriterError,
+    WriterForbidden,
+    WriterMissing,
+    append_capture,
+    guard_user_path,
+)
 
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
 
@@ -17,8 +25,7 @@ def _git(vault: Path, *args: str) -> str:
     ).stdout
 
 
-@pytest.fixture()
-def vault(tmp_path: Path) -> Path:
+def _make_vault(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     root.mkdir()
     (root / "Welcome.md").write_text("# Hi\n", encoding="utf-8")
@@ -26,6 +33,11 @@ def vault(tmp_path: Path) -> Path:
     subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, check=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=root, capture_output=True, check=True)
     return root
+
+
+@pytest.fixture()
+def vault(tmp_path: Path) -> Path:
+    return _make_vault(tmp_path)
 
 
 def test_capture_appends_task_line(vault: Path) -> None:
@@ -75,3 +87,110 @@ def test_single_writer_source_proof() -> None:
         if "00-Inbox" in text and WRITE_CALL_RE.search(text):
             offenders.append(module.name)
     assert not offenders, f"I1 violation: {offenders} write near the inbox target"
+
+
+# --- Task line operations (P5) ---
+
+
+def test_guard_rejects_private_meta_and_traversal(vault: Path):
+    for bad in ("99-Private/x.md", "90-Meta/sessions/x.md", "../escape.md", "C:/abs.md"):
+        with pytest.raises(WriterForbidden):
+            guard_user_path(vault, bad)
+
+
+def test_guard_rejects_case_variants_of_protected_dirs(vault: Path):
+    """NTFS case-insensitivity bypass: reject lowercase variants of protected dirs."""
+    for bad in ("99-private/x.md", "90-META/sessions/x.md", "99-PRIVATE/y.md"):
+        with pytest.raises(WriterForbidden):
+            guard_user_path(vault, bad)
+
+
+def test_toggle_task_line_checks_and_stamps_done_date(vault: Path):
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir()
+    note.write_text("# P\n\n- [ ] ship it 📅 2026-07-20\n", encoding="utf-8")
+    new_line = writer.toggle_task_line(vault, "20-Projects/p.md", 3, "- [ ] ship it 📅 2026-07-20")
+    assert new_line.startswith("- [x] ship it")
+    assert "✅" in new_line
+    assert new_line in note.read_text(encoding="utf-8")
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=vault, capture_output=True, text=True
+    ).stdout
+    assert "argus: pre-apply snapshot" in log
+
+
+def test_toggle_task_line_unchecks_and_strips_done_date(vault: Path):
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir()
+    note.write_text("- [x] done thing ✅ 2026-07-12\n", encoding="utf-8")
+    old_line = "- [x] done thing ✅ 2026-07-12"
+    new_line = writer.toggle_task_line(vault, "20-Projects/p.md", 1, old_line)
+    assert new_line == "- [ ] done thing"
+    assert "✅" not in note.read_text(encoding="utf-8")
+
+
+def test_task_line_drift_raises_conflict_and_leaves_file(vault: Path):
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir()
+    note.write_text("- [ ] real line\n", encoding="utf-8")
+    with pytest.raises(WriterConflict):
+        writer.update_task_line(vault, "20-Projects/p.md", 1, "- [ ] stale line", "- [ ] new")
+    assert note.read_text(encoding="utf-8") == "- [ ] real line\n"
+
+
+def test_delete_task_line_removes_line(vault: Path):
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir()
+    note.write_text("- [ ] keep\n- [ ] drop\n", encoding="utf-8")
+    writer.delete_task_line(vault, "20-Projects/p.md", 2, "- [ ] drop")
+    assert note.read_text(encoding="utf-8") == "- [ ] keep\n"
+
+
+def test_task_ops_on_missing_file_raise_missing(vault: Path):
+    with pytest.raises(WriterMissing):
+        writer.toggle_task_line(vault, "20-Projects/nope.md", 1, "- [ ] x")
+
+
+# --- Note update/delete (P5) ---
+
+
+def test_update_note_cas_applies_and_logs(tmp_path):
+    vault = _make_vault(tmp_path)
+    note = vault / "00-Inbox" / "n.md"
+    note.parent.mkdir()
+    note.write_text("old body\n", encoding="utf-8")
+    writer.update_note(vault, "00-Inbox/n.md", "old body\n", "new body\n")
+    assert note.read_text(encoding="utf-8") == "new body\n"
+    daily = vault / "10-Daily"
+    assert any("## Argus log" in p.read_text(encoding="utf-8") for p in daily.glob("*.md"))
+
+
+def test_update_note_conflict_on_drift(tmp_path):
+    vault = _make_vault(tmp_path)
+    note = vault / "00-Inbox" / "n.md"
+    note.parent.mkdir()
+    note.write_text("actual\n", encoding="utf-8")
+    with pytest.raises(WriterConflict):
+        writer.update_note(vault, "00-Inbox/n.md", "what the client saw\n", "new\n")
+    assert note.read_text(encoding="utf-8") == "actual\n"
+
+
+def test_delete_note_removes_file_after_snapshot(tmp_path):
+    vault = _make_vault(tmp_path)
+    note = vault / "00-Inbox" / "n.md"
+    note.parent.mkdir()
+    note.write_text("bye\n", encoding="utf-8")
+    writer.delete_note(vault, "00-Inbox/n.md")
+    assert not note.exists()
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=vault, capture_output=True, text=True
+    ).stdout
+    assert "argus: pre-apply snapshot (delete note 00-Inbox/n.md)" in log
+
+
+def test_delete_note_refuses_protected_and_missing(tmp_path):
+    vault = _make_vault(tmp_path)
+    with pytest.raises(WriterForbidden):
+        writer.delete_note(vault, "99-Private/secret.md")
+    with pytest.raises(WriterMissing):
+        writer.delete_note(vault, "00-Inbox/ghost.md")

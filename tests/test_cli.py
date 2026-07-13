@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.cli import InitError, init_vault
+from backend.cli import InitError, init_vault, needs_build
 
 EXPECTED_FOLDERS = [
     "00-Inbox",
@@ -55,3 +55,13 @@ def test_init_vault_preserves_other_env_keys(tmp_path: Path) -> None:
     env_text = env_file.read_text(encoding="utf-8")
     assert "BACKEND_PORT=9001" in env_text
     assert "VAULT_PATH=" in env_text
+
+
+def test_needs_build_true_when_no_build_id(tmp_path):
+    assert needs_build(tmp_path) is True
+
+
+def test_needs_build_false_when_build_id_exists(tmp_path):
+    (tmp_path / ".next").mkdir()
+    (tmp_path / ".next" / "BUILD_ID").write_text("abc", encoding="utf-8")
+    assert needs_build(tmp_path) is False

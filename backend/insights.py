@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import subprocess
 from datetime import date, datetime, timedelta
+from pathlib import PurePosixPath
 from typing import Any
 
 from pydantic import BaseModel
@@ -23,6 +25,8 @@ DONE_DATE_RE = re.compile(r"✅\s*(\d{4}-\d{2}-\d{2})")
 TREND_DAYS = 14
 CALENDAR_DAYS = 7
 FOCUS_BUDGET_HOURS = 8.0
+HEATMAP_DAYS = 371  # 53 weeks — a GitHub-style year grid
+CAPTURE_STAMP_RE = re.compile(r"➕\s*(\d{4}-\d{2}-\d{2})")
 
 
 class CourseScores(BaseModel):
@@ -140,3 +144,79 @@ def insights_summary(
         study=StudyInsights(streak_days=_streak(activity_days, today), courses=courses),
         configured={"gcal": gcal.configured()},
     )
+
+
+class HeatmapDay(BaseModel):
+    date: str
+    total: int
+    tasks: int
+    notes: int
+    study: int
+    captures: int
+
+
+class HeatmapResponse(BaseModel):
+    days: list[HeatmapDay]
+
+
+def _note_touches_by_day(settings: Settings) -> dict[str, int]:
+    """Notes created/edited per day, from the vault's git history (I2 keeps it rich)."""
+    result = subprocess.run(
+        ["git", "log", f"--since={HEATMAP_DAYS + 1} days ago", "--date=short",
+         "--pretty=format:@%ad", "--name-only"],
+        cwd=settings.vault_path, capture_output=True, text=True, check=False,
+    )
+    counts: dict[str, int] = {}
+    day: str | None = None
+    for raw in result.stdout.splitlines():
+        line = raw.strip()
+        if line.startswith("@"):
+            day = line[1:]
+            continue
+        if not line or day is None:
+            continue
+        path = PurePosixPath(line)
+        if path.suffix != ".md" or any(part in EXCLUDED_TOP_DIRS for part in path.parts):
+            continue
+        counts[day] = counts.get(day, 0) + 1
+    return counts
+
+
+def _captures_by_day(settings: Settings) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    inbox = settings.vault_path / "00-Inbox"
+    if inbox.is_dir():
+        for note in inbox.glob("*.md"):
+            try:
+                text = note.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for stamp in CAPTURE_STAMP_RE.findall(text):
+                counts[stamp] = counts.get(stamp, 0) + 1
+    return counts
+
+
+def _study_by_day(conn: sqlite3.Connection) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in conn.execute("SELECT created_at FROM attempts"):
+        day = row["created_at"][:10]
+        counts[day] = counts.get(day, 0) + 1
+    return counts
+
+
+def heatmap_summary(
+    settings: Settings, conn: sqlite3.Connection, today: date | None = None
+) -> HeatmapResponse:
+    today = today or date.today()
+    tasks = _completions_by_day(settings)
+    notes = _note_touches_by_day(settings)
+    study = _study_by_day(conn)
+    captures = _captures_by_day(settings)
+    days: list[HeatmapDay] = []
+    for offset in range(HEATMAP_DAYS - 1, -1, -1):
+        day = (today - timedelta(days=offset)).isoformat()
+        t, n, s, c = tasks.get(day, 0), notes.get(day, 0), study.get(day, 0), captures.get(day, 0)
+        days.append(
+            HeatmapDay(date=day, total=t + n + s + c, tasks=t, notes=n, study=s, captures=c)
+        )
+    return HeatmapResponse(days=days)

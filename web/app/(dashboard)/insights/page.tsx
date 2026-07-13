@@ -6,6 +6,7 @@ import GlassCard from "@/components/GlassCard";
 import PageHeader from "@/components/PageHeader";
 import ChartSkeleton from "@/components/charts/ChartSkeleton";
 import { SERIES } from "@/components/charts/chartTheme";
+import Heatmap from "@/components/dashboard/Heatmap";
 import { fetcher, useJournalSessions } from "@/lib/api";
 
 const BarChartPanel = dynamic(() => import("@/components/charts/BarChartPanel"), {
@@ -102,6 +103,10 @@ export default function InsightsPage() {
         title="How you're doing"
         subtitle="Trends from your tasks, calendar, study sessions — and your builds."
       />
+
+      <div className="mb-6 grid gap-4">
+        <Heatmap />
+      </div>
 
       <section className="mb-6">
         <p className="eyebrow mb-3">{`// DEVELOPMENT ACTIVITY`}</p>

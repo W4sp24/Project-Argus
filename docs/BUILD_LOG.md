@@ -147,3 +147,35 @@ here, not asked.
   off-screen at 390px), fixed by switching to icon-only nav below `md`. Also
   code-split `/insights` (recharts) and `/journal` (react-markdown) via
   `next/dynamic`, cutting first-load JS from 205 kB/129 kB to ~96 kB each.
+- **D-034 — Direct user CRUD via the writer with CAS drift checks (vs a review
+  queue for humans).** P4's suggest-then-approve queue exists because an *agent*
+  can't be trusted to write unsupervised; a human clicking edit/delete on their
+  own note doesn't need a second human to approve it. `update_note`/`delete_note`
+  and `update_task_line`/`delete_task_line`/`toggle_task_line` go straight
+  through `backend/writer.py` (I1) with the same git pre-apply snapshot (I2) as
+  every other write, but compare-and-swap instead of a queue: every mutation
+  carries the content (or exact line) the client last read, and a
+  `WriterConflict`/409 is raised — file untouched — if it drifted underneath
+  them. AI-initiated changes keep the Review queue; this is human-initiated only.
+  `guard_user_path` refuses `99-Private/`, `90-Meta/` (D1), traversal, and
+  absolute paths server-side regardless of what the UI sends.
+- **D-035 — Heatmap counts tasks + notes + study + captures, with note events
+  sourced from vault git history.** Task completions and study attempts already
+  live in structures that carry a date (`✅` stamps, `attempts.created_at`); note
+  creates/edits don't, so `_note_touches_by_day` walks `git log --since --name-only`
+  on the vault itself rather than adding note-level timestamps to track. This
+  reuses I2's snapshot trail as the activity signal instead of a new column, and
+  `EXCLUDED_TOP_DIRS` filtering on the git log output keeps `99-Private/` out of
+  the grid (I3) the same way the RAG indexer excludes it.
+- **D-036 — `argus web` is the production launcher and now the daily entry
+  point.** `npm run dev` compiles on every route hit — Ethan's "laggy" report
+  traced to the dev compiler, not the app. `argus web` builds once (or on
+  `--build`/missing `BUILD_ID`) and runs `uvicorn` + `next start` side by side,
+  Ctrl-C tearing down both; the README's Quickstart now leads with it and the
+  old two-terminal `uvicorn` + `npm run dev` flow moved under Development.
+- **D-037 — One `ChatProvider`, two surfaces (dock + tab).** The `/ws/chat`
+  session and message history were page-local state on `/chat`; lifting them
+  into a React context mounted at the dashboard layout means the always-visible
+  dock in the right rail and the full `/chat` page read the same conversation —
+  switching surfaces mid-answer doesn't drop or duplicate anything. Kept to one
+  socket per session rather than one per surface.

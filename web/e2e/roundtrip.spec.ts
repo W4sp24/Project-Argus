@@ -14,7 +14,7 @@ function localToday(): string {
 
 test("capture → approve → vault roundtrip", async ({ page }) => {
   // 1. Quick capture through the Today page lands in 00-Inbox via the writer.
-  await page.goto("/today");
+  await page.goto("/dashboard");
   await page.getByPlaceholder("e.g. email prof about thesis").fill("e2e roundtrip note");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText(/Captured/)).toBeVisible();

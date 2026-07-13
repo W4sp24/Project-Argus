@@ -11,6 +11,7 @@ line changes) behind the approval gate.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import subprocess
 from collections.abc import Callable
@@ -18,15 +19,29 @@ from datetime import date, datetime
 from pathlib import Path
 
 from backend import suggestions as suggestion_queue
+from backend.rag.paths import EXCLUDED_TOP_DIRS
 from backend.suggestions import Suggestion
 
 INBOX_DIR = "00-Inbox"
 DAILY_DIR = "10-Daily"
 ARGUS_LOG_HEADING = "## Argus log"
+_EXCLUDED_CASEFOLD = {name.casefold() for name in EXCLUDED_TOP_DIRS}
 
 
 class WriterError(RuntimeError):
     """Raised when a vault write cannot be performed safely."""
+
+
+class WriterForbidden(WriterError):  # noqa: N818
+    """Write refused: path is outside the user-editable zones (I3/D1)."""
+
+
+class WriterMissing(WriterError):  # noqa: N818
+    """Write refused: target file does not exist."""
+
+
+class WriterConflict(WriterError):  # noqa: N818
+    """Write refused: content drifted since the client read it."""
 
 
 def _git_snapshot(vault_path: Path, reason: str) -> None:
@@ -46,6 +61,75 @@ def _git_snapshot(vault_path: Path, reason: str) -> None:
         text=True,
         check=False,
     )
+
+
+def guard_user_path(vault_path: Path, rel_path: str) -> Path:
+    """Resolve a vault-relative path for user CRUD; refuse protected zones."""
+    candidate = Path(rel_path)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise WriterForbidden(f"path {rel_path!r} is not vault-relative")
+    if candidate.parts and candidate.parts[0].casefold() in _EXCLUDED_CASEFOLD:
+        raise WriterForbidden(f"{candidate.parts[0]}/ is protected and cannot be edited")
+    resolved = (vault_path / candidate).resolve()
+    if vault_path.resolve() not in resolved.parents:
+        raise WriterForbidden(f"path {rel_path!r} escapes the vault")
+    return resolved
+
+
+def _checked_line(note: Path, rel_path: str, line_no: int, old_line: str) -> list[str]:
+    if not note.is_file():
+        raise WriterMissing(f"{rel_path} does not exist")
+    lines = note.read_text(encoding="utf-8").splitlines()
+    if line_no < 1 or line_no > len(lines) or lines[line_no - 1].strip() != old_line.strip():
+        raise WriterConflict(f"{rel_path}:{line_no} has changed since you loaded it — refresh")
+    return lines
+
+
+DONE_STAMP_RE = re.compile(r"\s*✅\s*\d{4}-\d{2}-\d{2}")
+
+
+def toggle_task_line(vault_path: Path, rel_path: str, line_no: int, old_line: str) -> str:
+    """Check/uncheck one task checkbox; stamps/strips the ✅ done date."""
+    note = guard_user_path(vault_path, rel_path)
+    lines = _checked_line(note, rel_path, line_no, old_line)
+    line = lines[line_no - 1]
+    if "[ ]" in line:
+        new_line = (
+            line.replace("[ ]", "[x]", 1).rstrip() + f" ✅ {date.today().isoformat()}"
+        )
+    elif "[x]" in line or "[X]" in line:
+        line_normalized = line.replace("[X]", "[x]").replace("[x]", "[ ]", 1)
+        new_line = DONE_STAMP_RE.sub("", line_normalized).rstrip()
+    else:
+        raise WriterConflict(f"{rel_path}:{line_no} is not a checkbox task")
+    _git_snapshot(vault_path, f"toggle task {rel_path}:{line_no}")
+    lines[line_no - 1] = new_line
+    note.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _argus_log(vault_path, f"toggled task in {rel_path}:{line_no}")
+    return new_line
+
+
+def update_task_line(
+    vault_path: Path, rel_path: str, line_no: int, old_line: str, new_line: str
+) -> str:
+    """Replace one task line verbatim (user-initiated edit)."""
+    note = guard_user_path(vault_path, rel_path)
+    lines = _checked_line(note, rel_path, line_no, old_line)
+    _git_snapshot(vault_path, f"edit task {rel_path}:{line_no}")
+    lines[line_no - 1] = new_line
+    note.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _argus_log(vault_path, f"edited task in {rel_path}:{line_no}")
+    return new_line
+
+
+def delete_task_line(vault_path: Path, rel_path: str, line_no: int, old_line: str) -> None:
+    """Delete one task line (user-initiated)."""
+    note = guard_user_path(vault_path, rel_path)
+    lines = _checked_line(note, rel_path, line_no, old_line)
+    _git_snapshot(vault_path, f"delete task {rel_path}:{line_no}")
+    del lines[line_no - 1]
+    note.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    _argus_log(vault_path, f"deleted task in {rel_path}:{line_no}")
 
 
 def append_capture(vault_path: Path, text: str) -> str:
@@ -190,6 +274,29 @@ def _apply_note_diff(vault_path: Path, payload: dict) -> str:
     result.extend(original[cursor:])
     note.write_text("\n".join(result) + "\n", encoding="utf-8")
     return f"note edit in {rel_path}"
+
+
+def update_note(vault_path: Path, rel_path: str, expected_content: str, new_content: str) -> None:
+    """Replace a note's full content iff it still matches what the client read."""
+    note = guard_user_path(vault_path, rel_path)
+    if not note.is_file():
+        raise WriterMissing(f"{rel_path} does not exist")
+    current = note.read_text(encoding="utf-8")
+    if current != expected_content:
+        raise WriterConflict(f"{rel_path} has changed since you loaded it — refresh")
+    _git_snapshot(vault_path, f"edit note {rel_path}")
+    note.write_text(new_content, encoding="utf-8")
+    _argus_log(vault_path, f"edited note {rel_path}")
+
+
+def delete_note(vault_path: Path, rel_path: str) -> None:
+    """Delete one note (user-initiated); the pre-apply snapshot is the undo."""
+    note = guard_user_path(vault_path, rel_path)
+    if not note.is_file():
+        raise WriterMissing(f"{rel_path} does not exist")
+    _git_snapshot(vault_path, f"delete note {rel_path}")
+    note.unlink()
+    _argus_log(vault_path, f"deleted note {rel_path}")
 
 
 def apply_suggestion(
