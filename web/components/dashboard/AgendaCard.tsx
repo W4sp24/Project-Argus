@@ -39,7 +39,7 @@ function spliceDescription(raw: string, text: string): string | null {
   const match = raw.match(/^(\s*[-*]\s+\[[ xX]\]\s+)(.*)$/);
   if (!match) return null;
   const metaRe =
-    /(?:📅|🗓|⏳|✅|➕)\s*\d{4}-\d{2}-\d{2}|\[(?:due|scheduled|prio(?:rity)?):[^\]]*\]|[🔺⏫🔼🔽]|#[\w/-]+|<!--.*?-->/g;
+    /(?:📅|🗓|⏳|✅|➕)\s*\d{4}-\d{2}-\d{2}|\[(?:due|scheduled|prio(?:rity)?):[^\]]*\]|[🔺⏫🔼🔽]|#[\w/-]+|<!--.*?-->/giu;
   const metas = match[2].match(metaRe) ?? [];
   return `${match[1]}${text}${metas.length ? ` ${metas.join(" ")}` : ""}`;
 }
