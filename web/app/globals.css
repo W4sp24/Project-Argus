@@ -21,6 +21,8 @@ body {
   .animate-rise,
   .animate-blink,
   .animate-toast,
+  .animate-palette,
+  .animate-drawer,
   .animate-msg-in {
     animation: none !important;
   }

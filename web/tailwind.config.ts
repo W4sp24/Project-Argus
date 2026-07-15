@@ -60,12 +60,21 @@ const config: Config = {
           "0%, 55%": { opacity: "1" },
           "56%, 100%": { opacity: "0" },
         },
+        // Chat drawer slide-in (§7): transform-only. The drawer unmounts when
+        // closed (§10), so entry is an animation rather than a transition.
+        drawer: {
+          from: { transform: "translateX(105%)" },
+          to: { transform: "none" },
+        },
       },
       animation: {
         rise: "rise 0.3s ease-out both",
         blink: "blink 1.1s steps(1) infinite",
         // Toast entrance (§5): same rise curve, faster.
         toast: "rise 0.2s ease-out both",
+        // Palette / popover entrance (§6): rise at .18s.
+        palette: "rise 0.18s ease-out both",
+        drawer: "drawer 0.25s ease-out both",
       },
     },
   },

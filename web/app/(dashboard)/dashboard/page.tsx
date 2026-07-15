@@ -1,10 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import Panel from "@/components/Panel";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
-import ChatPanel from "@/components/chat/ChatPanel";
 import ActivityFeed from "@/components/dashboard/ActivityFeed";
 import BriefingCard from "@/components/dashboard/BriefingCard";
 import Heatmap from "@/components/dashboard/Heatmap";
@@ -59,13 +57,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex min-w-0 flex-col gap-4">
-            <Panel
-              label="ARGUS.CHAT"
-              title="Ask Argus"
-              className="flex max-h-[26rem] min-h-[18rem] flex-col"
-            >
-              <ChatPanel variant="dock" />
-            </Panel>
+            {/* Chat moved to the ChatDrawer (TopBar CHAT / ⌘K), shared with /chat. */}
             <BriefingCard />
             <TokenUsage />
             <ActivityFeed />

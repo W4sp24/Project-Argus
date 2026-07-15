@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useToast } from "@/components/Toast";
+import FocusTimer from "@/components/FocusTimer";
 import { type Mode, useMode } from "@/lib/mode";
+import { useUi } from "@/lib/ui";
 
 const TABS: { mode: Mode; label: string; short: string }[] = [
   { mode: "general", label: "GENERAL", short: "GE" },
@@ -39,7 +40,7 @@ function Clock() {
 /** Sticky top bar (§3) — replaces Sidebar. Mode tabs + logo + utility cluster. */
 export default function TopBar() {
   const { mode, setMode } = useMode();
-  const { show } = useToast();
+  const { toggleDrawer, setNoteOpen, setPaletteOpen } = useUi();
 
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-void">
@@ -88,35 +89,33 @@ export default function TopBar() {
           <div className="hidden items-center gap-2 md:flex">
             <button
               type="button"
-              onClick={() => show("note modal :: arrives in a later phase")}
+              onClick={() => setNoteOpen(true)}
               className="border border-line px-2 py-1 uppercase tracking-[0.12em] transition-colors hover:border-lineHi hover:text-ink-muted"
             >
               + NOTE
             </button>
-            <span
-              aria-label="Focus timer — arrives in a later phase"
-              className="border border-line px-2 py-1 uppercase tracking-[0.12em]"
-            >
-              ◔ FOCUS
-            </span>
-            <Link
-              href="/chat"
+            <FocusTimer />
+            <button
+              type="button"
               aria-label="Chat"
+              onClick={toggleDrawer}
               className="border border-line px-2 py-1 uppercase tracking-[0.12em] transition-colors hover:border-lineHi hover:text-ink-muted"
             >
               CHAT
-            </Link>
+            </button>
             <span className="flex items-center gap-1.5 border border-line px-2 py-1 uppercase tracking-[0.12em]">
               <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-ok" />
               <span className="text-ok">LOCAL</span>
             </span>
           </div>
-          <span
-            aria-label="Command palette — arrives in a later phase"
-            className="border border-line px-2 py-1"
+          <button
+            type="button"
+            aria-label="Command palette"
+            onClick={() => setPaletteOpen(true)}
+            className="border border-line px-2 py-1 transition-colors hover:border-lineHi hover:text-ink-muted"
           >
             [⌘K]
-          </span>
+          </button>
           <span aria-label="Current time" className="border border-line px-2 py-1">
             <Clock />
           </span>
