@@ -18,6 +18,8 @@ export default function SystemPage() {
         <DoctorPanel />
         <McpServers />
 
+        <CliUsage size="large" />
+
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="flex min-w-0 flex-col gap-4">
             <Integrations />
@@ -25,7 +27,6 @@ export default function SystemPage() {
           </div>
           <div className="flex min-w-0 flex-col gap-4">
             <TokenUsage />
-            <CliUsage />
           </div>
         </div>
       </div>

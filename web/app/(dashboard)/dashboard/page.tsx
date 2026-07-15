@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import CliUsage from "@/components/CliUsage";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
 import ActivityFeed from "@/components/dashboard/ActivityFeed";
@@ -60,6 +61,7 @@ export default function DashboardPage() {
             {/* Chat moved to the ChatDrawer (TopBar CHAT / ⌘K), shared with /chat. */}
             <BriefingCard />
             <TokenUsage />
+            <CliUsage />
             <ActivityFeed />
             <InsightsChart />
           </div>

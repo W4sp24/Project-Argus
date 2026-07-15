@@ -1,4 +1,4 @@
-"""Token-usage log for the dashboard's TOKENS.CLAUDE panel (redesign §14).
+"""Token-usage log for the dashboard's ARGUS.USAGE panel (redesign §14).
 
 Every model call site records ``{ts, feature, session_id, model, in, out}``
 from the Anthropic response ``usage`` field into the ``token_usage`` table.

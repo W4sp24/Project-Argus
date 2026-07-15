@@ -1,5 +1,6 @@
 "use client";
 
+import CliUsage from "@/components/CliUsage";
 import ModeHeader from "@/components/ModeHeader";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
@@ -54,6 +55,7 @@ export default function CodePage() {
 
           <div className="flex min-w-0 flex-col gap-4">
             <TokenUsage />
+            <CliUsage />
             <SessionsChart />
           </div>
         </div>

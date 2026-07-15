@@ -9,10 +9,13 @@ export default function MiniLineChart({
   values,
   labels,
   height = 64,
+  className = "h-16",
 }: {
   values: number[];
   labels?: string[];
   height?: number;
+  /** Tailwind height class for the rendered SVG (viewBox coordinate space still uses `height`). */
+  className?: string;
 }) {
   const width = 240;
   const max = Math.max(1, ...values);
@@ -34,7 +37,7 @@ export default function MiniLineChart({
       <svg
         viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
-        className="h-16 w-full overflow-visible"
+        className={`${className} w-full overflow-visible`}
         role="img"
         aria-label="Trend over time"
       >

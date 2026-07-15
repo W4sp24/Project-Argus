@@ -16,17 +16,20 @@ function chartLabel(range: CliUsageRange, label: string): string {
 /**
  * CLAUDE CODE — account-wide Claude Code CLI usage, parsed from local
  * `~/.claude/projects/**\/*.jsonl` transcripts (backend/cli_usage.py), wired
- * to `GET /api/usage/cli`. Deliberately a separate panel from TOKENS.CLAUDE:
+ * to `GET /api/usage/cli`. Deliberately a separate panel from ARGUS.USAGE:
  * this is real account-wide token spend across every local Claude Code
  * session, not just what Argus's own chat/planner/study-generate calls used.
+ * `size="large"` renders as a full-width panel (used on /system); the default
+ * matches the compact sidebar footprint of every other usage widget.
  */
-export default function CliUsage() {
+export default function CliUsage({ size = "default" }: { size?: "default" | "large" }) {
   const [view, setView] = useState<CliUsageRange>("today");
   const { data, isLoading } = useCliUsage(view);
 
   return (
     <Panel
       label="CLAUDE CODE"
+      className={size === "large" ? "min-h-[280px]" : undefined}
       headerRight={
         <div className="flex border border-line font-mono text-[9px] uppercase tracking-[0.14em]">
           {VIEWS.map((option) => (
@@ -60,6 +63,7 @@ export default function CliUsage() {
           value: model.total_tokens,
         }))}
         emptyMessage="no local Claude Code sessions found"
+        size={size === "large" ? "wide" : "default"}
       />
     </Panel>
   );

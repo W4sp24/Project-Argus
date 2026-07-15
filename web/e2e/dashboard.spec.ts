@@ -22,7 +22,7 @@ test("dashboard renders all widgets", async ({ page }) => {
   await expect(page.getByText("INGEST")).toBeVisible();
   await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible(); // drawer toggle (chat left the inline rail in Phase F)
   await expect(page.getByText("ARGUS.AGENT")).toBeVisible(); // restyled briefing card
-  await expect(page.getByText("TOKENS.CLAUDE")).toBeVisible(); // preview panel
+  await expect(page.getByText("ARGUS.USAGE")).toBeVisible(); // preview panel
   await expect(page.getByText("ACTIVITY.FEED")).toBeVisible();
   await expect(page.getByText("INSIGHTS.14D")).toBeVisible();
 });

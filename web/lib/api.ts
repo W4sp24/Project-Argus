@@ -231,7 +231,7 @@ export interface UsageReport {
   features: FeatureUsage[];
 }
 
-/** TOKENS.CLAUDE (§14) — GET /api/usage?range=session|week|all. */
+/** ARGUS.USAGE (§14) — GET /api/usage?range=session|week|all. */
 export function useUsage(range: UsageRange) {
   return useSWR<UsageReport>(`/api/usage?range=${range}`, fetcher);
 }

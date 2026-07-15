@@ -20,9 +20,11 @@ function chartLabel(range: UsageRange, label: string): string {
 }
 
 /**
- * TOKENS.CLAUDE (§14) — SESSION / WEEK / ALL segmented view of Claude token
- * spend, wired to the real `GET /api/usage` (backend/usage.py). One SVG line
- * chart, no recharts (§10). Empty state until the token_usage table has rows.
+ * ARGUS.USAGE (§14) — SESSION / WEEK / ALL segmented view of tokens spent by
+ * Argus's own chat/planner/study-generate calls, wired to the real
+ * `GET /api/usage` (backend/usage.py). One SVG line chart, no recharts (§10).
+ * Empty state until the token_usage table has rows. Distinct from the
+ * CLAUDE CODE panel (`CliUsage.tsx`), which tracks account-wide CLI usage.
  */
 export default function TokenUsage() {
   const [view, setView] = useState<UsageRange>("session");
@@ -34,7 +36,7 @@ export default function TokenUsage() {
 
   return (
     <Panel
-      label="TOKENS.CLAUDE"
+      label="ARGUS.USAGE"
       headerRight={
         <div className="flex border border-line font-mono text-[9px] uppercase tracking-[0.14em]">
           {VIEWS.map((option) => (
