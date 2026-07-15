@@ -54,6 +54,35 @@ def test_put_note_cas_and_conflict(client):
     assert stale.json()["detail"]["current_content"] == "hi\n"
 
 
+def test_create_note(client):
+    api, vault = client
+    response = api.post(
+        "/api/note/create",
+        json={"path": "00-Inbox/2026-07-16-idea.md", "content": "# Idea\n\nbody\n"},
+    )
+    assert response.status_code == 201
+    assert response.json() == {"path": "00-Inbox/2026-07-16-idea.md", "content": "# Idea\n\nbody\n"}
+    assert (vault / "00-Inbox" / "2026-07-16-idea.md").read_text(encoding="utf-8") == "# Idea\n\nbody\n"
+
+
+def test_create_note_conflict_on_existing(client):
+    api, _ = client
+    response = api.post(
+        "/api/note/create",
+        json={"path": "00-Inbox/note.md", "content": "clobber\n"},
+    )
+    assert response.status_code == 409
+
+
+def test_create_note_forbidden_zone(client):
+    api, _ = client
+    response = api.post(
+        "/api/note/create",
+        json={"path": "99-Private/secret.md", "content": "x\n"},
+    )
+    assert response.status_code == 403
+
+
 def test_delete_note(client):
     api, vault = client
     response = api.request("DELETE", "/api/note", params={"path": "00-Inbox/note.md"})

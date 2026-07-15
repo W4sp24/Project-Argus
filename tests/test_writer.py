@@ -10,6 +10,7 @@ from backend import writer
 from backend.writer import (
     WriterConflict,
     WriterError,
+    WriterExists,
     WriterForbidden,
     WriterMissing,
     append_capture,
@@ -194,3 +195,40 @@ def test_delete_note_refuses_protected_and_missing(tmp_path):
         writer.delete_note(vault, "99-Private/secret.md")
     with pytest.raises(WriterMissing):
         writer.delete_note(vault, "00-Inbox/ghost.md")
+
+
+# --- Note creation (redesign §13 quick add-note modal) ----------------------
+
+
+def test_create_note_writes_new_file_and_snapshots(tmp_path):
+    vault = _make_vault(tmp_path)
+    rel = writer.create_note(vault, "00-Inbox/2026-07-16-idea.md", "# Idea\n\nbody\n")
+    assert rel == "00-Inbox/2026-07-16-idea.md"
+    note = vault / rel
+    assert note.read_text(encoding="utf-8") == "# Idea\n\nbody\n"
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=vault, capture_output=True, text=True
+    ).stdout
+    assert "argus: pre-apply snapshot (create note 00-Inbox/2026-07-16-idea.md)" in log
+
+
+def test_create_note_makes_parent_dirs(tmp_path):
+    vault = _make_vault(tmp_path)
+    rel = writer.create_note(vault, "00-Inbox/nested/dir/note.md", "hi\n")
+    assert (vault / rel).is_file()
+
+
+def test_create_note_refuses_existing_file(tmp_path):
+    vault = _make_vault(tmp_path)
+    note = vault / "00-Inbox" / "n.md"
+    note.parent.mkdir()
+    note.write_text("original\n", encoding="utf-8")
+    with pytest.raises(WriterExists):
+        writer.create_note(vault, "00-Inbox/n.md", "clobber\n")
+    assert note.read_text(encoding="utf-8") == "original\n"
+
+
+def test_create_note_refuses_protected_zones(tmp_path):
+    vault = _make_vault(tmp_path)
+    with pytest.raises(WriterForbidden):
+        writer.create_note(vault, "99-Private/secret.md", "x\n")

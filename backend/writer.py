@@ -44,6 +44,10 @@ class WriterConflict(WriterError):  # noqa: N818
     """Write refused: content drifted since the client read it."""
 
 
+class WriterExists(WriterError):  # noqa: N818
+    """Write refused: create-only path already has a file at it."""
+
+
 def _git_snapshot(vault_path: Path, reason: str) -> None:
     """Commit the vault as it is now, so the next write is undoable (I2)."""
     if not (vault_path / ".git").is_dir():
@@ -352,6 +356,27 @@ def _apply_note_diff(vault_path: Path, payload: dict) -> str:
     result.extend(original[cursor:])
     note.write_text("\n".join(result) + "\n", encoding="utf-8")
     return f"note edit in {rel_path}"
+
+
+def create_note(vault_path: Path, rel_path: str, content: str) -> str:
+    """Create a brand-new note (redesign §13 quick add-note modal).
+
+    Snapshot-first (I2) and guarded to user-editable zones (I3), mirroring
+    ``save_ingest_file``'s style — but this is create-ONLY: unlike ingest's
+    dedupe-on-collision, a note already at ``rel_path`` is refused outright
+    (the caller picked an exact, deliberate filename, e.g. a title-derived
+    ``00-Inbox/YYYY-MM-DD-<slug>.md`` — silently renaming it would surprise
+    the user). Returns the vault-relative path actually written.
+    """
+    note = guard_user_path(vault_path, rel_path)
+    if note.exists():
+        raise WriterExists(f"{rel_path} already exists")
+    _git_snapshot(vault_path, f"create note {rel_path}")
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(content, encoding="utf-8")
+    rel = note.relative_to(vault_path).as_posix()
+    _argus_log(vault_path, f"created note {rel}")
+    return rel
 
 
 def update_note(vault_path: Path, rel_path: str, expected_content: str, new_content: str) -> None:
