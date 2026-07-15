@@ -23,7 +23,8 @@ body {
   .animate-toast,
   .animate-palette,
   .animate-drawer,
-  .animate-msg-in {
+  .animate-msg-in,
+  .animate-pulse {
     animation: none !important;
   }
 }

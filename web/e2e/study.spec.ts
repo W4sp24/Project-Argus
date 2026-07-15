@@ -4,7 +4,9 @@ test("study sub-nav deep-links between overview, flashcards, and exam", async ({
   await page.goto("/study");
   await expect(page.getByRole("tab", { name: "OVERVIEW" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("▍COURSES")).toBeVisible(); // exact panel eyebrow — "COURSES" alone matches 3 nodes
-  await expect(page.getByText("CS000")).toBeVisible(); // seeded vault course
+  // Seeded vault course. `.first()`: "CS000" appears twice since Phase H —
+  // the course card AND the shared ingest dropzone's upload-target <option>.
+  await expect(page.getByText("CS000").first()).toBeVisible();
 
   await page.getByRole("tab", { name: "FLASHCARDS" }).click();
   await expect(page).toHaveURL(/\/study\/flashcards$/);
