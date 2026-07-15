@@ -138,3 +138,51 @@ export interface ActivityEvent {
 export function useActivity() {
   return useSWR<ActivityEvent[]>("/api/activity", fetcher);
 }
+
+// --- Study (Phase D) ----------------------------------------------------
+
+export interface CourseInfo {
+  code: string;
+  title: string;
+  path: string;
+  materials: number;
+  notes: number;
+}
+
+/** Courses discovered under 15-Courses/ (each needs a course.md hub note). */
+export function useStudyCourses() {
+  return useSWR<CourseInfo[]>("/api/study/courses", fetcher);
+}
+
+export interface ExamSummary {
+  id: number;
+  course: string;
+  title: string;
+  created_at: string;
+  questions: number;
+}
+
+/** Generated practice exams, optionally scoped to one course. */
+export function useStudyExams(course?: string) {
+  const query = course ? `?course=${encodeURIComponent(course)}` : "";
+  return useSWR<ExamSummary[]>(`/api/study/exams${query}`, fetcher);
+}
+
+export interface TaskItem {
+  text: string;
+  done: boolean;
+  due: string | null;
+  scheduled: string | null;
+  priority: string | null;
+  tags: string[];
+  source: string;
+  path: string | null;
+  line: number | null;
+}
+
+/** Full task board (overdue/today/week/someday buckets) — used to derive
+ * study-adjacent signals (e.g. the next exam-flavored deadline) from real
+ * vault tasks rather than inventing a scheduling model that doesn't exist. */
+export function useTasksBoard() {
+  return useSWR<Record<string, TaskItem[]>>("/api/tasks", fetcher);
+}

@@ -93,6 +93,37 @@ body {
   @apply my-4 border-line;
 }
 
+/* Flashcard flip (§5, /study/flashcards [PREVIEW]): transform-only 3D flip.
+   Reduced-motion just removes the transition — rotateY still applies, so the
+   face swap is instant instead of animated (no separate JS branch needed). */
+.flip-card {
+  perspective: 1200px;
+}
+.flip-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.45s;
+  transform-style: preserve-3d;
+}
+.flip-card-inner.is-flipped {
+  transform: rotateY(180deg);
+}
+.flip-card-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.flip-card-back {
+  transform: rotateY(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .flip-card-inner {
+    transition: none;
+  }
+}
+
 ::selection {
   background: rgba(167, 139, 250, 0.35);
 }

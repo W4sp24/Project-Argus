@@ -10,4 +10,9 @@ export const FLAGS = {
   emailCapture: "preview", // manual email extraction (§11)
   tokenUsage: "preview", // until a real usage log exists (§14)
   localModels: "preview", // registration UI works; routing to ollama comes later
+  // Phase D: no backend endpoint creates a new course note (PUT /api/note only
+  // updates files that already exist — see backend/writer.py update_note).
+  // `+ ADD COURSE` is local-only until a create-course/create-note endpoint lands.
+  courseCreate: "preview",
+  courseHub: "preview", // /study/course/[code] — NotebookLM-style workspace, chat + studio are mock
 } as const;
