@@ -5,8 +5,11 @@ const config: Config = {
   theme: {
     // Square terminal panels — no rounded corners anywhere (§1). Overriding the
     // whole scale (not extending) makes every legacy `rounded-*` a silent no-op.
+    // `full` stays: circles (logo dot, round task checkboxes, avatar orb) are a
+    // deliberate motif in the spec, distinct from rounded panel corners.
     borderRadius: {
       glass: "0px", // LEGACY — remove in Phase H
+      full: "9999px",
     },
     extend: {
       colors: {
