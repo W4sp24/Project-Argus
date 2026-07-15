@@ -1,51 +1,61 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import Panel from "@/components/Panel";
+import { useToast } from "@/components/Toast";
+import { ApiError, mutateJSON } from "@/lib/api";
 import { useTypewriter } from "@/lib/useTypewriter";
 
 const ACCEPT = ".pdf,.pptx,.docx,.md,.eml";
 
-function PreviewTag() {
-  return (
-    <span className="border border-[#3d2f66] px-1 py-px font-mono text-[8px] uppercase tracking-[0.16em] text-[#8b7bc0]">
-      PREVIEW
-    </span>
-  );
+interface IngestPanelProps {
+  /** Vault-relative target folder for uploads (e.g. `15-Courses/CS301`).
+   * Omitted -> backend default (`00-Inbox/files`). */
+  target?: string;
 }
 
 /**
- * INGEST panel (§11, §4 General) — real manual text-capture (POST
- * /api/capture) plus a [PREVIEW] file dropzone and EMAIL.CAPTURE: the
- * `/api/ingest` + `/api/ingest/email` endpoints aren't in this branch's
- * ancestry (§ decoupling rule), so drops/extracts play the typed status
- * line as mock feedback only — no upload, no write.
+ * INGEST panel (§11, §4 General) — real dropzone wired to `POST /api/ingest`
+ * (multipart `file` + optional `target`), manual capture (`POST /api/capture`,
+ * unchanged), and EMAIL.CAPTURE wired to `POST /api/ingest/email`
+ * (flags.emailCapture: enabled) — extractions land in the Review queue, never
+ * a direct write.
  */
-export default function IngestPanel() {
+export default function IngestPanel({ target }: IngestPanelProps) {
+  const { show } = useToast();
   const [dragOver, setDragOver] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [phase, setPhase] = useState<"idle" | "ingesting" | "done">("idle");
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { output, done: typingDone } = useTypewriter(status);
 
-  const chunks = file ? 3 + (file.name.length % 9) : 0;
-  const statusText =
-    phase === "ingesting"
-      ? `ingesting ${file?.name} :: extract → chunk (${chunks}) → embed (local)`
-      : phase === "done"
-        ? `done :: ${file?.name} indexed · ${chunks} chunks`
-        : "";
-  const { output, done: typingDone } = useTypewriter(statusText);
-
-  useEffect(() => {
-    if (phase !== "ingesting" || !typingDone) return;
-    const timer = window.setTimeout(() => setPhase("done"), 350);
-    return () => window.clearTimeout(timer);
-  }, [phase, typingDone]);
+  async function upload(file: File) {
+    setBusy(true);
+    setStatus(`ingesting ${file.name} :: extract → chunk → embed (local)`);
+    const body = new FormData();
+    body.append("file", file);
+    if (target) body.append("target", target);
+    try {
+      const response = await fetch("/api/ingest", { method: "POST", body });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.detail === "string" ? payload.detail : `upload failed (${response.status})`,
+        );
+      }
+      const { chunks, indexed } = payload as { chunks: number; indexed: boolean };
+      setStatus(indexed ? `done :: ${file.name} indexed · ${chunks} chunks` : "saved — indexing unavailable");
+    } catch (error) {
+      setStatus("");
+      show(`ingest :: failed — ${error instanceof Error ? error.message : "backend offline?"}`);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function pickFile(picked: File | null | undefined) {
-    if (!picked) return;
-    setFile(picked);
-    setPhase("ingesting");
+    if (!picked || busy) return;
+    upload(picked);
   }
 
   // Manual capture — real writer path (POST /api/capture), unchanged from CaptureCard.
@@ -67,21 +77,32 @@ export default function IngestPanel() {
     setTimeout(() => setCaptureStatus(null), 5000);
   }
 
-  // EMAIL.CAPTURE — [PREVIEW] mock extraction only, never a real write.
+  // EMAIL.CAPTURE (§11) — real POST /api/ingest/email; results land in the
+  // Review queue, never a direct write.
   const [email, setEmail] = useState("");
-  const [extracted, setExtracted] = useState<string | null>(null);
+  const [emailBusy, setEmailBusy] = useState(false);
 
-  function extractEmail() {
-    if (!email.trim()) return;
-    setExtracted("preview :: would extract tasks/dates/contacts → proposals land in the review queue");
+  async function extractEmail() {
+    const text = email.trim();
+    if (!text || emailBusy) return;
+    setEmailBusy(true);
+    try {
+      const result = await mutateJSON<{ proposals: number; archived_path: string }>("/api/ingest/email", {
+        text,
+      });
+      setEmail("");
+      show(
+        `email archived → ${result.archived_path} · ${result.proposals} proposal(s) in the Review queue`,
+      );
+    } catch (error) {
+      show(`email :: extract failed — ${error instanceof ApiError ? error.message : "backend offline?"}`);
+    } finally {
+      setEmailBusy(false);
+    }
   }
 
   return (
     <Panel label="INGEST">
-      <div className="mb-2 flex items-center gap-2">
-        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">files</p>
-        <PreviewTag />
-      </div>
       <div
         onDragOver={(event) => {
           event.preventDefault();
@@ -109,10 +130,10 @@ export default function IngestPanel() {
           onChange={(event) => pickFile(event.target.files?.[0])}
         />
       </div>
-      {phase !== "idle" && (
+      {status && (
         <p className="mt-2 font-mono text-[11px] text-ink-muted" aria-live="polite">
           {output}
-          {phase === "ingesting" && <span className="animate-blink text-[var(--ac)]">▊</span>}
+          {busy && !typingDone && <span className="animate-blink text-[var(--ac)]">▊</span>}
         </p>
       )}
       <p className="mt-2 font-mono text-[10px] text-ink-faint">
@@ -137,10 +158,7 @@ export default function IngestPanel() {
       {captureStatus && <p className="mt-2 font-mono text-[11px] text-[var(--ac)]">{captureStatus}</p>}
 
       <div className="mt-4 border-t border-line pt-4">
-        <div className="mb-2 flex items-center gap-2">
-          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">email.capture</p>
-          <PreviewTag />
-        </div>
+        <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">email.capture</p>
         <textarea
           value={email}
           onChange={(event) => setEmail(event.target.value)}
@@ -150,12 +168,11 @@ export default function IngestPanel() {
         />
         <button
           onClick={extractEmail}
-          disabled={!email.trim()}
+          disabled={!email.trim() || emailBusy}
           className="mt-2 border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
         >
-          EXTRACT →
+          {emailBusy ? "EXTRACTING…" : "EXTRACT →"}
         </button>
-        {extracted && <p className="mt-2 font-mono text-[11px] text-ink-muted">{extracted}</p>}
       </div>
     </Panel>
   );

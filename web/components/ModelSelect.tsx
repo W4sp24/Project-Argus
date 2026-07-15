@@ -2,31 +2,30 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import {
-  listModels,
-  setModel,
-  useSelectedModel,
-  type ModelEntry,
-} from "@/lib/models";
+import { useModels } from "@/lib/api";
+import { BUILTIN_MODELS, setModel, useSelectedModel, type ModelEntry } from "@/lib/models";
 
 /**
- * Model selector dropdown (§7). Built-in API models plus user-registered
- * local models (read from localStorage on open — the /system MODELS panel
- * writes them). Selection persists via lib/models.ts and is sent as the
- * `model` field on every chat frame. Rendered on /chat's header; the drawer
- * header shows the selected name read-only.
+ * Model selector dropdown (§7). Registry comes from the real `GET
+ * /api/models` (built-ins + user-registered local models, added on /system's
+ * MODELS panel) via SWR, falling back to `BUILTIN_MODELS` while loading or if
+ * the backend is unreachable. Selection persists via lib/models.ts and is
+ * sent as the `model` field on every chat frame. Rendered on /chat's header;
+ * the drawer header shows the selected name read-only.
  */
 export default function ModelSelect() {
   const selected = useSelectedModel();
   const [open, setOpen] = useState(false);
-  const [models, setModels] = useState<ModelEntry[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
+  const { data } = useModels();
 
-  // Re-read the registry every time the menu opens so models added on
-  // /system show up without a reload.
-  useEffect(() => {
-    if (open) setModels(listModels());
-  }, [open]);
+  const models: ModelEntry[] = data
+    ? data.map((model) => ({
+        name: model.name,
+        kind: model.builtin ? "api" : "local",
+        endpoint: model.endpoint ?? undefined,
+      }))
+    : BUILTIN_MODELS;
 
   useEffect(() => {
     if (!open) return;

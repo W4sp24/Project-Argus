@@ -195,3 +195,66 @@ export interface TaskItem {
 export function useTasksBoard() {
   return useSWR<Record<string, TaskItem[]>>("/api/tasks", fetcher);
 }
+
+// --- System (Phase H: usage, doctor, models) --------------------------------
+
+export interface UsagePoint {
+  label: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface FeatureUsage {
+  feature: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export type UsageRange = "session" | "week" | "all";
+
+export interface UsageReport {
+  range: UsageRange;
+  session_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  series: UsagePoint[];
+  features: FeatureUsage[];
+}
+
+/** TOKENS.CLAUDE (§14) — GET /api/usage?range=session|week|all. */
+export function useUsage(range: UsageRange) {
+  return useSWR<UsageReport>(`/api/usage?range=${range}`, fetcher);
+}
+
+export interface DoctorCheck {
+  name: string;
+  status: "OK" | "WARN" | "FAIL";
+  detail: string;
+}
+
+/**
+ * DOCTOR (§12) — `POST /api/doctor` (not a GET, so the fetcher is inline).
+ * Keyed by a fixed SWR key so DoctorPanel and SetupGuide share one result
+ * set and one `mutate()` (RUN AGAIN) revalidates both.
+ */
+export function useDoctor() {
+  return useSWR<DoctorCheck[]>("/api/doctor", () => mutateJSON<DoctorCheck[]>("/api/doctor", undefined));
+}
+
+export interface ModelInfo {
+  name: string;
+  provider: string;
+  endpoint?: string | null;
+  key_ref?: string | null;
+  default: boolean;
+  builtin: boolean;
+}
+
+/** Model registry (§7/§12) — GET /api/models. Built-ins first, then local. */
+export function useModels() {
+  return useSWR<ModelInfo[]>("/api/models", fetcher);
+}

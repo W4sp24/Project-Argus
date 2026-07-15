@@ -7,8 +7,8 @@ export const FLAGS = {
   focusTimer: "preview",
   palette: "enabled", // pure client UI, safe to enable
   activeWork: "preview", // Code PR list (mock data)
-  emailCapture: "preview", // manual email extraction (§11)
-  tokenUsage: "preview", // until a real usage log exists (§14)
+  emailCapture: "enabled", // POST /api/ingest/email is wired (Phase H)
+  tokenUsage: "enabled", // GET /api/usage is wired (Phase H)
   localModels: "preview", // registration UI works; routing to ollama comes later
   // Phase D: no backend endpoint creates a new course note (PUT /api/note only
   // updates files that already exist — see backend/writer.py update_note).

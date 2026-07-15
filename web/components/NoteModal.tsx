@@ -2,22 +2,35 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/Toast";
-import { mutateJSON } from "@/lib/api";
+import { ApiError, mutateJSON } from "@/lib/api";
 import { useUi } from "@/lib/ui";
 
 /**
  * Quick add-note modal (§13), opened from the TopBar `+ NOTE` and the
  * palette. Renders nothing while closed (§10).
  *
- * Persistence: there is NO note-create endpoint yet — `PUT /api/note`
- * (backend/notes_api.py) only updates files that already exist
- * (writer.update_note raises WriterMissing otherwise). Until a create
- * endpoint lands, notes save through the existing `POST /api/capture`,
- * which appends to today's capture note (00-Inbox/capture-YYYY-MM-DD.md,
- * one line — append_capture collapses newlines) and returns that path,
- * which we toast verbatim. Title-derived filenames
- * (00-Inbox/{today}-{slug}.md) await the create endpoint.
+ * Persistence: `POST /api/note/create` (backend/notes_api.py, backed by
+ * `writer.create_note`) writes a title-derived `00-Inbox/YYYY-MM-DD-<slug>.md`
+ * with the markdown body intact; the toast shows the saved path. A 409
+ * (a note already exists at that exact path — e.g. two notes with the same
+ * title on the same day) falls back to a numbered slug.
  */
+function slugify(title: string): string {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "note";
+}
+
+function todayIso(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
 export default function NoteModal() {
   const { noteOpen } = useUi();
   if (!noteOpen) return null;
@@ -66,17 +79,35 @@ function NoteModalBody() {
   }, [setNoteOpen]);
 
   async function save() {
-    const text = [title.trim(), body.trim()].filter(Boolean).join(" — ");
-    if (!text || busy) return;
+    const trimmedTitle = title.trim();
+    const trimmedBody = body.trim();
+    if (!trimmedTitle && !trimmedBody) return;
+    if (busy) return;
     setBusy(true);
-    try {
-      const { path } = await mutateJSON<{ path: string }>("/api/capture", { text });
-      show(`note :: saved → ${path}`);
-      setNoteOpen(false);
-    } catch (error) {
-      show(`note :: save failed — ${error instanceof Error ? error.message : "backend offline?"}`);
-      setBusy(false);
+
+    const day = todayIso();
+    const slug = slugify(trimmedTitle || trimmedBody.slice(0, 40));
+    const content = trimmedTitle ? `# ${trimmedTitle}\n\n${trimmedBody}\n` : `${trimmedBody}\n`;
+
+    async function attempt(path: string, suffix: number): Promise<void> {
+      try {
+        const { path: saved } = await mutateJSON<{ path: string }>("/api/note/create", {
+          path,
+          content,
+        });
+        show(`note :: saved → ${saved}`);
+        setNoteOpen(false);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409 && suffix < 20) {
+          await attempt(`00-Inbox/${day}-${slug}-${suffix + 1}.md`, suffix + 1);
+          return;
+        }
+        show(`note :: save failed — ${error instanceof Error ? error.message : "backend offline?"}`);
+        setBusy(false);
+      }
     }
+
+    await attempt(`00-Inbox/${day}-${slug}.md`, 1);
   }
 
   return (
@@ -123,10 +154,10 @@ function NoteModalBody() {
               disabled={busy || !(title.trim() || body.trim())}
               className="border border-line bg-[var(--ac-bg)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
             >
-              SAVE NOTE
+              {busy ? "SAVING…" : "SAVE NOTE"}
             </button>
             <p className="font-mono text-[10px] text-ink-faint">
-              → appends to today&apos;s 00-Inbox capture note
+              → 00-Inbox/{todayIso()}-{slugify(title.trim() || "note")}.md
             </p>
           </div>
         </form>

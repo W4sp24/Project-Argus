@@ -4,11 +4,10 @@ import ModeHeader from "@/components/ModeHeader";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
 import ActiveWork from "@/components/preview/ActiveWork";
-import { TOKEN_USAGE_MOCK } from "@/components/preview/tokenUsageMock";
 import DevJournalPanel from "@/components/code/DevJournalPanel";
 import ProjectsVault from "@/components/code/ProjectsVault";
 import SessionsChart from "@/components/code/SessionsChart";
-import { useInsights, useJournalSessions } from "@/lib/api";
+import { useInsights, useJournalSessions, useUsage } from "@/lib/api";
 
 function isoDaysAgo(n: number): string {
   const d = new Date();
@@ -24,11 +23,12 @@ function isoDaysAgo(n: number): string {
 export default function CodePage() {
   const { data: sessions } = useJournalSessions();
   const { data: insights } = useInsights();
+  const { data: usage } = useUsage("session");
 
   const weekStart = isoDaysAgo(6);
   const sessionsThisWeek = (sessions ?? []).filter((s) => s.date >= weekStart).length;
   const streak = insights?.study.streak_days ?? "–";
-  const tokens = TOKEN_USAGE_MOCK.session.totalTokens;
+  const tokens = usage?.total_tokens ?? 0;
 
   return (
     <>

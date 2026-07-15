@@ -1,9 +1,9 @@
 import ModeHeader from "@/components/ModeHeader";
 import TokenUsage from "@/components/TokenUsage";
-import DoctorPanel from "@/components/preview/DoctorPanel";
-import ModelsPanel from "@/components/preview/ModelsPanel";
+import DoctorPanel from "@/components/system/DoctorPanel";
 import Integrations from "@/components/system/Integrations";
 import McpServers from "@/components/system/McpServers";
+import ModelsPanel from "@/components/system/ModelsPanel";
 import SetupGuide from "@/components/system/SetupGuide";
 
 /** System mode (§12) — setup guide, health, MCP servers, integrations, models. */
