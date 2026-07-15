@@ -96,17 +96,15 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="glass fixed inset-x-3 bottom-3 z-20 flex items-center justify-around px-2 py-2 md:inset-x-auto md:left-4 md:top-4 md:bottom-4 md:w-56 md:flex-col md:items-stretch md:justify-start md:px-4 md:py-6">
+    <aside className="fixed inset-x-3 bottom-3 z-20 flex items-center justify-around border border-line bg-panel px-2 py-2 md:inset-x-auto md:left-4 md:top-4 md:bottom-4 md:w-56 md:flex-col md:items-stretch md:justify-start md:px-4 md:py-6">
       <Link
         href="/dashboard"
         className="mb-0 hidden items-center gap-3 px-2 md:mb-8 md:flex"
         aria-label="Argus home"
       >
         <span className="relative flex h-9 w-9 items-center justify-center">
-          {/* Static glow. Any perpetual animation inside a backdrop-filter
-              layer forces the backdrop re-blur every frame (~55% of a GPU
-              core, measured idle) — so nothing in the glass rail animates
-              at rest. breathe stays for transient use (chat thinking dots). */}
+          {/* Static glow — nothing in the rail animates at rest (§10: only the
+              blink cursor may loop). Sidebar is replaced by TopBar in Phase B. */}
           <span className="absolute -inset-1 rounded-full bg-[radial-gradient(circle,rgba(167,139,250,0.85),rgba(217,70,239,0.4)_55%,transparent_72%)] opacity-70" />
           <span className="relative h-5 w-5 rounded-full bg-gradient-to-br from-primary-soft to-accent shadow-[0_0_12px_rgba(167,139,250,0.8)]" />
         </span>

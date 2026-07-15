@@ -13,7 +13,7 @@ export default function ChatDock() {
   return (
     <div className="fixed bottom-20 right-4 z-30 md:bottom-6 md:right-6">
       {open && (
-        <div className="glass animate-msg-in mb-3 flex h-[28rem] w-[min(22rem,calc(100vw-2rem))] flex-col p-3">
+        <div className="animate-msg-in mb-3 flex h-[28rem] w-[min(22rem,calc(100vw-2rem))] flex-col border border-line bg-panel p-3">
           <ChatPanel variant="dock" />
         </div>
       )}

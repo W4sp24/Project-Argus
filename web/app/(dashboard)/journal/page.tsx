@@ -89,8 +89,8 @@ export default function JournalPage() {
                 setProjectFilter(project.slug);
                 setSelectedPath(project.path);
               }}
-              className={`glass glass-hover w-full p-4 text-left ${
-                projectFilter === project.slug ? "border-primary-soft/40" : ""
+              className={`w-full border bg-panel p-4 text-left transition-colors hover:border-lineHi ${
+                projectFilter === project.slug ? "border-[var(--ac)]" : "border-line"
               }`}
             >
               <p className="truncate font-display text-sm font-medium">{project.title}</p>
@@ -127,8 +127,8 @@ export default function JournalPage() {
                   <button
                     key={session.path}
                     onClick={() => setSelectedPath(session.path)}
-                    className={`glass glass-hover flex w-full items-center justify-between gap-4 px-4 py-3 text-left ${
-                      selectedPath === session.path ? "border-primary-soft/40" : ""
+                    className={`flex w-full items-center justify-between gap-4 border bg-panel px-4 py-3 text-left transition-colors hover:border-lineHi ${
+                      selectedPath === session.path ? "border-[var(--ac)]" : "border-line"
                     }`}
                   >
                     <span className="flex min-w-0 items-center gap-3">

@@ -360,7 +360,7 @@ export default function StudyPage() {
               <button
                 key={exam.id}
                 onClick={() => startQuiz(exam.id)}
-                className="glass glass-hover flex w-full items-center justify-between px-4 py-3 text-left"
+                className="flex w-full items-center justify-between border border-line bg-panel px-4 py-3 text-left transition-colors hover:border-lineHi"
               >
                 <span className="min-w-0">
                   <span className="block truncate text-sm">{exam.title}</span>

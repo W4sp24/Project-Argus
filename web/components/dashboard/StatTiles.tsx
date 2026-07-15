@@ -19,7 +19,7 @@ function Tile({ href, label, value, unit }: { href: string; label: string; value
   return (
     <Link
       href={href}
-      className="glass glass-hover flex min-w-0 flex-col gap-1 px-4 py-3"
+      className="flex min-w-0 flex-col gap-1 border border-line bg-panel px-4 py-3 transition-colors hover:border-lineHi"
       prefetch={true}
     >
       <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">

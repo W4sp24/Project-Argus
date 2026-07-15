@@ -32,7 +32,7 @@ export default function DashboardPage() {
       <header className="mb-8 animate-rise">
         <p className="eyebrow mb-2">{`// DASHBOARD · ${formatToday()}`}</p>
         <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">
-          {greeting()}, <span className="gradient-text">Ethan</span>.
+          {greeting()}, <span className="text-[var(--ac)]">Ethan</span>.
         </h1>
       </header>
 

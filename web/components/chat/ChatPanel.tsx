@@ -44,7 +44,7 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
   const compact = variant === "dock";
 
   return (
-    <div className={`flex min-h-0 flex-1 flex-col ${compact ? "" : "glass"}`}>
+    <div className={`flex min-h-0 flex-1 flex-col ${compact ? "" : "border border-line bg-panel"}`}>
       <div className={`min-h-0 flex-1 space-y-3 overflow-y-auto ${compact ? "pr-1" : "p-5"}`}>
         {messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 py-4">
@@ -80,14 +80,9 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
               }`}
             >
               {message.pending ? (
-                <span className="flex gap-1.5 py-1" aria-label="Argus is thinking">
-                  {[0, 1, 2].map((dot) => (
-                    <span
-                      key={dot}
-                      className="h-1.5 w-1.5 animate-breathe rounded-full bg-primary-soft"
-                      style={{ animationDelay: `${dot * 0.2}s` }}
-                    />
-                  ))}
+                <span className="font-mono text-[12px] text-ink-muted" aria-label="Argus is thinking">
+                  processing_query
+                  <span className="animate-blink text-[var(--ac)]">▊</span>
                 </span>
               ) : (
                 <span className="whitespace-pre-wrap">

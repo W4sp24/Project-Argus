@@ -8,7 +8,7 @@ export default function ChatPage() {
       <header className="mb-4 animate-rise">
         <p className="eyebrow mb-2">{`// CHAT`}</p>
         <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">
-          Ask your <span className="gradient-text">second brain</span>
+          Ask your <span className="text-[var(--ac)]">second brain</span>
         </h1>
       </header>
       <ChatPanel variant="full" />
