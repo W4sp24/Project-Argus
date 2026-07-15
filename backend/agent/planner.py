@@ -131,7 +131,14 @@ def _planner_context(settings: Settings, conn: sqlite3.Connection, instruction: 
 
 async def run_planner(settings: Settings, instruction: str) -> int:
     """Run one planning session; returns the number of suggestions created."""
-    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, create_sdk_mcp_server
+    from claude_agent_sdk import (
+        ClaudeAgentOptions,
+        ClaudeSDKClient,
+        ResultMessage,
+        create_sdk_mcp_server,
+    )
+
+    from backend.usage import record_result_usage
 
     conn = connect(settings.db_path)
     init_schema(conn)
@@ -152,8 +159,10 @@ async def run_planner(settings: Settings, instruction: str) -> int:
         )
         async with ClaudeSDKClient(options=options) as client:
             await client.query(_planner_context(settings, conn, instruction))
-            async for _message in client.receive_response():
-                pass  # proposals happen via tools; the text summary is discarded
+            async for message in client.receive_response():
+                # Proposals happen via tools; the text summary is discarded.
+                if isinstance(message, ResultMessage):
+                    record_result_usage(settings.db_path, "planner", message, model=MODEL)
         return len(queue.pending(conn)) - before
     finally:
         conn.close()

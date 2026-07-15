@@ -139,7 +139,7 @@ def agent_composer(data: BriefingData) -> str:
         "events or tasks; keep every date exactly as given.\n\n"
         f"FACTS:\n{render_briefing(data)}\n\nDATA (JSON):\n{data.model_dump_json(indent=1)}"
     )
-    text = asyncio.run(agent_generate(prompt)).strip()
+    text = asyncio.run(agent_generate(prompt, feature="briefing")).strip()
     if not text:
         raise RuntimeError("composer returned empty text")
     return text
