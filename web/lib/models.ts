@@ -22,8 +22,8 @@ export interface ModelEntry {
 
 /** Offline fallback — mirrors backend/config.py's DEFAULT_MODELS. */
 export const BUILTIN_MODELS: ModelEntry[] = [
-  { name: "claude-sonnet-4", kind: "api" }, // default
-  { name: "claude-haiku", kind: "api" },
+  { name: "claude-sonnet-5", kind: "api" }, // default
+  { name: "claude-haiku-4-5-20251001", kind: "api" },
 ];
 
 export const DEFAULT_MODEL = BUILTIN_MODELS[0].name;

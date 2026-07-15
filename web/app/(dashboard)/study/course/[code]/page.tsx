@@ -48,7 +48,7 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
           disabled
           className="ml-auto border border-line px-2.5 py-1.5 font-mono text-[11px] text-ink-faint"
         >
-          claude-sonnet-4 ▾
+          claude-sonnet-5 ▾
         </button>
       </header>
 

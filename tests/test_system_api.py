@@ -38,9 +38,9 @@ def test_doctor_endpoint_reports_checks(client: TestClient) -> None:
 def test_models_defaults(client: TestClient) -> None:
     models = client.get("/api/models").json()
     by_name = {model["name"]: model for model in models}
-    assert by_name["claude-sonnet-4"]["default"] is True
-    assert by_name["claude-sonnet-4"]["builtin"] is True
-    assert by_name["claude-haiku"]["provider"] == "anthropic"
+    assert by_name["claude-sonnet-5"]["default"] is True
+    assert by_name["claude-sonnet-5"]["builtin"] is True
+    assert by_name["claude-haiku-4-5-20251001"]["provider"] == "anthropic"
 
 
 def test_add_and_delete_local_model(client: TestClient, vault: Path) -> None:
@@ -69,7 +69,7 @@ def test_add_model_validation(client: TestClient) -> None:
     assert client.post("/api/models", json=ok).status_code == 409, "duplicate name"
     assert (
         client.post(
-            "/api/models", json={"name": "claude-sonnet-4", "endpoint": "http://x/v1"}
+            "/api/models", json={"name": "claude-sonnet-5", "endpoint": "http://x/v1"}
         ).status_code
         == 409
     ), "cannot shadow a built-in"
@@ -84,7 +84,7 @@ def test_add_model_validation(client: TestClient) -> None:
 
 
 def test_delete_model_guards(client: TestClient) -> None:
-    assert client.delete("/api/models/claude-sonnet-4").status_code == 400, "builtin protected"
+    assert client.delete("/api/models/claude-sonnet-5").status_code == 400, "builtin protected"
     assert client.delete("/api/models/ghost").status_code == 404
 
 
@@ -95,7 +95,7 @@ def test_chat_agent_model_resolution(vault: Path) -> None:
     settings = Settings(_vault_path=vault)
     agent = ChatAgent(settings)
     assert agent._resolve_model(None) == MODEL, "omitting model keeps today's behavior"
-    assert agent._resolve_model("claude-haiku") == "claude-haiku"
+    assert agent._resolve_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5-20251001"
     with pytest.raises(RuntimeError, match="unknown model"):
         agent._resolve_model("ghost")
 

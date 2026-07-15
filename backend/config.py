@@ -20,16 +20,16 @@ DEFAULT_BACKEND_PORT = 8000
 # persisted in ``.argus/models.json`` (the argus config/db dir, not the vault).
 
 DEFAULT_MODELS: tuple[dict, ...] = (
-    {"name": "claude-sonnet-4", "provider": "anthropic", "default": True},
-    {"name": "claude-haiku", "provider": "anthropic", "default": False},
+    {"name": "claude-sonnet-5", "provider": "anthropic", "default": True},
+    {"name": "claude-haiku-4-5-20251001", "provider": "anthropic", "default": False},
 )
 
 # Static USD per **million** tokens, for the usage dashboard's cost estimate
 # (redesign §14). Estimates only — real billing is the provider's business.
 MODEL_RATES: dict[str, dict[str, float]] = {
-    "claude-opus-4-8": {"input": 15.0, "output": 75.0},
-    "claude-sonnet-4": {"input": 3.0, "output": 15.0},
-    "claude-haiku": {"input": 0.80, "output": 4.0},
+    "claude-opus-4-8": {"input": 15.0, "output": 75.0},  # planner/generate (agent/*.py)
+    "claude-sonnet-5": {"input": 3.0, "output": 15.0},
+    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
 }
 FALLBACK_RATE = MODEL_RATES["claude-opus-4-8"]  # today's agent model (runtime.py)
 
