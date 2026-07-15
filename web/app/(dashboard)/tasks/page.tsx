@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
 import { fetcher } from "@/lib/api";
 
@@ -45,7 +45,7 @@ export default function TasksPage() {
         {COLUMNS.map((column) => {
           const tasks = board?.[column.key] ?? [];
           return (
-            <GlassCard key={column.key} label={`${column.label.toUpperCase()} · ${tasks.length}`}>
+            <Panel key={column.key} label={`${column.label.toUpperCase()} · ${tasks.length}`}>
               {tasks.length === 0 && <p className="text-sm text-ink-faint">Empty.</p>}
               <ul className="space-y-2.5">
                 {tasks.map((task, i) => (
@@ -64,7 +64,7 @@ export default function TasksPage() {
                   </li>
                 ))}
               </ul>
-            </GlassCard>
+            </Panel>
           );
         })}
       </div>

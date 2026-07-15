@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import { HeatmapDay, useHeatmap } from "@/lib/api";
 
 const METRICS = ["all", "tasks", "notes", "study", "captures"] as const;
@@ -45,7 +45,7 @@ export default function Heatmap() {
   }, [data, metric]);
 
   return (
-    <GlassCard label="ACTIVITY" title="A year at a glance">
+    <Panel label="ACTIVITY" title="A year at a glance">
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
         {METRICS.map((option) => (
           <button
@@ -98,6 +98,6 @@ export default function Heatmap() {
           ? `${hover.date}: ${hover.tasks} tasks · ${hover.notes} notes · ${hover.study} study · ${hover.captures} captures`
           : "hover a day for the breakdown"}
       </p>
-    </GlassCard>
+    </Panel>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
 import { fetcher } from "@/lib/api";
 
@@ -95,17 +95,17 @@ export default function ReviewPage() {
       )}
 
       {suggestions && suggestions.length === 0 && (
-        <GlassCard label="QUEUE" title="Nothing pending">
+        <Panel label="QUEUE" title="Nothing pending">
           <p className="text-sm text-ink-muted">
             Ask Argus to <span className="font-mono text-xs text-primary-soft">/plan</span> your
             day in Chat, or import a syllabus — proposals land here.
           </p>
-        </GlassCard>
+        </Panel>
       )}
 
       <div className="space-y-4">
         {(suggestions ?? []).map((suggestion) => (
-          <GlassCard key={suggestion.id} className="animate-rise">
+          <Panel key={suggestion.id} className="animate-rise">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <span
                 className={`rounded-full px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${KIND_STYLE[suggestion.kind]}`}
@@ -176,7 +176,7 @@ export default function ReviewPage() {
                 Dismiss
               </button>
             </div>
-          </GlassCard>
+          </Panel>
         ))}
       </div>
     </>

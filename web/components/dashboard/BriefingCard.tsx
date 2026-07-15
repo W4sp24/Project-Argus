@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import useSWR from "swr";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import { fetcher } from "@/lib/api";
 
 interface Briefing {
@@ -73,7 +73,7 @@ export default function BriefingCard() {
   }
 
   return (
-    <GlassCard label="BRIEFING" title="Your morning briefing">
+    <Panel label="BRIEFING" title="Your morning briefing">
       {briefing ? (
         <>
           {!collapsed && <BriefingBody markdown={briefing.markdown} />}
@@ -111,6 +111,6 @@ export default function BriefingCard() {
       ) : (
         <p className="text-sm text-ink-faint">Loading…</p>
       )}
-    </GlassCard>
+    </Panel>
   );
 }

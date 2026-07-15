@@ -1,6 +1,6 @@
 "use client";
 
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 
 /** Route-level error boundary: any page crash lands on a glass card, not a white screen. */
 export default function RouteError({
@@ -12,7 +12,7 @@ export default function RouteError({
 }) {
   return (
     <div className="flex min-h-[60vh] items-center justify-center p-6">
-      <GlassCard label="ERROR" title="Something broke" className="max-w-md">
+      <Panel label="ERROR" title="Something broke" className="max-w-md">
         <p className="text-sm text-ink-muted">
           {error.message || "An unexpected error occurred while rendering this page."}
         </p>
@@ -25,7 +25,7 @@ export default function RouteError({
         >
           Try again
         </button>
-      </GlassCard>
+      </Panel>
     </div>
   );
 }

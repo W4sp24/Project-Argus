@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import {
   useJournalNote,
   useJournalProjects,
@@ -60,7 +60,7 @@ export default function JournalPage() {
       </header>
 
       {error && (
-        <GlassCard label="OFFLINE" title="Can't reach the journal">
+        <Panel label="OFFLINE" title="Can't reach the journal">
           <p className="text-sm text-ink-muted">
             Start the backend with{" "}
             <span className="font-mono text-xs text-primary-soft">
@@ -68,7 +68,7 @@ export default function JournalPage() {
             </span>
             .
           </p>
-        </GlassCard>
+        </Panel>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
@@ -111,11 +111,11 @@ export default function JournalPage() {
         <div className="space-y-4">
           <p className="eyebrow">{`// SESSIONS`}</p>
           {sessions && sessions.length === 0 && (
-            <GlassCard label="EMPTY" title="No sessions yet">
+            <Panel label="EMPTY" title="No sessions yet">
               <p className="text-sm text-ink-muted">
                 End a Claude Code session and its stub appears here automatically.
               </p>
-            </GlassCard>
+            </Panel>
           )}
           {Object.entries(sessionsByDay).map(([day, daySessions]) => (
             <div key={day}>
@@ -160,7 +160,7 @@ export default function JournalPage() {
           ))}
 
           {note && (
-            <GlassCard label="NOTE" className="animate-rise">
+            <Panel label="NOTE" className="animate-rise">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <p className="min-w-0 truncate font-mono text-[11px] text-ink-faint">{note.path}</p>
                 <a
@@ -173,7 +173,7 @@ export default function JournalPage() {
               <article className="prose-journal max-w-none text-sm leading-relaxed text-ink-muted">
                 <ReactMarkdown>{note.markdown.replace(/^---[\s\S]*?---/, "")}</ReactMarkdown>
               </article>
-            </GlassCard>
+            </Panel>
           )}
         </div>
       </div>

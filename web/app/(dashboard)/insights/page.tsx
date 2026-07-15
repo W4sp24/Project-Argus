@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import useSWR from "swr";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
 import ChartSkeleton from "@/components/charts/ChartSkeleton";
 import { SERIES } from "@/components/charts/chartTheme";
@@ -111,11 +111,11 @@ export default function InsightsPage() {
       <section className="mb-6">
         <p className="eyebrow mb-3">{`// DEVELOPMENT ACTIVITY`}</p>
         <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-          <GlassCard title={`Coding sessions — last ${DAYS_SHOWN} days`}>
+          <Panel title={`Coding sessions — last ${DAYS_SHOWN} days`}>
             <div className="h-56">
               <BarChartPanel data={activity} dataKey="sessions" color={BAR_COLOR} />
             </div>
-          </GlassCard>
+          </Panel>
 
           <div className="grid grid-cols-3 gap-4 lg:grid-cols-1">
             {[
@@ -123,12 +123,12 @@ export default function InsightsPage() {
               { label: "PROJECTS · 14D", value: projectsTouched },
               { label: "FILES CHANGED · 14D", value: filesChanged },
             ].map((stat) => (
-              <GlassCard key={stat.label} className="flex flex-col justify-center">
+              <Panel key={stat.label} className="flex flex-col justify-center">
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
                   {stat.label}
                 </p>
                 <p className="mt-1 font-display text-3xl font-semibold text-ink">{stat.value}</p>
-              </GlassCard>
+              </Panel>
             ))}
           </div>
         </div>
@@ -137,14 +137,14 @@ export default function InsightsPage() {
       <section className="mb-6">
         <p className="eyebrow mb-3">{`// LIFE METRICS`}</p>
         <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-          <GlassCard title="Tasks completed — last 14 days">
+          <Panel title="Tasks completed — last 14 days">
             <div className="h-56">
               <BarChartPanel data={completion} dataKey="completed" color={SERIES.violet} />
             </div>
-          </GlassCard>
+          </Panel>
 
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-1">
-            <GlassCard className="flex flex-col justify-center">
+            <Panel className="flex flex-col justify-center">
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
                 STUDY STREAK
               </p>
@@ -152,21 +152,21 @@ export default function InsightsPage() {
                 {insights?.study.streak_days ?? "—"}
                 <span className="ml-1 text-base font-normal text-ink-muted">days</span>
               </p>
-            </GlassCard>
-            <GlassCard className="flex flex-col justify-center">
+            </Panel>
+            <Panel className="flex flex-col justify-center">
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
                 OVERDUE OPEN
               </p>
               <p className="mt-1 font-display text-3xl font-semibold text-ink">
                 {insights ? insights.overdue.reduce((sum, row) => sum + row.count, 0) : "—"}
               </p>
-            </GlassCard>
+            </Panel>
           </div>
         </div>
       </section>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <GlassCard label="CALENDAR" title="Calendar load vs focus time">
+        <Panel label="CALENDAR" title="Calendar load vs focus time">
           {insights && !insights.configured.gcal ? (
             <p className="text-sm text-ink-muted">
               Connect Google Calendar (
@@ -190,9 +190,9 @@ export default function InsightsPage() {
               </div>
             </>
           )}
-        </GlassCard>
+        </Panel>
 
-        <GlassCard label="OVERDUE" title="Overdue tasks by due date">
+        <Panel label="OVERDUE" title="Overdue tasks by due date">
           {overdue.length === 0 ? (
             <p className="text-sm text-ink-muted">Nothing overdue — inbox zero energy.</p>
           ) : (
@@ -200,9 +200,9 @@ export default function InsightsPage() {
               <BarChartPanel data={overdue} dataKey="count" color={SERIES.rose} />
             </div>
           )}
-        </GlassCard>
+        </Panel>
 
-        <GlassCard label="STUDY" title="Practice-exam scores">
+        <Panel label="STUDY" title="Practice-exam scores">
           {scores.length === 0 ? (
             <p className="text-sm text-ink-muted">
               Take a practice exam on the Study page and score trends per course appear here.
@@ -231,7 +231,7 @@ export default function InsightsPage() {
               </div>
             </>
           )}
-        </GlassCard>
+        </Panel>
       </div>
     </>
   );

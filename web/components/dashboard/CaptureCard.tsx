@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 
 export default function CaptureCard({ onCaptured }: { onCaptured?: () => void }) {
   const [capture, setCapture] = useState("");
@@ -24,7 +24,7 @@ export default function CaptureCard({ onCaptured }: { onCaptured?: () => void })
   }
 
   return (
-    <GlassCard label="CAPTURE" title="Quick capture">
+    <Panel label="CAPTURE" title="Quick capture">
       <form onSubmit={submitCapture} className="flex gap-2">
         <input
           value={capture}
@@ -41,6 +41,6 @@ export default function CaptureCard({ onCaptured }: { onCaptured?: () => void })
         </button>
       </form>
       {status && <p className="mt-3 font-mono text-[11px] text-primary-soft">{status}</p>}
-    </GlassCard>
+    </Panel>
   );
 }

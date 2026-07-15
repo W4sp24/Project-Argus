@@ -1,6 +1,6 @@
 "use client";
 
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import ChatPanel from "@/components/chat/ChatPanel";
 import ActivityFeed from "@/components/dashboard/ActivityFeed";
 import AgendaCard from "@/components/dashboard/AgendaCard";
@@ -49,9 +49,9 @@ export default function DashboardPage() {
         {/* Right rail: activity + chat dock */}
         <div className="flex min-w-0 flex-col gap-4">
           <ActivityFeed />
-          <GlassCard label="CHAT" title="Ask Argus" className="flex max-h-[32rem] min-h-[20rem] flex-col lg:sticky lg:top-4">
+          <Panel label="CHAT" title="Ask Argus" className="flex max-h-[32rem] min-h-[20rem] flex-col lg:sticky lg:top-4">
             <ChatPanel variant="dock" />
-          </GlassCard>
+          </Panel>
         </div>
       </div>
     </>

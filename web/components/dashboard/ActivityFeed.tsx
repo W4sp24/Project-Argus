@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import { fetcher, mutateJSON, useActivity } from "@/lib/api";
 
 const KIND_BADGE: Record<string, string> = {
@@ -33,7 +33,7 @@ export default function ActivityFeed() {
   }
 
   return (
-    <GlassCard label="RECENT" title="Latest activity">
+    <Panel label="RECENT" title="Latest activity">
       {!events && <p className="text-sm text-ink-faint">Loading…</p>}
       {events && events.length === 0 && <p className="text-sm text-ink-muted">All quiet.</p>}
       <ul className="divide-y divide-white/5">
@@ -65,6 +65,6 @@ export default function ActivityFeed() {
           </li>
         ))}
       </ul>
-    </GlassCard>
+    </Panel>
   );
 }

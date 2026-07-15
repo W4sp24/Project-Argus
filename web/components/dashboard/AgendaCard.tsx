@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import { fetcher, mutateJSON } from "@/lib/api";
 
 interface CalendarEvent {
@@ -132,7 +132,7 @@ export default function AgendaCard() {
   }
 
   return (
-    <GlassCard label="AGENDA" title="Schedule">
+    <Panel label="AGENDA" title="Schedule">
       {agenda && agenda.events.length === 0 && (
         <p className="mb-2 text-sm text-ink-muted">
           {agenda.configured.gcal ? "Nothing on the calendar today." : "Google Calendar not connected."}
@@ -223,6 +223,6 @@ export default function AgendaCard() {
         </ul>
       </div>
       {toast && <p className="mt-3 font-mono text-[11px] text-accent">{toast}</p>}
-    </GlassCard>
+    </Panel>
   );
 }

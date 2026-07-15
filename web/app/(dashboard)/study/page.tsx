@@ -2,7 +2,7 @@
 
 import { useRef, useState, type DragEvent } from "react";
 import useSWR from "swr";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
 import { fetcher } from "@/lib/api";
 
@@ -158,7 +158,7 @@ export default function StudyPage() {
           title={`Question ${current + 1} of ${quiz.questions.length}`}
           subtitle="Citations are revealed with your results."
         />
-        <GlassCard>
+        <Panel>
           <p className="mb-4 text-base text-ink">{question.q}</p>
           {question.options ? (
             <div className="grid gap-2">
@@ -219,7 +219,7 @@ export default function StudyPage() {
               </button>
             )}
           </div>
-        </GlassCard>
+        </Panel>
       </>
     );
   }
@@ -239,7 +239,7 @@ export default function StudyPage() {
         />
         <div className="space-y-3">
           {result.feedback.map((item, i) => (
-            <GlassCard key={i} className={item.correct ? "" : "border-accent/30"}>
+            <Panel key={i} className={item.correct ? "" : "border-accent/30"}>
               <p className="mb-2 text-sm text-ink">{item.q}</p>
               <p className="text-sm">
                 <span className={item.correct ? "text-signal" : "text-accent"}>
@@ -254,7 +254,7 @@ export default function StudyPage() {
                 <p className="mt-2 text-sm text-ink-muted">{item.explanation}</p>
               )}
               <p className="mt-2 font-mono text-[11px] text-primary-soft">{item.citation}</p>
-            </GlassCard>
+            </Panel>
           ))}
           <button
             onClick={() => setResult(null)}
@@ -284,7 +284,7 @@ export default function StudyPage() {
 
       <div className="grid gap-4 md:grid-cols-2">
         {(courses ?? []).map((course) => (
-          <GlassCard
+          <Panel
             key={course.code}
             label={course.code}
             title={course.title}
@@ -340,15 +340,15 @@ export default function StudyPage() {
                 {busyAction === `exam-${course.code}` ? "Generating…" : "Practice exam"}
               </button>
             </div>
-          </GlassCard>
+          </Panel>
         ))}
         {courses && courses.length === 0 && (
-          <GlassCard label="EMPTY" title="No courses yet">
+          <Panel label="EMPTY" title="No courses yet">
             <p className="text-sm text-ink-muted">
               Create a folder like <span className="font-mono text-xs">15-Courses/CS201/</span>{" "}
               with a <span className="font-mono text-xs">course.md</span> in your vault.
             </p>
-          </GlassCard>
+          </Panel>
         )}
       </div>
 
