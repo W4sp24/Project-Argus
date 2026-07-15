@@ -2,7 +2,7 @@
 
 import Panel from "@/components/Panel";
 
-/** Route-level error boundary: any page crash lands on a glass card, not a white screen. */
+/** Route-level error boundary: any page crash lands on a bordered panel, not a white screen. */
 export default function RouteError({
   error,
   reset,
@@ -21,7 +21,7 @@ export default function RouteError({
         )}
         <button
           onClick={reset}
-          className="mt-4 rounded-xl bg-gradient-to-r from-primary to-accent px-4 py-2 font-display text-sm text-white"
+          className="mt-4 border border-line bg-[var(--ac-bg)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi"
         >
           Try again
         </button>

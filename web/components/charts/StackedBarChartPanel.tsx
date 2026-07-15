@@ -23,7 +23,7 @@ export default function StackedBarChartPanel({ data }: StackedBarChartPanelProps
         <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
         <XAxis dataKey="day" tick={AXIS_TICK} tickLine={false} axisLine={false} />
         <YAxis unit="h" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-        <Tooltip cursor={{ fill: "rgba(139,92,246,0.08)" }} contentStyle={TOOLTIP_STYLE} />
+        <Tooltip cursor={{ fill: "rgba(167,139,250,0.08)" }} contentStyle={TOOLTIP_STYLE} />
         <Bar
           dataKey="events"
           stackId="day"
@@ -38,7 +38,6 @@ export default function StackedBarChartPanel({ data }: StackedBarChartPanelProps
           fill={SERIES.cyan}
           stroke={SURFACE}
           strokeWidth={2}
-          radius={[4, 4, 0, 0]}
           maxBarSize={22}
         />
       </BarChart>

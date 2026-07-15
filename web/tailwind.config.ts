@@ -8,7 +8,6 @@ const config: Config = {
     // `full` stays: circles (logo dot, round task checkboxes, avatar orb) are a
     // deliberate motif in the spec, distinct from rounded panel corners.
     borderRadius: {
-      glass: "0px", // LEGACY — remove in Phase H
       full: "9999px",
     },
     extend: {
@@ -34,20 +33,8 @@ const config: Config = {
           code: "#34d399",
           system: "#fbbf24",
         },
-        // LEGACY — remove in Phase H. Existing components still reference these
-        // names; Tailwind silently drops unknown classes, so removing the aliases
-        // before the full re-skin would break every page with zero build errors.
-        primary: {
-          DEFAULT: "#a78bfa",
-          soft: "#a78bfa",
-          deep: "#7c5ce0",
-        },
-        accent: "#e879f9",
-        signal: "#22d3ee",
-        nebula: "#0c0916",
       },
       fontFamily: {
-        display: ["var(--font-body)", "sans-serif"], // LEGACY — points at Inter; remove in Phase H
         body: ["var(--font-body)", "sans-serif"],
         mono: ["var(--font-mono)", "monospace"],
       },

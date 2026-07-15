@@ -127,7 +127,7 @@ export default function InsightsPage() {
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
                   {stat.label}
                 </p>
-                <p className="mt-1 font-display text-3xl font-semibold text-ink">{stat.value}</p>
+                <p className="mt-1 font-body text-3xl font-semibold text-ink">{stat.value}</p>
               </Panel>
             ))}
           </div>
@@ -148,7 +148,7 @@ export default function InsightsPage() {
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
                 STUDY STREAK
               </p>
-              <p className="mt-1 font-display text-3xl font-semibold text-ink">
+              <p className="mt-1 font-body text-3xl font-semibold text-ink">
                 {insights?.study.streak_days ?? "—"}
                 <span className="ml-1 text-base font-normal text-ink-muted">days</span>
               </p>
@@ -157,7 +157,7 @@ export default function InsightsPage() {
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
                 OVERDUE OPEN
               </p>
-              <p className="mt-1 font-display text-3xl font-semibold text-ink">
+              <p className="mt-1 font-body text-3xl font-semibold text-ink">
                 {insights ? insights.overdue.reduce((sum, row) => sum + row.count, 0) : "—"}
               </p>
             </Panel>
@@ -170,7 +170,7 @@ export default function InsightsPage() {
           {insights && !insights.configured.gcal ? (
             <p className="text-sm text-ink-muted">
               Connect Google Calendar (
-              <span className="font-mono text-xs text-primary-soft">argus connect gcal</span>) to
+              <span className="font-mono text-xs text-[var(--ac)]">argus connect gcal</span>) to
               see meeting load against remaining focus hours.
             </p>
           ) : (
