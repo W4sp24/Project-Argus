@@ -14,12 +14,17 @@ function localToday(): string {
 
 test("dashboard renders all widgets", async ({ page }) => {
   await page.goto("/dashboard");
-  await expect(page.getByText("Your morning briefing")).toBeVisible();
   await expect(page.getByText("due today")).toBeVisible(); // stat tile
-  await expect(page.getByText("Schedule")).toBeVisible(); // agenda
+  await expect(page.getByText("ACTIVITY.HEATMAP")).toBeVisible();
   await expect(page.getByTestId("heatmap")).toBeVisible();
-  await expect(page.getByText("Latest activity")).toBeVisible();
+  await expect(page.getByText("PLANNER.TIMELINE")).toBeVisible();
+  await expect(page.getByText("TASKS.DUE")).toBeVisible();
+  await expect(page.getByText("INGEST")).toBeVisible();
   await expect(page.getByText("Ask Argus")).toBeVisible(); // chat dock card
+  await expect(page.getByText("ARGUS.AGENT")).toBeVisible(); // restyled briefing card
+  await expect(page.getByText("TOKENS.CLAUDE")).toBeVisible(); // preview panel
+  await expect(page.getByText("ACTIVITY.FEED")).toBeVisible();
+  await expect(page.getByText("INSIGHTS.14D")).toBeVisible();
 });
 
 test("heatmap counts the seeded completion", async ({ page }) => {
