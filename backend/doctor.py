@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from backend.config import Settings
 
-REQUIRED_TABLES = {"suggestions", "tasks_cache", "exams", "attempts", "audit"}
+REQUIRED_TABLES = {"suggestions", "tasks_cache", "exams", "attempts", "audit", "token_usage"}
 
 
 class Check(BaseModel):

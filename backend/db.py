@@ -59,6 +59,16 @@ CREATE TABLE IF NOT EXISTS attempts (
     answers_json TEXT NOT NULL,
     weak_topics  TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS token_usage (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT NOT NULL DEFAULT (datetime('now')),
+    feature       TEXT NOT NULL,
+    session_id    TEXT NOT NULL,
+    model         TEXT NOT NULL DEFAULT '',
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
