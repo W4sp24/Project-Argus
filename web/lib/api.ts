@@ -57,6 +57,15 @@ export function useNotes() {
   return useSWR<NoteInfo[]>("/api/notes", fetcher);
 }
 
+export interface VaultInfo {
+  name: string;
+}
+
+/** Vault identity — used to build `obsidian://` deep links client-side. */
+export function useVault() {
+  return useSWR<VaultInfo>("/api/vault", fetcher);
+}
+
 export interface JournalProject {
   slug: string;
   title: string;
