@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import FocusTimer from "@/components/FocusTimer";
 import { type Mode, useMode } from "@/lib/mode";
 import { useUi } from "@/lib/ui";
@@ -41,6 +41,45 @@ function Clock() {
 export default function TopBar() {
   const { mode, setMode } = useMode();
   const { toggleDrawer, setNoteOpen, setPaletteOpen } = useUi();
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // APG roving-tabindex tab list: only the active tab is in the Tab order;
+  // arrow keys move focus (and activate, per the standard tabs pattern —
+  // automatic activation), Home/End jump to the ends, Enter/Space activate
+  // explicitly.
+  function activateTab(index: number) {
+    const clamped = (index + TABS.length) % TABS.length;
+    setMode(TABS[clamped].mode);
+    tabRefs.current[clamped]?.focus();
+  }
+
+  function onTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    switch (event.key) {
+      case "ArrowRight":
+        event.preventDefault();
+        activateTab(index + 1);
+        break;
+      case "ArrowLeft":
+        event.preventDefault();
+        activateTab(index - 1);
+        break;
+      case "Home":
+        event.preventDefault();
+        activateTab(0);
+        break;
+      case "End":
+        event.preventDefault();
+        activateTab(TABS.length - 1);
+        break;
+      case "Enter":
+      case " ":
+        event.preventDefault();
+        setMode(TABS[index].mode);
+        break;
+      default:
+        break;
+    }
+  }
 
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-void">
@@ -63,15 +102,20 @@ export default function TopBar() {
           aria-label="Mode"
           className="flex border border-line font-mono text-[11px] uppercase tracking-[0.14em]"
         >
-          {TABS.map(({ mode: tabMode, label, short }) => {
+          {TABS.map(({ mode: tabMode, label, short }, index) => {
             const active = mode === tabMode;
             return (
               <button
                 key={tabMode}
+                ref={(el) => {
+                  tabRefs.current[index] = el;
+                }}
                 type="button"
                 role="tab"
                 aria-selected={active}
+                tabIndex={active ? 0 : -1}
                 onClick={() => setMode(tabMode)}
+                onKeyDown={(event) => onTabKeyDown(event, index)}
                 className={`border-r border-line px-2.5 py-1.5 transition-colors last:border-r-0 md:px-3 ${
                   active
                     ? "bg-[var(--ac-bg)] text-[var(--ac)] shadow-[inset_0_-2px_0_var(--ac)]"
