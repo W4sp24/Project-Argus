@@ -134,20 +134,38 @@ def create_app(
 
         return VaultIndex(resolved.db_path.parent / "chroma")
 
-    def _default_generator() -> Callable:
+    def _default_generator(feature: str) -> Callable:
+        """agent_generate bound to a feature label + db so usage rows attribute."""
         from backend.agent.generate import agent_generate
 
-        return agent_generate
+        def _generate(prompt: str):
+            return agent_generate(prompt, feature=feature, db_path=resolved.db_path)
+
+        return _generate
 
     from backend.study.api import build_study_router
 
     app.include_router(
         build_study_router(
             resolved,
-            generator or _default_generator(),
+            generator or _default_generator("study"),
             index_factory or _default_index_factory,
         )
     )
+
+    from backend.ingest_api import build_ingest_router
+
+    app.include_router(
+        build_ingest_router(
+            resolved,
+            generator or _default_generator("ingest"),
+            index_factory or _default_index_factory,
+        )
+    )
+
+    from backend.system_api import build_system_router
+
+    app.include_router(build_system_router(resolved))
 
     from backend.tasks.api import build_tasks_router
 
@@ -179,6 +197,9 @@ def create_app(
     async def ws_chat(websocket: WebSocket) -> None:
         """Bridge agent streaming deltas to the browser.
 
+        Frames in: {message, model?} — ``model`` (a registry name, §7) is
+        optional and flows through to runners that accept it; runners with
+        the legacy single-argument signature keep working.
         Frames out: {type: "delta", text} ... {type: "done"} | {type: "error", detail}.
         """
         await websocket.accept()
@@ -187,11 +208,19 @@ def create_app(
             while True:
                 payload = await websocket.receive_json()
                 message = str(payload.get("message", "")).strip()
+                model = str(payload.get("model") or "").strip() or None
                 if not message:
                     await websocket.send_json({"type": "error", "detail": "empty message"})
                     continue
                 try:
-                    async for delta in runner(message):
+                    if model is not None:
+                        try:
+                            stream = runner(message, model)
+                        except TypeError:  # injected runner without model support
+                            stream = runner(message)
+                    else:
+                        stream = runner(message)
+                    async for delta in stream:
                         await websocket.send_json({"type": "delta", "text": delta})
                     await websocket.send_json({"type": "done"})
                 except Exception as exc:  # agent errors must reach the UI, not kill the socket
