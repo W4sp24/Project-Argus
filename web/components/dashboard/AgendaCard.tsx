@@ -3,6 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
+import { useToast } from "@/components/Toast";
 import { fetcher, mutateJSON } from "@/lib/api";
 
 interface CalendarEvent {
@@ -48,12 +49,7 @@ export default function AgendaCard() {
   const { data: agenda, mutate } = useSWR<Agenda>("/api/agenda", fetcher);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [toast, setToast] = useState<string | null>(null);
-
-  function flash(message: string) {
-    setToast(message);
-    setTimeout(() => setToast(null), 4000);
-  }
+  const { show: flash } = useToast();
 
   async function withRawLine(
     task: AgendaTask,
@@ -222,7 +218,6 @@ export default function AgendaCard() {
           })}
         </ul>
       </div>
-      {toast && <p className="mt-3 font-mono text-[11px] text-accent">{toast}</p>}
     </Panel>
   );
 }
