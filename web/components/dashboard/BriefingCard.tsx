@@ -16,7 +16,7 @@ function BriefingBody({ markdown }: { markdown: string }) {
   const bold = (text: string) =>
     text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
       i % 2 === 1 ? (
-        <strong key={i} className="font-display text-primary-soft">
+        <strong key={i} className="font-medium text-ink-bright">
           {part}
         </strong>
       ) : (
@@ -24,14 +24,14 @@ function BriefingBody({ markdown }: { markdown: string }) {
       ),
     );
   return (
-    <div className="space-y-1.5 text-sm text-ink-muted">
+    <div className="space-y-1.5 text-[13.5px] leading-relaxed text-ink-muted">
       {markdown.split("\n").map((line, i) => {
         const trimmed = line.trim();
         if (!trimmed) return null;
         if (trimmed.startsWith("- ")) {
           return (
             <p key={i} className="flex items-baseline gap-2 pl-1">
-              <span className="text-ink-faint">•</span>
+              <span className="text-ink-faint">·</span>
               <span>{bold(trimmed.slice(2))}</span>
             </p>
           );
@@ -42,6 +42,7 @@ function BriefingBody({ markdown }: { markdown: string }) {
   );
 }
 
+/** ARGUS.AGENT (§4 General, right rail) — briefing summary + actions, restyled BriefingCard. */
 export default function BriefingCard() {
   const {
     data: briefing,
@@ -73,37 +74,34 @@ export default function BriefingCard() {
   }
 
   return (
-    <Panel label="BRIEFING" title="Your morning briefing">
+    <Panel label="ARGUS.AGENT">
       {briefing ? (
         <>
           {!collapsed && <BriefingBody markdown={briefing.markdown} />}
-          <p className="mt-3 font-mono text-[11px] text-ink-faint">
+          <p className="mt-3 font-mono text-[10px] text-ink-faint">
             written to {briefing.path} ·{" "}
-            <button
-              onClick={toggleCollapsed}
-              className="text-primary-soft underline-offset-2 hover:underline"
-            >
+            <button onClick={toggleCollapsed} className="text-[var(--ac)] underline-offset-2 hover:underline">
               {collapsed ? "expand" : "collapse"}
             </button>{" "}
             ·{" "}
             <button
               onClick={generateBriefing}
               disabled={generating}
-              className="text-primary-soft underline-offset-2 hover:underline disabled:opacity-40"
+              className="text-[var(--ac)] underline-offset-2 hover:underline disabled:opacity-40"
             >
               {generating ? "composing…" : "run again"}
             </button>
           </p>
         </>
       ) : briefingMissing ? (
-        <div className="flex flex-wrap items-center gap-4">
-          <p className="text-sm text-ink-muted">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-[13px] text-ink-muted">
             No briefing yet today — Argus writes one into your daily note at 07:00, or on demand.
           </p>
           <button
             onClick={generateBriefing}
             disabled={generating}
-            className="shrink-0 rounded-xl bg-gradient-to-r from-primary to-accent px-4 py-2 font-display text-sm text-white disabled:opacity-40"
+            className="shrink-0 border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
           >
             {generating ? "Composing…" : "Generate now"}
           </button>

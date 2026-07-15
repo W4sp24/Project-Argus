@@ -5,9 +5,9 @@ import Panel from "@/components/Panel";
 import { fetcher, mutateJSON, useActivity } from "@/lib/api";
 
 const KIND_BADGE: Record<string, string> = {
-  note: "text-primary-soft",
-  approval: "text-signal",
-  exam: "text-accent",
+  note: "text-[var(--ac)]",
+  approval: "text-ok",
+  exam: "text-danger",
 };
 
 function relative(when: string): string {
@@ -18,6 +18,7 @@ function relative(when: string): string {
   return `${Math.round(minutes / (60 * 24))}d ago`;
 }
 
+/** ACTIVITY.FEED (§4 General, right rail) — restyled, same data + delete flow. */
 export default function ActivityFeed() {
   const { data: events, mutate } = useActivity();
   const { data: vault } = useSWR<{ name: string }>("/api/vault", fetcher);
@@ -33,13 +34,13 @@ export default function ActivityFeed() {
   }
 
   return (
-    <Panel label="RECENT" title="Latest activity">
+    <Panel label="ACTIVITY.FEED">
       {!events && <p className="text-sm text-ink-faint">Loading…</p>}
       {events && events.length === 0 && <p className="text-sm text-ink-muted">All quiet.</p>}
-      <ul className="divide-y divide-white/5">
+      <ul className="divide-y divide-line">
         {(events ?? []).map((event, i) => (
-          <li key={i} className="flex items-baseline gap-2 py-2 text-sm">
-            <span className={`shrink-0 font-mono text-[10px] uppercase ${KIND_BADGE[event.kind] ?? ""}`}>
+          <li key={i} className="flex items-baseline gap-2 py-2 text-[13px]">
+            <span className={`shrink-0 font-mono text-[9.5px] uppercase ${KIND_BADGE[event.kind] ?? "text-ink-faint"}`}>
               {event.kind}
             </span>
             {event.path && vault ? (
@@ -56,9 +57,9 @@ export default function ActivityFeed() {
               <button
                 aria-label={`Delete ${event.path}`}
                 onClick={() => removeNote(event.path!)}
-                className="shrink-0 font-mono text-[10px] text-ink-faint hover:text-accent"
+                className="shrink-0 font-mono text-[10px] text-ink-faint hover:text-danger"
               >
-                delete
+                ×
               </button>
             )}
             <span className="shrink-0 font-mono text-[10px] text-ink-faint">{relative(event.when)}</span>
