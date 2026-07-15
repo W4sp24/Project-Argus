@@ -20,7 +20,7 @@ test("dashboard renders all widgets", async ({ page }) => {
   await expect(page.getByText("PLANNER.TIMELINE")).toBeVisible();
   await expect(page.getByText("TASKS.DUE")).toBeVisible();
   await expect(page.getByText("INGEST")).toBeVisible();
-  await expect(page.getByText("Ask Argus")).toBeVisible(); // chat dock card
+  await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible(); // drawer toggle (chat left the inline rail in Phase F)
   await expect(page.getByText("ARGUS.AGENT")).toBeVisible(); // restyled briefing card
   await expect(page.getByText("TOKENS.CLAUDE")).toBeVisible(); // preview panel
   await expect(page.getByText("ACTIVITY.FEED")).toBeVisible();
@@ -68,13 +68,34 @@ test("task delete removes the line, snapshot first", async ({ page }) => {
   expect(gitLog).toContain("argus: pre-apply snapshot (delete task 20-Projects/e2e.md");
 });
 
-test("chat thread persists between dock and chat tab", async ({ page }) => {
+test("chat thread persists between drawer and chat tab", async ({ page }) => {
   await page.goto("/dashboard");
   // No live agent in e2e: the ws will error, but the user message must survive
   // in shared state across surfaces (provider-level persistence).
+  await page.getByRole("button", { name: "Chat", exact: true }).click(); // TopBar toggle opens the drawer
   await page.getByPlaceholder("Ask your vault").fill("hello from the dock");
   await page.getByRole("button", { name: "Send" }).click();
-  await page.getByRole("link", { name: "Chat" }).click();
+  await page.getByRole("link", { name: "Open fullscreen chat" }).click(); // drawer ⛶ → /chat
   await expect(page).toHaveURL(/\/chat/);
   await expect(page.getByText("hello from the dock")).toBeVisible();
+});
+
+test("command palette opens on ctrl+K and closes on Escape", async ({ page }) => {
+  await page.goto("/dashboard");
+  await page.keyboard.press("Control+k");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await expect(palette).toBeVisible();
+  await expect(palette.getByText("generate briefing")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+});
+
+test("note modal opens from + NOTE and closes on Escape", async ({ page }) => {
+  await page.goto("/dashboard");
+  await page.getByRole("button", { name: "+ NOTE" }).click();
+  const modal = page.getByRole("dialog", { name: "Add note" });
+  await expect(modal).toBeVisible();
+  await expect(modal.getByLabel("Note title")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(modal).toBeHidden();
 });
