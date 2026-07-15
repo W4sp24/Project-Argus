@@ -1,7 +1,8 @@
-import Sidebar from "@/components/Sidebar";
+import TopBar from "@/components/TopBar";
 import { ToastProvider } from "@/components/Toast";
 import ChatDock from "@/components/chat/ChatDock";
 import { ChatProvider } from "@/lib/chat";
+import { ModeProvider } from "@/lib/mode";
 
 export default function DashboardLayout({
   children,
@@ -9,13 +10,17 @@ export default function DashboardLayout({
   return (
     <ChatProvider>
       <ToastProvider>
-        <div className="min-h-dvh">
-          <Sidebar />
-          <main className="px-4 pb-24 pt-6 md:ml-64 md:px-8 md:pb-8 md:pt-8">
-            <div className="mx-auto max-w-6xl">{children}</div>
-          </main>
-          <ChatDock />
-        </div>
+        {/* ModeProvider needs useToast (mode-change toasts), so it nests inside
+            ToastProvider. Its own wrapper div carries --ac/--ac-bg (§2). */}
+        <ModeProvider>
+          <div className="min-h-dvh">
+            <TopBar />
+            <main className="px-4 pb-8 pt-6 md:px-8 md:pt-8">
+              <div className="mx-auto max-w-6xl">{children}</div>
+            </main>
+            <ChatDock />
+          </div>
+        </ModeProvider>
       </ToastProvider>
     </ChatProvider>
   );
