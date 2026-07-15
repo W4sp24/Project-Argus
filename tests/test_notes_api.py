@@ -62,7 +62,8 @@ def test_create_note(client):
     )
     assert response.status_code == 201
     assert response.json() == {"path": "00-Inbox/2026-07-16-idea.md", "content": "# Idea\n\nbody\n"}
-    assert (vault / "00-Inbox" / "2026-07-16-idea.md").read_text(encoding="utf-8") == "# Idea\n\nbody\n"
+    saved = (vault / "00-Inbox" / "2026-07-16-idea.md").read_text(encoding="utf-8")
+    assert saved == "# Idea\n\nbody\n"
 
 
 def test_create_note_conflict_on_existing(client):
