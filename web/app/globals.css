@@ -4,65 +4,32 @@
 
 :root {
   color-scheme: dark;
+  /* Mode accent — ModeProvider overrides these per mode in Phase B.
+     Defaults = general (violet). */
+  --ac: #a78bfa;
+  --ac-bg: #171029;
 }
 
+/* Solid void background — no aurora, no radial gradients, no backdrop-filter
+   anywhere (§10: performance > aesthetics). */
 body {
-  @apply bg-void text-ink font-body antialiased;
-  background-image:
-    radial-gradient(ellipse 80% 50% at 20% -10%, rgba(109, 40, 217, 0.28), transparent),
-    radial-gradient(ellipse 60% 40% at 90% 10%, rgba(217, 70, 239, 0.12), transparent);
-  background-attachment: fixed;
+  @apply bg-void font-body text-ink antialiased;
   min-height: 100dvh;
 }
 
-/* Ambient aurora — the one loud thing on the page. Sits behind all glass.
-   Deliberately static: animating it forces every backdrop-filter surface to
-   re-blur at 60fps forever (~59% of a GPU core measured idle). A static
-   backdrop rasterizes once and costs nothing. */
-.aurora {
-  position: fixed;
-  inset: 0;
-  z-index: -10;
-  overflow: hidden;
-  pointer-events: none;
-}
-.aurora::before,
-.aurora::after {
-  content: "";
-  position: absolute;
-  border-radius: 9999px;
-  filter: blur(110px);
-}
-.aurora::before {
-  width: 55vw;
-  height: 55vw;
-  left: -12vw;
-  top: 30vh;
-  background: radial-gradient(circle, rgba(139, 92, 246, 0.22), transparent 65%);
-}
-.aurora::after {
-  width: 45vw;
-  height: 45vw;
-  right: -10vw;
-  bottom: -15vh;
-  background:
-    radial-gradient(circle, rgba(217, 70, 239, 0.14), transparent 65%),
-    radial-gradient(circle at 30% 30%, rgba(34, 211, 238, 0.07), transparent 55%);
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .aurora::before,
-  .aurora::after,
-  .animate-drift,
-  .animate-drift-slow,
-  .animate-breathe,
   .animate-rise,
-  .animate-msg-in {
+  .animate-blink,
+  .animate-toast,
+  .animate-palette,
+  .animate-drawer,
+  .animate-msg-in,
+  .animate-pulse {
     animation: none !important;
   }
 }
 
-/* Chat message entrance — transform/opacity only (cheap under backdrop-blur) */
+/* Chat message entrance — transform/opacity only */
 @keyframes msg-in {
   from {
     opacity: 0;
@@ -77,35 +44,17 @@ body {
   animation: msg-in 150ms ease-out both;
 }
 
-/* Glass surfaces */
-.glass {
-  @apply rounded-glass border border-white/10 bg-white/[0.04] backdrop-blur-xl;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 8px 32px rgba(11, 6, 20, 0.45);
-}
-.glass-hover {
-  @apply transition-colors duration-200;
-}
-.glass-hover:hover {
-  @apply border-primary-soft/30 bg-white/[0.06];
-}
-
-/* Mono eyebrow label, e.g. `// TODAY` */
+/* Mono eyebrow label. The `▍` prefix comes from Panel, not from this class. */
 .eyebrow {
-  @apply font-mono text-[11px] uppercase tracking-[0.22em] text-primary-soft/80;
+  @apply font-mono text-[10px] uppercase tracking-[0.18em];
+  color: var(--ac);
 }
 
-/* Primary gradient text */
-.gradient-text {
-  @apply bg-gradient-to-r from-primary-soft via-accent to-signal bg-clip-text text-transparent;
-}
-
-/* Rendered markdown inside journal/detail panes */
+/* Rendered markdown inside journal/detail panes — square corners, line/panel tokens */
 .prose-journal h1,
 .prose-journal h2,
 .prose-journal h3 {
-  @apply mb-2 mt-5 font-display font-medium text-ink first:mt-0;
+  @apply mb-2 mt-5 font-body font-medium text-ink-bright first:mt-0;
 }
 .prose-journal h1 {
   @apply text-xl;
@@ -127,35 +76,68 @@ body {
   @apply list-decimal;
 }
 .prose-journal code {
-  @apply rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.85em] text-primary-soft;
+  @apply border border-line bg-sunken px-1.5 py-0.5 font-mono text-[0.85em];
+  color: var(--ac);
 }
 .prose-journal pre {
-  @apply mb-3 overflow-x-auto rounded-xl border border-white/10 bg-black/30 p-4;
+  @apply mb-3 overflow-x-auto border border-line bg-sunken p-4;
 }
 .prose-journal pre code {
-  @apply bg-transparent p-0 text-ink-muted;
+  @apply border-0 bg-transparent p-0 text-ink-muted;
 }
 .prose-journal a {
-  @apply text-primary-soft underline decoration-primary-soft/40 underline-offset-2;
+  @apply underline underline-offset-2;
+  color: var(--ac);
 }
 .prose-journal blockquote {
-  @apply mb-3 border-l-2 border-primary/40 pl-4 italic text-ink-faint;
+  @apply mb-3 border-l-2 border-lineHi pl-4 italic text-ink-faint;
 }
 .prose-journal hr {
-  @apply my-4 border-white/10;
+  @apply my-4 border-line;
+}
+
+/* Flashcard flip (§5, /study/flashcards [PREVIEW]): transform-only 3D flip.
+   Reduced-motion just removes the transition — rotateY still applies, so the
+   face swap is instant instead of animated (no separate JS branch needed). */
+.flip-card {
+  perspective: 1200px;
+}
+.flip-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.45s;
+  transform-style: preserve-3d;
+}
+.flip-card-inner.is-flipped {
+  transform: rotateY(180deg);
+}
+.flip-card-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.flip-card-back {
+  transform: rotateY(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .flip-card-inner {
+    transition: none;
+  }
 }
 
 ::selection {
-  background: rgba(139, 92, 246, 0.4);
+  background: rgba(167, 139, 250, 0.35);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(139, 92, 246, 0.35) transparent;
+  scrollbar-color: rgba(167, 139, 250, 0.35) transparent;
 }
 
 :focus-visible {
-  outline: 2px solid #a78bfa;
+  outline: 1px solid var(--ac);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 0;
 }

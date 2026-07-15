@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import {
   useJournalNote,
   useJournalProjects,
@@ -46,29 +46,29 @@ export default function JournalPage() {
       <header className="mb-8 animate-rise">
         <div className="flex flex-wrap items-center gap-3">
           <p className="eyebrow">{`// JOURNAL`}</p>
-          <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em] text-ink-faint">
+          <span className="border border-line bg-panel px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em] text-ink-faint">
             dev-owned · view only
           </span>
         </div>
-        <h1 className="mt-2 font-display text-3xl font-semibold tracking-tight md:text-4xl">
+        <h1 className="mt-2 font-body text-3xl font-semibold tracking-tight md:text-4xl">
           Build journal
         </h1>
         <p className="mt-2 max-w-xl text-sm text-ink-muted">
           Every Claude Code session, journaled into your vault. Edits happen in Obsidian or via{" "}
-          <span className="font-mono text-xs text-primary-soft">/log-session</span>.
+          <span className="font-mono text-xs text-[var(--ac)]">/log-session</span>.
         </p>
       </header>
 
       {error && (
-        <GlassCard label="OFFLINE" title="Can't reach the journal">
+        <Panel label="OFFLINE" title="Can't reach the journal">
           <p className="text-sm text-ink-muted">
             Start the backend with{" "}
-            <span className="font-mono text-xs text-primary-soft">
+            <span className="font-mono text-xs text-[var(--ac)]">
               uvicorn backend.main:app --port 8000
             </span>
             .
           </p>
-        </GlassCard>
+        </Panel>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
@@ -76,8 +76,10 @@ export default function JournalPage() {
           <p className="eyebrow">{`// PROJECTS`}</p>
           <button
             onClick={() => setProjectFilter(undefined)}
-            className={`w-full rounded-xl px-4 py-2 text-left text-sm transition-colors ${
-              !projectFilter ? "bg-gradient-to-r from-primary/25 to-accent/15 text-ink" : "text-ink-muted hover:bg-white/5"
+            className={`w-full border px-4 py-2 text-left text-sm transition-colors ${
+              !projectFilter
+                ? "border-[var(--ac)] bg-[var(--ac-bg)] text-ink"
+                : "border-line text-ink-muted hover:border-lineHi"
             }`}
           >
             All projects
@@ -89,11 +91,11 @@ export default function JournalPage() {
                 setProjectFilter(project.slug);
                 setSelectedPath(project.path);
               }}
-              className={`glass glass-hover w-full p-4 text-left ${
-                projectFilter === project.slug ? "border-primary-soft/40" : ""
+              className={`w-full border bg-panel p-4 text-left transition-colors hover:border-lineHi ${
+                projectFilter === project.slug ? "border-[var(--ac)]" : "border-line"
               }`}
             >
-              <p className="truncate font-display text-sm font-medium">{project.title}</p>
+              <p className="truncate font-body text-sm font-medium">{project.title}</p>
               <p className="mt-1 font-mono text-[11px] text-ink-faint">
                 {project.sessions} session{project.sessions === 1 ? "" : "s"} ·{" "}
                 {project.open_threads} open thread{project.open_threads === 1 ? "" : "s"}
@@ -111,11 +113,11 @@ export default function JournalPage() {
         <div className="space-y-4">
           <p className="eyebrow">{`// SESSIONS`}</p>
           {sessions && sessions.length === 0 && (
-            <GlassCard label="EMPTY" title="No sessions yet">
+            <Panel label="EMPTY" title="No sessions yet">
               <p className="text-sm text-ink-muted">
                 End a Claude Code session and its stub appears here automatically.
               </p>
-            </GlassCard>
+            </Panel>
           )}
           {Object.entries(sessionsByDay).map(([day, daySessions]) => (
             <div key={day}>
@@ -127,14 +129,14 @@ export default function JournalPage() {
                   <button
                     key={session.path}
                     onClick={() => setSelectedPath(session.path)}
-                    className={`glass glass-hover flex w-full items-center justify-between gap-4 px-4 py-3 text-left ${
-                      selectedPath === session.path ? "border-primary-soft/40" : ""
+                    className={`flex w-full items-center justify-between gap-4 border bg-panel px-4 py-3 text-left transition-colors hover:border-lineHi ${
+                      selectedPath === session.path ? "border-[var(--ac)]" : "border-line"
                     }`}
                   >
                     <span className="flex min-w-0 items-center gap-3">
                       <span className="truncate text-sm">{session.project}</span>
                       {session.branch && (
-                        <span className="hidden shrink-0 rounded-md bg-white/5 px-2 py-0.5 font-mono text-[11px] text-ink-muted sm:inline">
+                        <span className="hidden shrink-0 border border-line px-2 py-0.5 font-mono text-[11px] text-ink-muted sm:inline">
                           {session.branch}
                         </span>
                       )}
@@ -144,10 +146,10 @@ export default function JournalPage() {
                         {session.files} file{session.files === 1 ? "" : "s"}
                       </span>
                       <span
-                        className={`rounded-full px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+                        className={`border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
                           session.has_narrative
-                            ? "bg-primary/20 text-primary-soft"
-                            : "bg-white/5 text-ink-faint"
+                            ? "border-[var(--ac)] text-[var(--ac)]"
+                            : "border-line text-ink-faint"
                         }`}
                       >
                         {session.has_narrative ? "narrative" : "stub"}
@@ -160,12 +162,12 @@ export default function JournalPage() {
           ))}
 
           {note && (
-            <GlassCard label="NOTE" className="animate-rise">
+            <Panel label="NOTE" className="animate-rise">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <p className="min-w-0 truncate font-mono text-[11px] text-ink-faint">{note.path}</p>
                 <a
                   href={note.obsidian_uri}
-                  className="shrink-0 rounded-full bg-gradient-to-r from-primary/30 to-accent/20 px-3 py-1 font-mono text-[11px] text-primary-soft transition-opacity hover:opacity-80"
+                  className="shrink-0 border border-line px-3 py-1 font-mono text-[11px] text-[var(--ac)] transition-colors hover:border-lineHi"
                 >
                   Open in Obsidian ↗
                 </a>
@@ -173,7 +175,7 @@ export default function JournalPage() {
               <article className="prose-journal max-w-none text-sm leading-relaxed text-ink-muted">
                 <ReactMarkdown>{note.markdown.replace(/^---[\s\S]*?---/, "")}</ReactMarkdown>
               </article>
-            </GlassCard>
+            </Panel>
           )}
         </div>
       </div>

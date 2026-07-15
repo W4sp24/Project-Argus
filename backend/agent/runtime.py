@@ -121,22 +121,45 @@ class ChatAgent:
         with contextlib.suppress(Exception):
             self._index.query("warmup", n_results=1)
 
-    async def stream_chat(self, message: str) -> AsyncIterator[str]:
+    def _resolve_model(self, model: str | None) -> str:
+        """Map a registry model name (§7) onto what the SDK should run.
+
+        No ``model`` keeps today's behavior. openai-compat (local) models are
+        registered but not routed yet — the localModels flag is preview — so
+        they fail with a clear error instead of silently using the API model.
+        """
+        if not model:
+            return MODEL
+        entry = next((m for m in self._settings.models if m["name"] == model), None)
+        if entry is None:
+            raise RuntimeError(f"unknown model {model!r} — register it under /system first")
+        if entry["provider"] != "anthropic":
+            raise RuntimeError(
+                f"local model {model!r} is registered but routing to openai-compat "
+                "endpoints is not wired yet (localModels is preview)"
+            )
+        return entry["name"]
+
+    async def stream_chat(self, message: str, model: str | None = None) -> AsyncIterator[str]:
         """Yield text deltas for one user message (I5: subscription auth)."""
         from claude_agent_sdk import (
             AssistantMessage,
             ClaudeAgentOptions,
             ClaudeSDKClient,
+            ResultMessage,
             StreamEvent,
             TextBlock,
             create_sdk_mcp_server,
         )
 
+        from backend.usage import record_result_usage
+
+        resolved_model = self._resolve_model(model)
         server = create_sdk_mcp_server(
             "argus", tools=build_vault_tools(self._settings, self._index)
         )
         options = ClaudeAgentOptions(
-            model=MODEL,
+            model=resolved_model,
             system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
             mcp_servers={"argus": server},
             allowed_tools=[
@@ -164,3 +187,8 @@ class ChatAgent:
                     for block in event.content:
                         if isinstance(block, TextBlock) and block.text:
                             yield block.text
+                elif isinstance(event, ResultMessage):
+                    # Fire-and-forget usage logging (§14) — never breaks chat.
+                    record_result_usage(
+                        self._settings.db_path, "chat", event, model=resolved_model
+                    )

@@ -7,10 +7,41 @@
 
 | Field | Value |
 |---|---|
-| Active phase | — (roadmap P0–P5 complete) |
-| Status | ALL PHASES DONE — maintenance/backlog mode (connector credentials still open); P5 dashboard-first revamp on `feat/p5-dashboard-revamp` (D-034..D-037) 2026-07-13; Task 15 (vault cleanup) BLOCKED pending Ethan's per-item confirmation |
-| Last green commit | feat/p5-dashboard-revamp head (full pytest + ruff + web lint + perf:budget + Playwright e2e green) |
-| Next action | Ethan: review/merge PR for `feat/p5-dashboard-revamp`; approve or reject Task 15 vault-cleanup candidates; optional: gcal/Todoist credentials + setup.ps1; `/code-review ultra` follow-up |
+| Active phase | — (roadmap P0–P5 complete; terminal-HUD redesign A–H complete) |
+| Status | REDESIGN INTEGRATED — `feat/redesign-h-integration` merges the full frontend chain (a-foundation→…→f-chat) + e-modes + g-backend, wires all preview panels to the real backend (usage/doctor/models/ingest/email/note-create), purges the legacy design-token aliases, and adds the gcal import guard + `[gcal]` extra (D-038..D-043) 2026-07-15/16; Task 15 (vault cleanup) still BLOCKED pending Ethan's per-item confirmation |
+| Last green commit | feat/redesign-h-integration head (full pytest + web lint + build + perf:budget green; see Phase H evidence below) |
+| Next action | Ethan: review/merge PR for `feat/redesign-h-integration` (supersedes the per-phase redesign branches); approve or reject Task 15 vault-cleanup candidates; optional: gcal/Todoist credentials + setup.ps1; `/code-review ultra` follow-up |
+
+## Phase H (redesign integration) exit criteria evidence (2026-07-16)
+
+```
+git: feat/redesign-h-integration = f-chat + merge e-modes (auto-merged, no
+  conflict markers; api.ts kept both sides' hooks) + merge g-backend (backend/
+  + tests/ only, conflict-free)
+.venv/Scripts/python -m ruff check . -> All checks passed!
+.venv/Scripts/python -m pytest -> 151 passed, incl. new: create_note writes +
+  snapshots first / refuses existing (WriterExists) + protected zones;
+  POST /api/note/create 201/409/403; gcal list_events returns [] without the
+  google libs when unconfigured (import-blocking regression tests)
+cd web && npm run lint -> No ESLint warnings or errors
+npm run build && npm run perf:budget -> 18 routes, all <= 135 kB first-load
+  JS (heaviest: /dashboard 113 kB, /study 109 kB, /code 107 kB)
+npx playwright test -> 13 passed (40.3s): P5 dashboard/roundtrip suite +
+  Phase D/F specs + new Phase H specs (/system doctor renders real checks;
+  email capture posts -> toast -> proposal lands in /api/review)
+Legacy purge: grep-verified zero usages of primary/accent/signal/nebula/
+  rounded-glass/font-display/gradient-text in web source; aliases deleted
+  from tailwind.config.ts; build stayed green
+A11y/motion audit: all animate-* classes (incl. Tailwind animate-pulse)
+  disabled under prefers-reduced-motion; typewriter renders full text
+  immediately; glyph buttons carry aria-labels; toast aria-live=polite;
+  NoteModal/CommandPalette/ChatDrawer role=dialog
+Lighthouse (production build + throwaway-vault backend, headless Chrome):
+  /dashboard desktop preset = 1.00 (100); default mobile simulation = 0.89 —
+  LCP element is the SPEC-MANDATED §5 typed greeting (~1.17s element render
+  delay by design; CLS 0, TBT 200ms). The >=95 target holds on desktop; the
+  mobile-sim shortfall is the typewriter aesthetic, not bundle weight.
+```
 
 ## P5 exit criteria evidence (2026-07-13)
 

@@ -44,6 +44,10 @@ class WriterConflict(WriterError):  # noqa: N818
     """Write refused: content drifted since the client read it."""
 
 
+class WriterExists(WriterError):  # noqa: N818
+    """Write refused: create-only path already has a file at it."""
+
+
 def _git_snapshot(vault_path: Path, reason: str) -> None:
     """Commit the vault as it is now, so the next write is undoable (I2)."""
     if not (vault_path / ".git").is_dir():
@@ -154,6 +158,84 @@ def append_capture(vault_path: Path, text: str) -> str:
     with note.open("a", encoding="utf-8") as handle:
         handle.write(f"- [ ] {cleaned} ➕ {today} <!-- {stamp} -->\n")
     return f"{INBOX_DIR}/capture-{today}.md"
+
+
+# --- Ingestion (redesign §11) -------------------------------------------------
+
+INGEST_FILES_DIR = "00-Inbox/files"
+INBOX_EMAILS_DIR = "00-Inbox/emails"
+SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ -]")
+SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _dedupe(path: Path) -> Path:
+    """Never clobber an existing vault file — suffix -2, -3, ... instead."""
+    if not path.exists():
+        return path
+    for counter in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{counter}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise WriterError(f"cannot find a free name for {path.name}")
+
+
+def save_ingest_file(vault_path: Path, target_dir: str, filename: str, data: bytes) -> str:
+    """Save one uploaded file into the vault (snapshot-first, I1/I2).
+
+    ``target_dir`` is vault-relative (e.g. ``15-Courses/CS301``); protected
+    zones (99-Private/, 90-Meta/, dotdirs) are refused by the path guard (I3).
+    Returns the saved file's vault-relative path.
+    """
+    safe_name = SAFE_NAME_RE.sub("_", filename).strip() or "upload.bin"
+    clean_dir = target_dir.strip().strip("/").replace("\\", "/") or INGEST_FILES_DIR
+    guarded = guard_user_path(vault_path, f"{clean_dir}/{safe_name}")
+    _git_snapshot(vault_path, f"ingest {safe_name}")
+    guarded.parent.mkdir(parents=True, exist_ok=True)
+    destination = _dedupe(guarded)
+    destination.write_bytes(data)
+    rel_path = destination.relative_to(vault_path).as_posix()
+    _argus_log(vault_path, f"ingested file {rel_path}")
+    return rel_path
+
+
+def archive_email(
+    vault_path: Path,
+    body: str,
+    subject: str | None = None,
+    sender: str | None = None,
+    email_date: str | None = None,
+) -> str:
+    """Archive one captured email to ``00-Inbox/emails/YYYY-MM-DD-<slug>.md``.
+
+    Snapshot-first like every write (I2). Frontmatter carries date/from/subject
+    when the caller parsed them out of the MIME headers. Returns the vault path.
+    """
+    text = body.strip()
+    if not text:
+        raise WriterError("email body is empty — nothing to archive")
+
+    day = (email_date or date.today().isoformat())[:10]
+    slug_source = (subject or text.splitlines()[0])[:60]
+    slug = SLUG_RE.sub("-", slug_source.lower()).strip("-") or "email"
+
+    _git_snapshot(vault_path, f"archive email {slug}")
+
+    emails_dir = vault_path / INBOX_EMAILS_DIR
+    emails_dir.mkdir(parents=True, exist_ok=True)
+    note = _dedupe(emails_dir / f"{day}-{slug}.md")
+
+    front = [f'date: "{day}"', "type: email"]
+    if sender:
+        front.append(f'from: "{sender.replace(chr(34), chr(39))}"')
+    if subject:
+        front.append(f'subject: "{subject.replace(chr(34), chr(39))}"')
+    note.write_text(
+        "---\n" + "\n".join(front) + "\n---\n\n" + text + "\n",
+        encoding="utf-8",
+    )
+    rel_path = note.relative_to(vault_path).as_posix()
+    _argus_log(vault_path, f"archived email to {rel_path}")
+    return rel_path
 
 
 # --- Morning briefing (P4) ---------------------------------------------------
@@ -274,6 +356,27 @@ def _apply_note_diff(vault_path: Path, payload: dict) -> str:
     result.extend(original[cursor:])
     note.write_text("\n".join(result) + "\n", encoding="utf-8")
     return f"note edit in {rel_path}"
+
+
+def create_note(vault_path: Path, rel_path: str, content: str) -> str:
+    """Create a brand-new note (redesign §13 quick add-note modal).
+
+    Snapshot-first (I2) and guarded to user-editable zones (I3), mirroring
+    ``save_ingest_file``'s style — but this is create-ONLY: unlike ingest's
+    dedupe-on-collision, a note already at ``rel_path`` is refused outright
+    (the caller picked an exact, deliberate filename, e.g. a title-derived
+    ``00-Inbox/YYYY-MM-DD-<slug>.md`` — silently renaming it would surprise
+    the user). Returns the vault-relative path actually written.
+    """
+    note = guard_user_path(vault_path, rel_path)
+    if note.exists():
+        raise WriterExists(f"{rel_path} already exists")
+    _git_snapshot(vault_path, f"create note {rel_path}")
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(content, encoding="utf-8")
+    rel = note.relative_to(vault_path).as_posix()
+    _argus_log(vault_path, f"created note {rel}")
+    return rel
 
 
 def update_note(vault_path: Path, rel_path: str, expected_content: str, new_content: str) -> None:

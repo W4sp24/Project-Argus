@@ -32,6 +32,15 @@ rag = [
     "python-pptx>=0.6",
     "python-docx>=1.1",
 ]
+# Google Calendar connector (`argus connect gcal`). backend/connectors/gcal.py
+# imports these lazily and only once a token is actually stored, so the base
+# app (and /api/agenda, /api/insights) works fully without this extra —
+# installing it is only needed to run the one-time OAuth connect flow.
+gcal = [
+    "google-api-python-client>=2.100",
+    "google-auth>=2.30",
+    "google-auth-oauthlib>=1.2",
+]
 dev = [
     "pytest>=8.2",
     "httpx>=0.27",

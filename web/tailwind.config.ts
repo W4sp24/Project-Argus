@@ -3,51 +3,65 @@ import type { Config } from "tailwindcss";
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
+    // Square terminal panels — no rounded corners anywhere (§1). Overriding the
+    // whole scale (not extending) makes every legacy `rounded-*` a silent no-op.
+    // `full` stays: circles (logo dot, round task checkboxes, avatar orb) are a
+    // deliberate motif in the spec, distinct from rounded panel corners.
+    borderRadius: {
+      full: "9999px",
+    },
     extend: {
       colors: {
-        void: "#0b0614",
-        nebula: "#17092e",
-        primary: {
-          DEFAULT: "#8b5cf6",
-          soft: "#a78bfa",
-          deep: "#6d28d9",
-        },
-        accent: "#d946ef",
-        signal: "#22d3ee",
+        void: "#06040c", // page background
+        panel: "#0c0916", // card surface
+        sunken: "#06040c", // inputs / nested surfaces (same as void)
+        line: "#1e1733", // all borders
+        lineHi: "#2c2250", // hovered/active borders
         ink: {
-          DEFAULT: "#ede9fe",
+          DEFAULT: "#d6cdf0",
+          bright: "#ece7fb",
           muted: "#9d8fc7",
-          faint: "#6b5f94",
+          faint: "#5a4f82",
+        },
+        ok: "#34d399",
+        danger: "#fb7185",
+        // mode accents (CSS var driven at runtime — see --ac in globals.css)
+        mode: {
+          general: "#a78bfa",
+          study: "#22d3ee",
+          research: "#e879f9",
+          code: "#34d399",
+          system: "#fbbf24",
         },
       },
       fontFamily: {
-        display: ["var(--font-display)", "sans-serif"],
         body: ["var(--font-body)", "sans-serif"],
         mono: ["var(--font-mono)", "monospace"],
       },
-      borderRadius: {
-        glass: "1.25rem",
-      },
       keyframes: {
-        drift: {
-          "0%, 100%": { transform: "translate(0, 0) scale(1)" },
-          "33%": { transform: "translate(4%, -3%) scale(1.06)" },
-          "66%": { transform: "translate(-3%, 4%) scale(0.97)" },
-        },
-        breathe: {
-          "0%, 100%": { opacity: "0.85", transform: "scale(1)" },
-          "50%": { opacity: "1", transform: "scale(1.12)" },
-        },
         rise: {
-          from: { opacity: "0", transform: "translateY(10px)" },
-          to: { opacity: "1", transform: "translateY(0)" },
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        blink: {
+          "0%, 55%": { opacity: "1" },
+          "56%, 100%": { opacity: "0" },
+        },
+        // Chat drawer slide-in (§7): transform-only. The drawer unmounts when
+        // closed (§10), so entry is an animation rather than a transition.
+        drawer: {
+          from: { transform: "translateX(105%)" },
+          to: { transform: "none" },
         },
       },
       animation: {
-        drift: "drift 24s ease-in-out infinite",
-        "drift-slow": "drift 36s ease-in-out infinite reverse",
-        breathe: "breathe 4s ease-in-out infinite",
-        rise: "rise 0.5s ease-out both",
+        rise: "rise 0.3s ease-out both",
+        blink: "blink 1.1s steps(1) infinite",
+        // Toast entrance (§5): same rise curve, faster.
+        toast: "rise 0.2s ease-out both",
+        // Palette / popover entrance (§6): rise at .18s.
+        palette: "rise 0.18s ease-out both",
+        drawer: "drawer 0.25s ease-out both",
       },
     },
   },

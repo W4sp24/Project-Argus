@@ -6,8 +6,12 @@ import { execSync } from "node:child_process";
 
 const BUDGET_KB = 135;
 
-const out = execSync("npx next build", { encoding: "utf-8", stdio: ["ignore", "pipe", "inherit"] });
-console.log(out);
+const rawOut = execSync("npx next build", { encoding: "utf-8", stdio: ["ignore", "pipe", "inherit"] });
+console.log(rawOut);
+// Next colorizes this table even when stdout is piped (observed on 14.2.35) —
+// strip ANSI escapes first or the size columns splice apart mid-match.
+// eslint-disable-next-line no-control-regex
+const out = rawOut.replace(/\x1b\[[0-9;]*m/g, "");
 
 const failures = [];
 let matchedAny = false;

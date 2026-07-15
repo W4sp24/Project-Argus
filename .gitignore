@@ -30,3 +30,7 @@ desktop.ini
 
 # Brainstorming companion sessions
 .superpowers/
+
+# Agent tooling output (local scratch, never source)
+graphify-out/
+.playwright-mcp/

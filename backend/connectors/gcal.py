@@ -62,12 +62,17 @@ def connect(credentials_file: Path = CREDENTIALS_FILE) -> None:
 
 
 def _service():
-    from google.oauth2.credentials import Credentials
-    from googleapiclient.discovery import build
-
+    # Check the token BEFORE importing the google client libs: the common
+    # case (gcal never connected) must degrade gracefully even when those
+    # optional deps aren't installed. Importing first (as this used to)
+    # raised ImportError for every /api/agenda + /api/insights call in a
+    # fresh venv, regardless of whether gcal was configured (Phase H fix).
     raw = _stored_token()
     if raw is None:
         return None
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
     creds = Credentials.from_authorized_user_info(json.loads(raw), SCOPES)
     if creds.expired and creds.refresh_token:
         import keyring

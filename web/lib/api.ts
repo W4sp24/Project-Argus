@@ -57,6 +57,15 @@ export function useNotes() {
   return useSWR<NoteInfo[]>("/api/notes", fetcher);
 }
 
+export interface VaultInfo {
+  name: string;
+}
+
+/** Vault identity — used to build `obsidian://` deep links client-side. */
+export function useVault() {
+  return useSWR<VaultInfo>("/api/vault", fetcher);
+}
+
 export interface JournalProject {
   slug: string;
   title: string;
@@ -137,4 +146,154 @@ export interface ActivityEvent {
 /** Latest vault edits, approvals, and exam attempts, newest first. */
 export function useActivity() {
   return useSWR<ActivityEvent[]>("/api/activity", fetcher);
+}
+
+// --- Study (Phase D) ----------------------------------------------------
+
+export interface CourseInfo {
+  code: string;
+  title: string;
+  path: string;
+  materials: number;
+  notes: number;
+}
+
+/** Courses discovered under 15-Courses/ (each needs a course.md hub note). */
+export function useStudyCourses() {
+  return useSWR<CourseInfo[]>("/api/study/courses", fetcher);
+}
+
+export interface ExamSummary {
+  id: number;
+  course: string;
+  title: string;
+  created_at: string;
+  questions: number;
+}
+
+/** Generated practice exams, optionally scoped to one course. */
+export function useStudyExams(course?: string) {
+  const query = course ? `?course=${encodeURIComponent(course)}` : "";
+  return useSWR<ExamSummary[]>(`/api/study/exams${query}`, fetcher);
+}
+
+export interface TaskItem {
+  text: string;
+  done: boolean;
+  due: string | null;
+  scheduled: string | null;
+  priority: string | null;
+  tags: string[];
+  source: string;
+  path: string | null;
+  line: number | null;
+}
+
+/** Full task board (overdue/today/week/someday buckets) — used to derive
+ * study-adjacent signals (e.g. the next exam-flavored deadline) from real
+ * vault tasks rather than inventing a scheduling model that doesn't exist. */
+export function useTasksBoard() {
+  return useSWR<Record<string, TaskItem[]>>("/api/tasks", fetcher);
+}
+
+// --- System (Phase H: usage, doctor, models) --------------------------------
+
+export interface UsagePoint {
+  label: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+}
+
+export interface FeatureUsage {
+  feature: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+}
+
+export type UsageRange = "session" | "week" | "all";
+
+export interface UsageReport {
+  range: UsageRange;
+  session_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  series: UsagePoint[];
+  features: FeatureUsage[];
+}
+
+/** ARGUS.USAGE (§14) — GET /api/usage?range=session|week|all. */
+export function useUsage(range: UsageRange) {
+  return useSWR<UsageReport>(`/api/usage?range=${range}`, fetcher);
+}
+
+export interface CliModelUsage {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+}
+
+export interface CliUsagePoint {
+  label: string;
+  total_tokens: number;
+}
+
+export type CliUsageRange = "today" | "week" | "all";
+
+export interface CliUsageReport {
+  range: CliUsageRange;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  series: CliUsagePoint[];
+  models: CliModelUsage[];
+}
+
+/** CLAUDE CODE — account-wide CLI usage, GET /api/usage/cli?range=today|week|all. */
+export function useCliUsage(range: CliUsageRange) {
+  return useSWR<CliUsageReport>(`/api/usage/cli?range=${range}`, fetcher);
+}
+
+export interface DoctorCheck {
+  name: string;
+  status: "OK" | "WARN" | "FAIL";
+  detail: string;
+}
+
+/**
+ * DOCTOR (§12) — `POST /api/doctor` (not a GET, so the fetcher is inline).
+ * Keyed by a fixed SWR key so DoctorPanel and SetupGuide share one result
+ * set and one `mutate()` (RUN AGAIN) revalidates both.
+ */
+export function useDoctor() {
+  return useSWR<DoctorCheck[]>("/api/doctor", () => mutateJSON<DoctorCheck[]>("/api/doctor", undefined));
+}
+
+export interface ModelInfo {
+  name: string;
+  provider: string;
+  endpoint?: string | null;
+  key_ref?: string | null;
+  default: boolean;
+  builtin: boolean;
+}
+
+/** Model registry (§7/§12) — GET /api/models. Built-ins first, then local. */
+export function useModels() {
+  return useSWR<ModelInfo[]>("/api/models", fetcher);
 }

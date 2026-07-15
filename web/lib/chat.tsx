@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { selectedModel } from "@/lib/models";
 
 export interface ChatMessage {
   role: "user" | "argus";
@@ -75,7 +76,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     const ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/chat`);
     socketRef.current = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ message }));
+    // §7 model selection: send the chosen model with the frame. The backend
+    // ws handler reads payload fields with .get() (backend/main.py ws_chat)
+    // and ignores unknown keys, so this is forward-compatible — routing the
+    // model is the backend branch's concern (flags.localModels: preview).
+    ws.onopen = () => ws.send(JSON.stringify({ message, model: selectedModel() }));
     ws.onmessage = (event) => {
       const frame = JSON.parse(event.data);
       if (frame.type === "delta") {

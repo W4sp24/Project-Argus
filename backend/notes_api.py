@@ -12,6 +12,7 @@ from backend.config import Settings
 from backend.writer import (
     WriterConflict,
     WriterError,
+    WriterExists,
     WriterForbidden,
     WriterMissing,
     guard_user_path,
@@ -19,6 +20,11 @@ from backend.writer import (
 
 
 class NoteContent(BaseModel):
+    path: str
+    content: str
+
+
+class NoteCreate(BaseModel):
     path: str
     content: str
 
@@ -48,6 +54,8 @@ def _raise_http(exc: WriterError, current_content: str | None = None) -> NoRetur
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, WriterMissing):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, WriterExists):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, WriterConflict):
         detail: object = {"message": str(exc), "current_content": current_content}
         raise HTTPException(status_code=409, detail=detail) from exc
@@ -66,6 +74,14 @@ def build_notes_router(settings: Settings) -> APIRouter:
         if not resolved.is_file():
             raise HTTPException(status_code=404, detail=f"{path} does not exist")
         return NoteContent(path=path, content=resolved.read_text(encoding="utf-8"))
+
+    @router.post("/note/create", response_model=NoteContent, status_code=201)
+    def create_note(request: NoteCreate) -> NoteContent:
+        try:
+            rel_path = writer.create_note(settings.vault_path, request.path, request.content)
+        except WriterError as exc:
+            _raise_http(exc)
+        return NoteContent(path=rel_path, content=request.content)
 
     @router.put("/note", response_model=NoteContent)
     def put_note(request: NoteUpdate) -> NoteContent:

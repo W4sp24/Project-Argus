@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import GlassCard from "@/components/GlassCard";
+import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
 import { fetcher } from "@/lib/api";
 
@@ -21,9 +21,9 @@ interface Suggestion {
 }
 
 const KIND_STYLE: Record<string, string> = {
-  schedule: "bg-signal/15 text-signal",
-  task: "bg-primary/20 text-primary-soft",
-  note: "bg-accent/15 text-accent",
+  schedule: "border-mode-study text-mode-study",
+  task: "border-[var(--ac)] text-[var(--ac)]",
+  note: "border-mode-research text-mode-research",
 };
 
 function blockTime(iso: string): string {
@@ -35,17 +35,17 @@ function blockTime(iso: string): string {
 
 function DiffView({ diff }: { diff: string }) {
   return (
-    <pre className="overflow-x-auto rounded-xl border border-white/10 bg-black/30 p-3 font-mono text-[12px] leading-relaxed">
+    <pre className="overflow-x-auto border border-line bg-sunken p-3 font-mono text-[12px] leading-relaxed">
       {diff.split("\n").map((line, i) => (
         <div
           key={i}
           className={
             line.startsWith("+")
-              ? "text-emerald-300"
+              ? "text-ok"
               : line.startsWith("-")
-                ? "text-rose-300"
+                ? "text-danger"
                 : line.startsWith("@@")
-                  ? "text-primary-soft"
+                  ? "text-[var(--ac)]"
                   : "text-ink-faint"
           }
         >
@@ -89,26 +89,24 @@ export default function ReviewPage() {
       />
 
       {status && (
-        <p className="mb-4 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-ink-muted">
-          {status}
-        </p>
+        <p className="mb-4 border border-line bg-panel px-4 py-3 text-sm text-ink-muted">{status}</p>
       )}
 
       {suggestions && suggestions.length === 0 && (
-        <GlassCard label="QUEUE" title="Nothing pending">
+        <Panel label="QUEUE" title="Nothing pending">
           <p className="text-sm text-ink-muted">
-            Ask Argus to <span className="font-mono text-xs text-primary-soft">/plan</span> your
+            Ask Argus to <span className="font-mono text-xs text-[var(--ac)]">/plan</span> your
             day in Chat, or import a syllabus — proposals land here.
           </p>
-        </GlassCard>
+        </Panel>
       )}
 
       <div className="space-y-4">
         {(suggestions ?? []).map((suggestion) => (
-          <GlassCard key={suggestion.id} className="animate-rise">
+          <Panel key={suggestion.id} className="animate-rise">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <span
-                className={`rounded-full px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${KIND_STYLE[suggestion.kind]}`}
+                className={`border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${KIND_STYLE[suggestion.kind]}`}
               >
                 {suggestion.kind}
               </span>
@@ -124,10 +122,10 @@ export default function ReviewPage() {
               <ul className="mb-3 space-y-1.5">
                 {((suggestion.payload.blocks as ScheduleBlock[]) ?? []).map((block, i) => (
                   <li key={i} className="flex items-center gap-3 text-sm">
-                    <span className="w-32 shrink-0 font-mono text-[11px] text-signal">
+                    <span className="w-32 shrink-0 font-mono text-[11px] text-mode-study">
                       {blockTime(block.start)} – {blockTime(block.end)}
                     </span>
-                    <span className="h-6 w-1 rounded bg-gradient-to-b from-primary to-accent" />
+                    <span className="h-6 w-1 bg-[var(--ac)]" />
                     <span className="text-ink-muted">{block.title}</span>
                   </li>
                 ))}
@@ -136,10 +134,10 @@ export default function ReviewPage() {
 
             {suggestion.kind === "task" && (
               <div className="mb-3 space-y-1 font-mono text-[12px]">
-                <p className="rounded-lg bg-rose-500/10 px-3 py-1.5 text-rose-300">
+                <p className="border border-danger/30 bg-danger/10 px-3 py-1.5 text-danger">
                   − {String(suggestion.payload.old_line)}
                 </p>
-                <p className="rounded-lg bg-emerald-500/10 px-3 py-1.5 text-emerald-300">
+                <p className="border border-ok/30 bg-ok/10 px-3 py-1.5 text-ok">
                   + {String(suggestion.payload.new_line)}
                 </p>
                 <p className="text-ink-faint">
@@ -161,7 +159,7 @@ export default function ReviewPage() {
               <button
                 onClick={() => act(suggestion.id, "approve")}
                 disabled={busy !== null}
-                className="rounded-xl bg-gradient-to-r from-primary to-accent px-5 py-2 font-display text-sm text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="border border-line bg-[var(--ac-bg)] px-5 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
               >
                 {busy === suggestion.id ? "Applying…" : "Approve"}
               </button>
@@ -171,12 +169,12 @@ export default function ReviewPage() {
                   act(suggestion.id, "dismiss", reason);
                 }}
                 disabled={busy !== null}
-                className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-2 text-sm text-ink-muted transition-colors hover:border-accent/40 hover:text-ink disabled:opacity-40"
+                className="border border-line px-5 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
               >
                 Dismiss
               </button>
             </div>
-          </GlassCard>
+          </Panel>
         ))}
       </div>
     </>

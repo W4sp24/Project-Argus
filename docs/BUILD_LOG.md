@@ -179,3 +179,65 @@ here, not asked.
   dock in the right rail and the full `/chat` page read the same conversation —
   switching surfaces mid-answer doesn't drop or duplicate anything. Kept to one
   socket per session rather than one per surface.
+
+## 2026-07-15 — Terminal-HUD redesign (Phases A–H)
+
+- **D-038 — Mode system: CSS custom properties, not per-page themes.** Four modes
+  (general/study/research/code, plus system) replace per-page theming. A single
+  `ModeProvider` sets `--ac`/`--ac-bg` on one wrapper div; every accent-colored
+  element uses `text-[var(--ac)]`-style arbitrary values. One style recalc per
+  mode switch, zero re-renders of unaffected components, and route → mode is
+  derived from the pathname so deep links and back/forward always resolve the
+  right accent. The Sidebar is replaced by a sticky TopBar tablist (now with
+  APG roving tabindex, Phase H); old per-page nav lives on as General-mode
+  panels + palette actions, and the old routes stay alive behind stat-tile
+  links.
+- **D-039 — Legacy-alias migration ran two-phase by design.** Phase A kept
+  `primary/accent/signal/nebula`, `rounded-glass`, and `font-display` as
+  LEGACY aliases in tailwind.config.ts because Tailwind silently drops
+  unknown classes — deleting the names before the re-skin would have broken
+  every page with zero build errors. Phase H did the delete: first converted
+  every remaining usage on /tasks, /journal, /review, /insights and the error
+  boundary to the new tokens (grep-verified zero leftovers), re-pointed the
+  /insights recharts palette (chartTheme.ts) at the new hex values, then
+  removed the aliases. `borderRadius.full` survives for the circle motif
+  (logo dot, round checkboxes, avatar orb).
+- **D-040 — Preview-flag discipline (§8) held, and Phase H is the payoff.**
+  Every not-yet-wired panel shipped UI-only behind `flags.* = "preview"` with
+  a PREVIEW badge and a grep guard (no `fetch(` inside components/preview/).
+  Phase H flipped tokenUsage and emailCapture to "enabled" by replacing mocks
+  with the real endpoints, and *moved* DoctorPanel/ModelsPanel out of
+  preview/ into system/ the moment they gained fetches, keeping the guard
+  meaningful. Still preview: flashcards, library, focusTimer, activeWork,
+  courseCreate, courseHub, localModels (registration is real; server-side
+  routing to local endpoints is not), and the palette's reindex row (no HTTP
+  endpoint exists).
+- **D-041 — Note creation is a writer-gated create-ONLY path.** The quick-note
+  modal needed title-derived files (`00-Inbox/YYYY-MM-DD-<slug>.md`), which
+  `PUT /api/note` (CAS update of an existing file) can't do. New
+  `writer.create_note` + `POST /api/note/create` (201): snapshot-first (I2),
+  `guard_user_path` (I3), and it refuses existing files (`WriterExists` →
+  409) instead of dedupe-renaming like ingest does — the user picked that
+  exact filename, so the client resolves collisions explicitly (numbered-slug
+  retry) rather than the server silently renaming.
+- **D-042 — gcal import guard + [gcal] extra (fresh-venv 500s).**
+  `gcal._service()` imported google-api-python-client/google-auth before
+  checking whether a token was even stored, so /api/agenda and /api/insights
+  raised ImportError in every fresh venv — deps that were declared nowhere.
+  Chose the guard over making them base deps: the base app must work fully
+  offline/unconfigured (D-020), and the google stack is heavy. `_service()`
+  now checks the keyring token first (unconfigured → `[]`, libs untouched);
+  the libs are declared in a new `[gcal]` extra needed only to actually
+  connect. Regression tests block google imports to simulate the fresh venv.
+- **D-043 — E2E roundtrip flake root cause: live-agent warm-up stall.** The
+  capture→approve→vault roundtrip spec intermittently timed out because the
+  dashboard chat spec runs first and its ws message starts `ChatAgent.warm()`
+  (`_default_chat_runner`, backend/main.py) — the embedding-model cold load
+  stalls the backend event loop and slows frontend hydration well past the
+  default 5s polls. Fixed in Phase F (1d3a484) two ways: the capture step
+  re-fills until Save actually enables (a fill landing before hydration
+  updates the DOM but not React state, leaving Save disabled forever), and
+  the vault-write polls get explicit 30s timeouts (the writer request queues
+  behind the busy loop; the write lands, just late). The production behavior
+  was already correct (warm-up runs on a daemon thread, D-014) — the test
+  just assumed a cold backend responds instantly.

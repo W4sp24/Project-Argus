@@ -1,13 +1,15 @@
-// Palette validated vs dark glass surface #17092e (dataviz six checks pass).
-export const SERIES = { violet: "#8b5cf6", cyan: "#0891b2", rose: "#e11d48" };
-export const SURFACE = "#17092e";
+// Recharts is reserved for /insights (§10) — everywhere else uses the single-SVG
+// MiniLineChart. Colors are the Phase H terminal-HUD palette tokens (tailwind.config.ts):
+// violet = mode.general, cyan = mode.study, rose = the danger token (dataviz six checks pass).
+export const SERIES = { violet: "#a78bfa", cyan: "#22d3ee", rose: "#fb7185" };
+export const SURFACE = "#0c0916"; // panel
 
-export const AXIS_TICK = { fill: "#6b5f94", fontSize: 10, fontFamily: "var(--font-mono)" };
+export const AXIS_TICK = { fill: "#5a4f82", fontSize: 10, fontFamily: "var(--font-mono)" }; // ink-faint
 
 export const TOOLTIP_STYLE = {
-  background: "rgba(23,9,46,0.95)",
-  border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: 12,
+  background: "#0c0916", // panel
+  border: "1px solid #2c2250", // lineHi
+  borderRadius: 0, // square terminal panels — no rounded corners anywhere (§1)
   fontSize: 12,
-  color: "#ede9fe",
+  color: "#ece7fb", // ink-bright
 };
