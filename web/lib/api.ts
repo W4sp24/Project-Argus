@@ -202,6 +202,8 @@ export interface UsagePoint {
   label: string;
   input_tokens: number;
   output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
   total_tokens: number;
 }
 
@@ -209,6 +211,8 @@ export interface FeatureUsage {
   feature: string;
   input_tokens: number;
   output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
   total_tokens: number;
 }
 
@@ -219,6 +223,8 @@ export interface UsageReport {
   session_id: string;
   input_tokens: number;
   output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number;
   series: UsagePoint[];
@@ -228,6 +234,39 @@ export interface UsageReport {
 /** TOKENS.CLAUDE (§14) — GET /api/usage?range=session|week|all. */
 export function useUsage(range: UsageRange) {
   return useSWR<UsageReport>(`/api/usage?range=${range}`, fetcher);
+}
+
+export interface CliModelUsage {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+}
+
+export interface CliUsagePoint {
+  label: string;
+  total_tokens: number;
+}
+
+export type CliUsageRange = "today" | "week" | "all";
+
+export interface CliUsageReport {
+  range: CliUsageRange;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  series: CliUsagePoint[];
+  models: CliModelUsage[];
+}
+
+/** CLAUDE CODE — account-wide CLI usage, GET /api/usage/cli?range=today|week|all. */
+export function useCliUsage(range: CliUsageRange) {
+  return useSWR<CliUsageReport>(`/api/usage/cli?range=${range}`, fetcher);
 }
 
 export interface DoctorCheck {

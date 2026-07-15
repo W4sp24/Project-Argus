@@ -41,6 +41,7 @@ def test_record_result_usage_reads_sdk_message(tmp_path: Path) -> None:
     row = conn.execute("SELECT * FROM token_usage").fetchone()
     conn.close()
     assert (row["input_tokens"], row["output_tokens"]) == (7, 3)
+    assert row["cache_read_input_tokens"] == 99
     assert row["feature"] == "planner"
 
 
@@ -48,11 +49,21 @@ def test_record_result_usage_tolerates_missing_usage(tmp_path: Path) -> None:
     record_result_usage(tmp_path / "argus.db", "chat", object())  # no .usage -> no row, no raise
 
 
-def _seed(conn, ts: str, feature: str, session_id: str, tokens_in: int, tokens_out: int) -> None:
+def _seed(
+    conn,
+    ts: str,
+    feature: str,
+    session_id: str,
+    tokens_in: int,
+    tokens_out: int,
+    cache_creation: int = 0,
+    cache_read: int = 0,
+) -> None:
     conn.execute(
-        "INSERT INTO token_usage (ts, feature, session_id, model, input_tokens, output_tokens)"
-        " VALUES (?, ?, ?, 'claude-sonnet-4', ?, ?)",
-        (ts, feature, session_id, tokens_in, tokens_out),
+        "INSERT INTO token_usage (ts, feature, session_id, model, input_tokens, output_tokens,"
+        " cache_creation_input_tokens, cache_read_input_tokens)"
+        " VALUES (?, ?, ?, 'claude-sonnet-5', ?, ?, ?, ?)",
+        (ts, feature, session_id, tokens_in, tokens_out, cache_creation, cache_read),
     )
     conn.commit()
 
@@ -66,18 +77,19 @@ def conn(tmp_path: Path):
 
 
 def test_session_report_is_per_exchange_and_scoped(conn) -> None:
-    _seed(conn, "2026-07-15 09:00:00", "chat", usage.SESSION_ID, 100, 50)
+    _seed(conn, "2026-07-15 09:00:00", "chat", usage.SESSION_ID, 100, 50, cache_read=20)
     _seed(conn, "2026-07-15 09:05:00", "briefing", usage.SESSION_ID, 200, 80)
     _seed(conn, "2026-07-01 09:00:00", "chat", "older-session", 999, 999)
 
     report = usage_report(conn, "session")
     assert report.session_id == usage.SESSION_ID
     assert (report.input_tokens, report.output_tokens) == (300, 130)
-    assert report.total_tokens == 430
+    assert report.cache_read_input_tokens == 20
+    assert report.total_tokens == 450
     assert len(report.series) == 2, "session series is one point per exchange"
     assert report.estimated_cost_usd > 0
     features = {f.feature: f.total_tokens for f in report.features}
-    assert features == {"chat": 150, "briefing": 280}
+    assert features == {"chat": 170, "briefing": 280}
 
 
 def test_week_report_groups_by_day(conn) -> None:

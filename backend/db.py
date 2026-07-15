@@ -67,8 +67,29 @@ CREATE TABLE IF NOT EXISTS token_usage (
     session_id    TEXT NOT NULL,
     model         TEXT NOT NULL DEFAULT '',
     input_tokens  INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS cli_usage_files (
+    path       TEXT PRIMARY KEY,
+    mtime_ns   INTEGER NOT NULL,
+    size       INTEGER NOT NULL,
+    scanned_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS cli_usage (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path     TEXT NOT NULL,
+    ts            TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cli_usage_file_path ON cli_usage(file_path);
 """
 
 
@@ -88,4 +109,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(suggestions)")}
     if "dismiss_reason" not in columns:  # lightweight migration for pre-P3 databases
         conn.execute("ALTER TABLE suggestions ADD COLUMN dismiss_reason TEXT")
+    usage_columns = {row["name"] for row in conn.execute("PRAGMA table_info(token_usage)")}
+    if "cache_creation_input_tokens" not in usage_columns:  # migration for pre-cache-token DBs
+        conn.execute("ALTER TABLE token_usage ADD COLUMN cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE token_usage ADD COLUMN cache_read_input_tokens INTEGER NOT NULL DEFAULT 0")
     conn.commit()

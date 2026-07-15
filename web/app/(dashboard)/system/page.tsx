@@ -1,3 +1,4 @@
+import CliUsage from "@/components/CliUsage";
 import ModeHeader from "@/components/ModeHeader";
 import TokenUsage from "@/components/TokenUsage";
 import DoctorPanel from "@/components/system/DoctorPanel";
@@ -24,6 +25,7 @@ export default function SystemPage() {
           </div>
           <div className="flex min-w-0 flex-col gap-4">
             <TokenUsage />
+            <CliUsage />
           </div>
         </div>
       </div>

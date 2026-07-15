@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import MiniLineChart from "@/components/charts/MiniLineChart";
 import Panel from "@/components/Panel";
+import UsageBlock from "@/components/UsageBlock";
 import { useUsage, type UsageRange } from "@/lib/api";
 
 const VIEWS: UsageRange[] = ["session", "week", "all"];
@@ -28,8 +28,9 @@ export default function TokenUsage() {
   const [view, setView] = useState<UsageRange>("session");
   const { data, isLoading } = useUsage(view);
 
-  const hasData = (data?.total_tokens ?? 0) > 0;
-  const pctOfCap = data ? Math.min(100, Math.round((data.total_tokens / SOFT_CAPS[view]) * 100)) : 0;
+  const pctOfCap = data
+    ? Math.min(100, Math.round((data.total_tokens / SOFT_CAPS[view]) * 100))
+    : 0;
 
   return (
     <Panel
@@ -52,45 +53,22 @@ export default function TokenUsage() {
         </div>
       }
     >
-      {isLoading && !data ? (
-        <p className="text-[12.5px] text-ink-faint">loading usage…</p>
-      ) : !hasData ? (
-        <p className="text-[12.5px] text-ink-faint">no usage recorded yet</p>
-      ) : (
-        <>
-          <p className="font-mono text-2xl font-semibold text-ink-bright">
-            {data!.total_tokens.toLocaleString()}
-            <span className="ml-1.5 text-xs font-normal text-ink-faint">tokens</span>
-          </p>
-          <p className="mt-1 font-mono text-[11px] text-ink-muted">
-            in {data!.input_tokens.toLocaleString()} · out {data!.output_tokens.toLocaleString()} · ≈$
-            {data!.estimated_cost_usd.toFixed(2)}
-          </p>
-
-          <div className="mt-2">
-            <div className="h-1 w-full bg-sunken">
-              <div className="h-1 bg-[var(--ac)]" style={{ width: `${pctOfCap}%` }} />
-            </div>
-            <p className="mt-1 font-mono text-[10px] text-ink-faint">{pctOfCap}% of soft cap</p>
-          </div>
-
-          <div className="mt-3">
-            <MiniLineChart
-              values={data!.series.map((point) => point.total_tokens)}
-              labels={data!.series.map((point) => chartLabel(view, point.label))}
-            />
-          </div>
-
-          <ul className="mt-3 space-y-1 border-t border-line pt-2">
-            {data!.features.map((feature) => (
-              <li key={feature.feature} className="flex items-center justify-between font-mono text-[11px]">
-                <span className="uppercase tracking-wide text-ink-faint">{feature.feature}</span>
-                <span className="text-ink-muted">{feature.total_tokens.toLocaleString()}</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      <UsageBlock
+        isLoading={isLoading}
+        totalTokens={data?.total_tokens ?? 0}
+        inputTokens={data?.input_tokens ?? 0}
+        outputTokens={data?.output_tokens ?? 0}
+        estimatedCostUsd={data?.estimated_cost_usd ?? 0}
+        pctOfCap={pctOfCap}
+        series={(data?.series ?? []).map((point) => ({
+          label: chartLabel(view, point.label),
+          value: point.total_tokens,
+        }))}
+        rows={(data?.features ?? []).map((feature) => ({
+          label: feature.feature,
+          value: feature.total_tokens,
+        }))}
+      />
     </Panel>
   );
 }

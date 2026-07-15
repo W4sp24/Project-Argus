@@ -33,6 +33,8 @@ class UsagePoint(BaseModel):
     label: str
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
     total_tokens: int
 
 
@@ -42,6 +44,8 @@ class FeatureUsage(BaseModel):
     feature: str
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
     total_tokens: int
 
 
@@ -52,14 +56,18 @@ class UsageReport(BaseModel):
     is the running server's lifetime (chat has no server-side session store,
     so process boot is the session boundary). ``series`` granularity depends
     on ``range``: per-exchange for ``session``, per-day for ``week``,
-    per-week for ``all``. ``estimated_cost_usd`` uses the static per-model
-    rate table in :mod:`backend.config` — an estimate, not a bill.
+    per-week for ``all``. ``total_tokens`` sums input + output + cache-creation
+    + cache-read, matching Anthropic's own per-call accounting.
+    ``estimated_cost_usd`` uses the static per-model rate table in
+    :mod:`backend.config` — an estimate, not a bill.
     """
 
     range: Range
     session_id: str
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
     total_tokens: int
     estimated_cost_usd: float
     series: list[UsagePoint]
@@ -72,6 +80,8 @@ def record_usage(
     input_tokens: int,
     output_tokens: int,
     model: str = "",
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
 ) -> None:
     """Insert one usage row. Swallows every error (fire-and-forget)."""
     try:
@@ -86,8 +96,17 @@ def record_usage(
             init_schema(conn)
             conn.execute(
                 "INSERT INTO token_usage (feature, session_id, model, input_tokens,"
-                " output_tokens) VALUES (?, ?, ?, ?, ?)",
-                (feature, SESSION_ID, model, int(input_tokens), int(output_tokens)),
+                " output_tokens, cache_creation_input_tokens, cache_read_input_tokens)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    feature,
+                    SESSION_ID,
+                    model,
+                    int(input_tokens),
+                    int(output_tokens),
+                    int(cache_creation_input_tokens),
+                    int(cache_read_input_tokens),
+                ),
             )
             conn.commit()
         finally:
@@ -112,6 +131,8 @@ def record_result_usage(
             int(usage.get("input_tokens") or 0),
             int(usage.get("output_tokens") or 0),
             model,
+            int(usage.get("cache_creation_input_tokens") or 0),
+            int(usage.get("cache_read_input_tokens") or 0),
         )
     except Exception:  # noqa: S110 - usage logging is strictly best-effort
         pass
@@ -126,6 +147,15 @@ def _cost(rows: list[sqlite3.Row]) -> float:
     return round(total, 4)
 
 
+def _row_total(row: sqlite3.Row) -> int:
+    return (
+        row["input_tokens"]
+        + row["output_tokens"]
+        + row["cache_creation_input_tokens"]
+        + row["cache_read_input_tokens"]
+    )
+
+
 def _series(rows: list[sqlite3.Row], range_: Range) -> list[UsagePoint]:
     if range_ == "session":  # one point per exchange (per recorded call)
         return [
@@ -133,24 +163,30 @@ def _series(rows: list[sqlite3.Row], range_: Range) -> list[UsagePoint]:
                 label=row["ts"],
                 input_tokens=row["input_tokens"],
                 output_tokens=row["output_tokens"],
-                total_tokens=row["input_tokens"] + row["output_tokens"],
+                cache_creation_input_tokens=row["cache_creation_input_tokens"],
+                cache_read_input_tokens=row["cache_read_input_tokens"],
+                total_tokens=_row_total(row),
             )
             for row in rows
         ]
     buckets: dict[str, list[int]] = {}
     for row in rows:
         key = row["ts"][:10] if range_ == "week" else f"{row['ts'][:4]}-w{row['week']}"
-        entry = buckets.setdefault(key, [0, 0])
+        entry = buckets.setdefault(key, [0, 0, 0, 0])
         entry[0] += row["input_tokens"]
         entry[1] += row["output_tokens"]
+        entry[2] += row["cache_creation_input_tokens"]
+        entry[3] += row["cache_read_input_tokens"]
     return [
         UsagePoint(
             label=label,
-            input_tokens=in_out[0],
-            output_tokens=in_out[1],
-            total_tokens=in_out[0] + in_out[1],
+            input_tokens=totals[0],
+            output_tokens=totals[1],
+            cache_creation_input_tokens=totals[2],
+            cache_read_input_tokens=totals[3],
+            total_tokens=sum(totals),
         )
-        for label, in_out in sorted(buckets.items())
+        for label, totals in sorted(buckets.items())
     ]
 
 
@@ -165,6 +201,7 @@ def usage_report(
         where = "WHERE ts >= datetime('now', '-6 days', 'start of day')"
     rows = conn.execute(
         "SELECT ts, feature, model, input_tokens, output_tokens,"
+        " cache_creation_input_tokens, cache_read_input_tokens,"
         " strftime('%W', ts) AS week"
         f" FROM token_usage {where} ORDER BY id",
         params,
@@ -172,28 +209,36 @@ def usage_report(
 
     total_in = sum(row["input_tokens"] for row in rows)
     total_out = sum(row["output_tokens"] for row in rows)
+    total_cache_creation = sum(row["cache_creation_input_tokens"] for row in rows)
+    total_cache_read = sum(row["cache_read_input_tokens"] for row in rows)
 
     by_feature: dict[str, list[int]] = {}
     for row in rows:
-        entry = by_feature.setdefault(row["feature"], [0, 0])
+        entry = by_feature.setdefault(row["feature"], [0, 0, 0, 0])
         entry[0] += row["input_tokens"]
         entry[1] += row["output_tokens"]
+        entry[2] += row["cache_creation_input_tokens"]
+        entry[3] += row["cache_read_input_tokens"]
 
     return UsageReport(
         range=range_,
         session_id=session_id,
         input_tokens=total_in,
         output_tokens=total_out,
-        total_tokens=total_in + total_out,
+        cache_creation_input_tokens=total_cache_creation,
+        cache_read_input_tokens=total_cache_read,
+        total_tokens=total_in + total_out + total_cache_creation + total_cache_read,
         estimated_cost_usd=_cost(rows),
         series=_series(rows, range_),
         features=[
             FeatureUsage(
                 feature=feature,
-                input_tokens=in_out[0],
-                output_tokens=in_out[1],
-                total_tokens=in_out[0] + in_out[1],
+                input_tokens=totals[0],
+                output_tokens=totals[1],
+                cache_creation_input_tokens=totals[2],
+                cache_read_input_tokens=totals[3],
+                total_tokens=sum(totals),
             )
-            for feature, in_out in sorted(by_feature.items())
+            for feature, totals in sorted(by_feature.items())
         ],
     )

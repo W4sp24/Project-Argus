@@ -1,9 +1,13 @@
 """SYSTEM tab endpoints (redesign §12/§14/§7): doctor, token usage, models.
 
 Doctor wraps the existing read-only checks. Usage aggregates the
-``token_usage`` table. The model registry serves built-ins from
-:mod:`backend.config` plus user-added local models persisted in
-``.argus/models.json`` — never the vault, never any API key (I4).
+``token_usage`` table (Argus's own chat/planner/study-generate calls); the
+sibling ``/usage/cli`` endpoint aggregates account-wide Claude Code CLI usage
+parsed from local ``~/.claude/projects/**/*.jsonl`` transcripts — a distinct
+data source, intentionally not combined into one grand total. The model
+registry serves built-ins from :mod:`backend.config` plus user-added local
+models persisted in ``.argus/models.json`` — never the vault, never any API
+key (I4).
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import sqlite3
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend import cli_usage
 from backend.config import Settings, load_user_models, save_user_models
 from backend.db import connect, init_schema
 from backend.doctor import Check, run_checks
@@ -58,6 +63,14 @@ def build_system_router(settings: Settings) -> APIRouter:
         conn = db()
         try:
             return usage_report(conn, range)
+        finally:
+            conn.close()
+
+    @router.get("/usage/cli", response_model=cli_usage.CliUsageReport)
+    def usage_cli(range: cli_usage.CliRange = "today") -> cli_usage.CliUsageReport:  # noqa: A002
+        conn = db()
+        try:
+            return cli_usage.cli_usage_report(conn, range, root=cli_usage.DEFAULT_CLAUDE_HOME)
         finally:
             conn.close()
 
