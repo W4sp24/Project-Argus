@@ -23,11 +23,20 @@ export default function MiniLineChart({
   const range = max - min || 1;
   const stepX = values.length > 1 ? width / (values.length - 1) : 0;
 
-  const points = values.map((v, i) => {
-    const x = i * stepX;
-    const y = height - ((v - min) / range) * height;
-    return [x, y] as const;
-  });
+  const points =
+    values.length === 1
+      ? (() => {
+          const y = height - ((values[0] - min) / range) * height;
+          return [
+            [0, y],
+            [width, y],
+          ] as const;
+        })()
+      : values.map((v, i) => {
+          const x = i * stepX;
+          const y = height - ((v - min) / range) * height;
+          return [x, y] as const;
+        });
 
   const line = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
   const area = `0,${height} ${line} ${width},${height}`;
