@@ -35,7 +35,7 @@ from backend.config import FALLBACK_RATE, MODEL_RATES
 
 DEFAULT_CLAUDE_HOME = Path.home() / ".claude" / "projects"
 
-CliRange = Literal["today", "week", "all"]
+CliRange = Literal["today", "week", "all", "5h"]
 
 _SYNTHETIC_MODEL = "<synthetic>"
 
@@ -62,9 +62,11 @@ class CliUsageReport(BaseModel):
     """GET /api/usage/cli payload.
 
     ``today`` = current calendar day, ``week`` = rolling 7 days (day-bucketed
-    series), ``all`` = full local history (week-bucketed series) — distinct
-    from :class:`backend.usage.Range`, since CLI transcripts have no
-    "backend process boot" concept to map a ``session`` range onto.
+    series), ``all`` = full local history (week-bucketed series), ``5h`` =
+    rolling 5-hour window (same per-exchange series bucketing as ``today``,
+    for the progressive 5-hour usage limit bar) — distinct from
+    :class:`backend.usage.Range`, since CLI transcripts have no "backend
+    process boot" concept to map a ``session`` range onto.
     """
 
     range: CliRange
@@ -218,6 +220,8 @@ def cli_usage_report(
         where = "WHERE ts >= datetime('now', 'start of day')"
     elif range_ == "week":
         where = "WHERE ts >= datetime('now', '-6 days', 'start of day')"
+    elif range_ == "5h":
+        where = "WHERE ts >= datetime('now', '-5 hours')"
     rows = conn.execute(
         "SELECT ts, model, input_tokens, output_tokens, cache_creation_input_tokens,"
         " cache_read_input_tokens, strftime('%W', ts) AS week"

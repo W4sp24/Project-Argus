@@ -49,6 +49,39 @@ def save_user_models(models_file: Path, models: list[dict]) -> None:
     models_file.write_text(json.dumps(models, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+# --- Progressive usage caps (redesign §14) ----------------------------------
+# User-editable pair of numeric caps for the CLAUDE CODE usage panel's
+# progressive limit bar, persisted in ``.argus/usage_caps.json`` (config dir,
+# not the vault). ``five_hour_cap`` default (19000) is a community-sourced
+# rough estimate of the Claude Pro plan's 5-hour Claude Code token allowance —
+# Anthropic doesn't publish an exact number, so this is an editable rough
+# default, not an authoritative figure. ``weekly_cap`` defaults to ``None``
+# ("not configured yet") — there is no reasonable source for a default weekly
+# number, so none is invented.
+
+DEFAULT_CAPS: dict = {"five_hour_cap": 19000, "weekly_cap": None}
+
+
+def load_user_caps(caps_file: Path) -> dict:
+    """User-configured usage caps from ``usage_caps.json`` (defaults when absent/corrupt)."""
+    try:
+        payload = json.loads(caps_file.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return dict(DEFAULT_CAPS)
+        return {
+            "five_hour_cap": payload.get("five_hour_cap", DEFAULT_CAPS["five_hour_cap"]),
+            "weekly_cap": payload.get("weekly_cap", DEFAULT_CAPS["weekly_cap"]),
+        }
+    except Exception:
+        return dict(DEFAULT_CAPS)
+
+
+def save_user_caps(caps_file: Path, caps: dict) -> None:
+    """Persist user-configured usage caps next to the sqlite db (never the vault)."""
+    caps_file.parent.mkdir(parents=True, exist_ok=True)
+    caps_file.write_text(json.dumps(caps, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 class ConfigError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
 
@@ -102,6 +135,11 @@ class Settings:
     def models_file(self) -> Path:
         """Where user-registered local models persist (config dir, not vault notes)."""
         return self.db_path.parent / "models.json"
+
+    @property
+    def caps_file(self) -> Path:
+        """Where user-configured usage caps persist (config dir, not vault notes)."""
+        return self.db_path.parent / "usage_caps.json"
 
     @property
     def models(self) -> list[dict]:

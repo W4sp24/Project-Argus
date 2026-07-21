@@ -16,10 +16,12 @@ import re
 import sqlite3
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from typing import Optional
 
 from backend import cli_usage
-from backend.config import Settings, load_user_models, save_user_models
+from backend.config import Settings, load_user_caps, load_user_models, save_user_caps, save_user_models
 from backend.db import connect, init_schema
 from backend.doctor import Check, run_checks
 from backend.usage import Range, UsageReport, usage_report
@@ -43,6 +45,20 @@ class AddModelRequest(BaseModel):
 
     name: str
     endpoint: str
+
+
+class CapsInfo(BaseModel):
+    """Progressive usage limit caps for the CLAUDE CODE usage panel."""
+
+    five_hour_cap: int
+    weekly_cap: Optional[int] = None
+
+
+class SetCapsRequest(BaseModel):
+    """PUT /api/usage/caps body. Both caps must be positive integers (weekly optional)."""
+
+    five_hour_cap: int = Field(gt=0)
+    weekly_cap: Optional[int] = Field(default=None, gt=0)
 
 
 def build_system_router(settings: Settings) -> APIRouter:
@@ -73,6 +89,16 @@ def build_system_router(settings: Settings) -> APIRouter:
             return cli_usage.cli_usage_report(conn, range, root=cli_usage.DEFAULT_CLAUDE_HOME)
         finally:
             conn.close()
+
+    @router.get("/usage/caps", response_model=CapsInfo)
+    def get_usage_caps() -> CapsInfo:
+        return CapsInfo(**load_user_caps(settings.caps_file))
+
+    @router.put("/usage/caps", response_model=CapsInfo)
+    def set_usage_caps(request: SetCapsRequest) -> CapsInfo:
+        caps = {"five_hour_cap": request.five_hour_cap, "weekly_cap": request.weekly_cap}
+        save_user_caps(settings.caps_file, caps)
+        return CapsInfo(**caps)
 
     def _registry() -> list[ModelInfo]:
         return [

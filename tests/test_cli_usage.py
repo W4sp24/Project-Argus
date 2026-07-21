@@ -141,6 +141,22 @@ def test_cli_usage_report_today(tmp_path: Path, conn) -> None:
     assert report.models == []
 
 
+def test_cli_usage_report_5h_rolling_window(tmp_path: Path, conn) -> None:
+    conn.execute(
+        "INSERT INTO cli_usage (file_path, ts, model, input_tokens, output_tokens) VALUES"
+        " ('f', datetime('now', '-1 hours'), 'claude-sonnet-5', 10, 5),"
+        " ('f', datetime('now', '-4 hours'), 'claude-sonnet-5', 20, 5),"
+        " ('f', datetime('now', '-6 hours'), 'claude-sonnet-5', 999, 999)"
+    )
+    conn.commit()
+
+    report = cli_usage_report(conn, "5h", root=tmp_path / "no-such-dir")
+    assert report.range == "5h"
+    assert report.total_tokens == 40, "row older than 5 hours is excluded"
+    models = {m.model: m.total_tokens for m in report.models}
+    assert models == {"claude-sonnet-5": 40}
+
+
 def test_cli_usage_report_week_groups_by_day_and_model(tmp_path: Path, conn) -> None:
     conn.execute(
         "INSERT INTO cli_usage (file_path, ts, model, input_tokens, output_tokens) VALUES"

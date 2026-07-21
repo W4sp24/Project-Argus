@@ -88,6 +88,45 @@ def test_delete_model_guards(client: TestClient) -> None:
     assert client.delete("/api/models/ghost").status_code == 404
 
 
+def test_usage_caps_defaults(client: TestClient) -> None:
+    caps = client.get("/api/usage/caps").json()
+    assert caps == {"five_hour_cap": 19000, "weekly_cap": None}
+
+
+def test_usage_caps_put_persists(client: TestClient, vault: Path) -> None:
+    updated = client.put("/api/usage/caps", json={"five_hour_cap": 25000, "weekly_cap": 150000})
+    assert updated.status_code == 200
+    assert updated.json() == {"five_hour_cap": 25000, "weekly_cap": 150000}
+
+    # Persists in the argus config dir (never the vault's note zones).
+    caps_file = vault / ".argus" / "usage_caps.json"
+    assert caps_file.is_file()
+    assert json.loads(caps_file.read_text(encoding="utf-8")) == {
+        "five_hour_cap": 25000,
+        "weekly_cap": 150000,
+    }
+
+    refetched = client.get("/api/usage/caps").json()
+    assert refetched == {"five_hour_cap": 25000, "weekly_cap": 150000}
+
+
+def test_usage_caps_put_rejects_non_positive(client: TestClient) -> None:
+    assert (
+        client.put("/api/usage/caps", json={"five_hour_cap": -5, "weekly_cap": None}).status_code
+        == 422
+    )
+    assert (
+        client.put("/api/usage/caps", json={"five_hour_cap": 0, "weekly_cap": None}).status_code
+        == 422
+    )
+    assert (
+        client.put(
+            "/api/usage/caps", json={"five_hour_cap": 19000, "weekly_cap": 0}
+        ).status_code
+        == 422
+    )
+
+
 def test_chat_agent_model_resolution(vault: Path) -> None:
     from backend.agent.runtime import MODEL, ChatAgent
     from backend.config import save_user_models
