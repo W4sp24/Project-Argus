@@ -76,11 +76,28 @@ jobs:
         run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
         working-directory: desktop
 
+      # build/icon.ico is generated, not committed (so it can never go stale
+      # against icon.svg). electron-builder.yml references it for the app, the
+      # installer and the uninstaller, so this has to run before packaging --
+      # the npm scripts do it as a prebuild, but CI calls electron-builder
+      # directly.
+      - name: Generate the app icon
+        run: node scripts/make-icon.mjs
+        working-directory: desktop
+
       - name: Build and publish the installer
-        run: npx electron-builder --win --publish always
+        shell: pwsh
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx electron-builder --win --publish always 2>&1 | Tee-Object -FilePath eb.log
+          if ($LASTEXITCODE -ne 0) {
+            # Raw step logs need a login to read; annotations don't.
+            $tail = ((Get-Content eb.log -Tail 30) -join ' | ')
+            Write-Host "::error title=electron-builder::$tail"
+            exit 1
+          }
 
       # GitHub caps a single release asset at 2GB. The realistic installer is
       # 550-700MB, so this is a tripwire, not an expected failure -- it tells
