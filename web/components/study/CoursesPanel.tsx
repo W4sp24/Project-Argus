@@ -4,21 +4,41 @@ import Link from "next/link";
 import { useRef, useState, type DragEvent } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
-import { type CourseInfo, useStudyCourses, useStudyExams } from "@/lib/api";
+import { ApiError, mutateJSON, useStudyCourses, useStudyExams } from "@/lib/api";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md"];
 const SAFE_CODE_RE = /^[A-Za-z0-9._-]+$/;
 
-function PreviewTag() {
-  return (
-    <span className="border border-[#3d2f66] px-1 py-px font-mono text-[8px] uppercase tracking-[0.16em] text-[#8b7bc0]">
-      PREVIEW
-    </span>
-  );
-}
+/** Mirrors `vault-template/15-Courses/CS000/course.md`, interpolated with the
+ *  submitted code/title and today's date (the template's `created: "{{date}}"`
+ *  substitution normally done by the vault-init flow). */
+function renderCourseTemplate(code: string, title: string): string {
+  const date = new Date().toISOString().slice(0, 10);
+  return `---
+type: course
+code: ${code}
+title: ${title}
+created: "${date}"
+tags: [course]
+status: active
+---
 
-let localSeq = 0;
+# ${code} — ${title}
+
+## Info
+
+- **Professor:**
+- **Schedule:**
+- **Grading:**
+
+## Folders
+
+- \`notes/\` — your own lecture & reading notes (markdown)
+- \`materials/\` — drop slides, readings, and the syllabus here (PDF/PPTX/DOCX); Argus indexes them automatically
+- \`study/\` — Argus writes study guides, practice exams, and review queues here
+`;
+}
 
 /**
  * COURSES (§4 Study Overview): lists real courses from `GET /api/study/courses`
@@ -31,11 +51,12 @@ let localSeq = 0;
  *    `/api/study/exam` endpoints (kept from the old page — dropping them
  *    would regress working functionality even though the spec text doesn't
  *    call them out explicitly for this panel).
- *  - `+ ADD COURSE` is local-only [PREVIEW]: `PUT /api/note` only replaces a
- *    note that already exists (backend/writer.py `update_note` raises
- *    WriterMissing otherwise) and there is no create-note/create-course
- *    endpoint in this branch's ancestry, so a "new" course only lives in
- *    local state and is never written to the vault.
+ *  - `+ ADD COURSE` renders the vault's course template with the submitted
+ *    code/title and creates it for real via `POST /api/note/create`
+ *    (backend/writer.py `create_note`), landing at `15-Courses/<CODE>/course.md`.
+ *    A 409 (code already exists) surfaces as a clear toast instead of a
+ *    generic failure; success re-fetches `GET /api/study/courses` so the new
+ *    course appears from the vault, not from local mock state.
  *  - `×` never deletes vault files (spec: "removes the course entry, never
  *    deletes vault files") — it hides the row locally and toasts that the
  *    vault folder is untouched, since courses are derived from vault folders
@@ -48,16 +69,16 @@ export default function CoursesPanel() {
   const { show } = useToast();
 
   const [hidden, setHidden] = useState<Set<string>>(new Set());
-  const [added, setAdded] = useState<CourseInfo[]>([]);
   const [addCode, setAddCode] = useState("");
   const [addName, setAddName] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [dragOverCourse, setDragOverCourse] = useState<string | null>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const visible = [...(courses ?? []), ...added].filter((course) => !hidden.has(course.code));
+  const visible = (courses ?? []).filter((course) => !hidden.has(course.code));
 
   function isAcceptedFile(file: File) {
     const name = file.name.toLowerCase();
@@ -65,10 +86,6 @@ export default function CoursesPanel() {
   }
 
   async function upload(course: string, file: File) {
-    if (course.startsWith("local-mock-")) {
-      show(`preview :: "${course}" isn't a real course yet — nothing to upload to`);
-      return;
-    }
     if (!isAcceptedFile(file)) {
       show(`"${file.name}" isn't supported — use ${ACCEPTED_EXTENSIONS.join(", ")}`);
       return;
@@ -102,10 +119,6 @@ export default function CoursesPanel() {
   }
 
   async function generate(kind: "guide" | "exam", course: string) {
-    if (course.startsWith("local-mock-")) {
-      show(`preview :: "${course}" isn't a real course yet`);
-      return;
-    }
     setBusyAction(`${kind}-${course}`);
     show(`generating ${kind} for ${course} — this can take a few minutes…`);
     const response = await fetch(`/api/study/${kind}`, {
@@ -130,26 +143,33 @@ export default function CoursesPanel() {
     show(`hidden :: ${code} — 15-Courses/${code}/ is untouched in the vault`);
   }
 
-  function addCourseLocally(event: React.FormEvent) {
+  async function addCourse(event: React.FormEvent) {
     event.preventDefault();
     const code = addCode.trim().toUpperCase();
-    const name = addName.trim();
-    if (!code || !name || !SAFE_CODE_RE.test(code)) return;
-    localSeq += 1;
-    setAdded((prev) => [
-      ...prev,
-      {
-        code: `local-mock-${localSeq}-${code}`,
-        title: name,
-        path: `15-Courses/${code}/course.md`,
-        materials: 0,
-        notes: 0,
-      },
-    ]);
-    setAddCode("");
-    setAddName("");
-    setShowAddForm(false);
-    show(`preview :: "${code}" added locally — no create-course endpoint yet, 15-Courses/${code}/ was not written`);
+    const title = addName.trim();
+    if (!code || !title || !SAFE_CODE_RE.test(code) || creating) return;
+
+    setCreating(true);
+    const path = `15-Courses/${code}/course.md`;
+    try {
+      await mutateJSON<{ path: string }>("/api/note/create", {
+        path,
+        content: renderCourseTemplate(code, title),
+      });
+      show(`course :: created → ${path}`);
+      setAddCode("");
+      setAddName("");
+      setShowAddForm(false);
+      refreshCourses();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        show(`course :: "${code}" already exists — pick a different code`);
+      } else {
+        show(`course :: create failed — ${error instanceof Error ? error.message : "backend offline?"}`);
+      }
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -162,13 +182,12 @@ export default function CoursesPanel() {
           className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint transition-colors hover:text-[var(--ac)]"
         >
           + ADD COURSE
-          <PreviewTag />
         </button>
       }
     >
       {showAddForm && (
         <form
-          onSubmit={addCourseLocally}
+          onSubmit={addCourse}
           className="mb-4 flex flex-wrap items-center gap-2 border border-dashed border-line px-3 py-3"
         >
           <input
@@ -185,10 +204,10 @@ export default function CoursesPanel() {
           />
           <button
             type="submit"
-            disabled={!addCode.trim() || !addName.trim()}
+            disabled={!addCode.trim() || !addName.trim() || creating}
             className="border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
           >
-            ADD
+            {creating ? "ADDING…" : "ADD"}
           </button>
         </form>
       )}
@@ -202,7 +221,6 @@ export default function CoursesPanel() {
 
       <div className="space-y-3">
         {visible.map((course) => {
-          const isMock = course.code.startsWith("local-mock-");
           const chips = weakTopics.filter((topic) => topic.course === course.code).slice(0, 4);
           return (
             <div
@@ -217,8 +235,7 @@ export default function CoursesPanel() {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-ink-faint">
-                    {course.code.replace(/^local-mock-\d+-/, "")}
-                    {isMock && <PreviewTag />}
+                    {course.code}
                   </p>
                   <p className="truncate text-[15px] font-medium text-ink-bright">{course.title}</p>
                 </div>
@@ -284,14 +301,12 @@ export default function CoursesPanel() {
                 >
                   {busyAction === `exam-${course.code}` ? "GENERATING…" : "+ EXAM"}
                 </button>
-                {!isMock && (
-                  <Link
-                    href={`/study/course/${encodeURIComponent(course.code)}`}
-                    className="ml-auto font-mono text-[10px] uppercase tracking-wide text-[var(--ac)] transition-colors hover:opacity-80"
-                  >
-                    HUB →
-                  </Link>
-                )}
+                <Link
+                  href={`/study/course/${encodeURIComponent(course.code)}`}
+                  className="ml-auto font-mono text-[10px] uppercase tracking-wide text-[var(--ac)] transition-colors hover:opacity-80"
+                >
+                  HUB →
+                </Link>
               </div>
             </div>
           );
