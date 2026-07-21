@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
-import { ApiError, mutateJSON } from "@/lib/api";
+import { ApiError, apiFetch, mutateJSON } from "@/lib/api";
 import { useTypewriter } from "@/lib/useTypewriter";
 
 const ACCEPT = ".pdf,.pptx,.docx,.md,.eml";
@@ -36,7 +36,7 @@ export default function IngestPanel({ target }: IngestPanelProps) {
     body.append("file", file);
     if (target) body.append("target", target);
     try {
-      const response = await fetch("/api/ingest", { method: "POST", body });
+      const response = await apiFetch("/api/ingest", { method: "POST", body });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(
@@ -67,7 +67,7 @@ export default function IngestPanel({ target }: IngestPanelProps) {
     const text = capture.trim();
     if (!text) return;
     setCapture("");
-    const response = await fetch("/api/capture", {
+    const response = await apiFetch("/api/capture", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),

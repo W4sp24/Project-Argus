@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
-import { fetcher } from "@/lib/api";
+import { apiFetch, fetcher } from "@/lib/api";
 
 interface CalendarEvent {
   title: string;
@@ -122,7 +122,7 @@ export default function PlannerTimeline() {
   async function act(id: number, action: "approve" | "dismiss") {
     setBusy(id);
     try {
-      const response = await fetch(`/api/review/${id}/${action}`, {
+      const response = await apiFetch(`/api/review/${id}/${action}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: action === "dismiss" ? JSON.stringify({ reason: "" }) : "{}",

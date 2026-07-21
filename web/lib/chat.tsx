@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { apiFetch, wsBase } from "@/lib/api";
 import { selectedModel } from "@/lib/models";
 
 export interface ChatMessage {
@@ -40,7 +41,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       { role: "argus", text: "", pending: true },
     ]);
     try {
-      const response = await fetch("/api/plan", {
+      const response = await apiFetch("/api/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ instruction: instruction || "Plan my day" }),
@@ -74,7 +75,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       { role: "argus", text: "", pending: true },
     ]);
 
-    const ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/chat`);
+    const ws = new WebSocket(`${wsBase()}/ws/chat`);
     socketRef.current = ws;
     // §7 model selection: send the chosen model with the frame. The backend
     // ws handler reads payload fields with .get() (backend/main.py ws_chat)

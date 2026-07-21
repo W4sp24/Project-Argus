@@ -6,6 +6,7 @@ to the local Next.js dev server. Run with ``uvicorn backend.main:app --port 8000
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Callable
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -25,7 +26,18 @@ from backend.journal import (
 )
 from backend.notes import NoteInfo, list_notes
 
-ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+# The desktop shell serves Next on a dynamically-allocated port, so it passes
+# its exact origin through ARGUS_ALLOWED_ORIGINS (comma-separated). Never "*":
+# the vault is readable through these routes.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "ARGUS_ALLOWED_ORIGINS", ",".join(DEFAULT_ALLOWED_ORIGINS)
+    ).split(",")
+    if origin.strip()
+]
 
 
 class HealthResponse(BaseModel):

@@ -8,6 +8,7 @@ persists under the vault's ``.argus/chroma`` directory. IDs are
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,10 @@ from backend.rag.chunk import Chunk, chunk_blocks
 from backend.rag.extract import extract_blocks
 from backend.rag.paths import is_indexable
 
-MODEL_NAME = "BAAI/bge-small-en-v1.5"
+# A HuggingFace repo id by default (downloaded on first use). The packaged
+# desktop app pre-bakes the weights and points this at an absolute path so a
+# fresh install never depends on a network fetch that can rate-limit.
+MODEL_NAME = os.environ.get("ARGUS_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 COLLECTION = "vault"
 EMBED_BATCH = 64
 

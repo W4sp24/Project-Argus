@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
-import { fetcher } from "@/lib/api";
+import { apiFetch, fetcher } from "@/lib/api";
 
 interface Briefing {
   date: string;
@@ -66,7 +66,7 @@ export default function BriefingCard() {
   async function generateBriefing() {
     setGenerating(true);
     try {
-      await fetch("/api/briefing/run", { method: "POST" });
+      await apiFetch("/api/briefing/run", { method: "POST" });
       await refreshBriefing();
     } finally {
       setGenerating(false);
