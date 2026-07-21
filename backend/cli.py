@@ -43,6 +43,27 @@ def _run_git(args: list[str], cwd: Path) -> None:
         raise InitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
 
 
+def _ensure_git_identity(cwd: Path) -> None:
+    """Give the new repo a committer identity if the machine has none.
+
+    ``git commit`` hard-fails with "Author identity unknown" when neither
+    user.name nor user.email is set, which is the default state for anyone who
+    installed Git for Windows without configuring it -- i.e. most people who
+    are not developers. Without this, creating a vault fails during onboarding.
+
+    Only ever writes repo-local config, and only when git cannot already
+    resolve an identity, so an existing global setting is left alone and
+    authorship stays correct for people who have one.
+    """
+    probe = subprocess.run(
+        ["git", "var", "GIT_AUTHOR_IDENT"], cwd=cwd, capture_output=True, text=True, check=False
+    )
+    if probe.returncode == 0:
+        return
+    _run_git(["config", "user.name", "Argus"], cwd=cwd)
+    _run_git(["config", "user.email", "argus@localhost"], cwd=cwd)
+
+
 def _write_env(env_file: Path, vault_path: Path) -> None:
     """Set VAULT_PATH in ``env_file``, preserving any other keys."""
     values = parse_env_file(env_file)
@@ -68,6 +89,7 @@ def init_vault(dest: Path, env_file: Path = DEFAULT_ENV_FILE) -> Path:
         note.write_text(text.replace("{{date}}", today), encoding="utf-8")
 
     _run_git(["init"], cwd=dest)
+    _ensure_git_identity(dest)
     _run_git(["add", "-A"], cwd=dest)
     _run_git(["commit", "-m", "chore: initial vault from Argus template"], cwd=dest)
 

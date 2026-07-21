@@ -14,6 +14,7 @@ cheapest place to catch them.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -28,6 +29,19 @@ from pathlib import Path
 TIMEOUT = 120
 
 
+def annotate(message: str) -> None:
+    """Emit a GitHub Actions error annotation.
+
+    Annotations show on the run summary page without signing in, whereas raw
+    step logs do not -- so this is what makes a CI failure diagnosable from
+    outside the repo. No-op when not running under Actions.
+    """
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    flat = " ".join(str(message).split())[:900]
+    print(f"::error title=smoke_backend::{flat}", flush=True)
+
+
 class Result:
     def __init__(self) -> None:
         self.rows: list[tuple[str, bool, str]] = []
@@ -35,6 +49,8 @@ class Result:
     def check(self, name: str, ok: bool, detail: str = "") -> None:
         self.rows.append((name, ok, detail))
         print(f"  {'PASS' if ok else 'FAIL'}  {name}{f' - {detail}' if detail else ''}", flush=True)
+        if not ok:
+            annotate(f"{name}: {detail}" if detail else name)
 
     @property
     def failed(self) -> list[str]:
@@ -63,7 +79,7 @@ def _launch(target: Path, env_file: Path) -> subprocess.Popen:
     )
 
 
-def _make_vault(target: Path, workdir: Path, result: "Result") -> Path | None:
+def _make_vault(target: Path, workdir: Path, result: Result) -> Path | None:
     """Create a throwaway vault via the entry point's own --init branch.
 
     Doubles as a test of two things freezing loves to break: that
@@ -83,10 +99,8 @@ def _make_vault(target: Path, workdir: Path, result: "Result") -> Path | None:
     line = (proc.stdout or "").strip().splitlines()
     payload = {}
     if line:
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             payload = json.loads(line[-1])
-        except json.JSONDecodeError:
-            pass
     ok = bool(payload.get("ok"))
     result.check(
         "--init creates a vault",
@@ -204,7 +218,9 @@ def main() -> int:
     if port is None:
         print("FATAL: no port handshake. stderr follows:", flush=True)
         proc.kill()
-        print(proc.stderr.read()[-4000:])
+        stderr = proc.stderr.read()[-4000:]
+        print(stderr)
+        annotate(f"no port handshake; stderr tail: {stderr[-600:]}")
         return 1
     result.check("handshake", True, f"port {port} in {time.time() - started:.1f}s")
 

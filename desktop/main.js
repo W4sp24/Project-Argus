@@ -375,23 +375,33 @@ function registerIpc() {
     return runBackendCommand(["--init", path.join(parent, safe)]);
   });
 
-  ipcMain.handle("vault:init-git", (_event, dir) => {
-    return new Promise((resolve) => {
-      if (typeof dir !== "string" || !path.isAbsolute(dir) || !fs.existsSync(dir)) {
-        return resolve({ ok: false, error: "Folder not found." });
-      }
-      execFile("git", ["init"], { cwd: dir, windowsHide: true }, (error) => {
-        if (error) return resolve({ ok: false, error: error.message });
-        execFile("git", ["add", "-A"], { cwd: dir, windowsHide: true }, () => {
-          execFile(
-            "git",
-            ["commit", "-m", "chore: initial snapshot for Argus"],
-            { cwd: dir, windowsHide: true },
-            () => resolve({ ok: true }),
-          );
-        });
+  ipcMain.handle("vault:init-git", async (_event, dir) => {
+    if (typeof dir !== "string" || !path.isAbsolute(dir) || !fs.existsSync(dir)) {
+      return { ok: false, error: "Folder not found." };
+    }
+    const git = (args) =>
+      new Promise((resolve) => {
+        execFile("git", args, { cwd: dir, windowsHide: true }, (error, stdout, stderr) =>
+          resolve({ ok: !error, out: String(stdout || ""), err: String(stderr || error?.message || "") }),
+        );
       });
-    });
+
+    const init = await git(["init"]);
+    if (!init.ok) return { ok: false, error: init.err };
+
+    // Same trap as backend/cli.py::_ensure_git_identity: `git commit` fails
+    // outright when the machine has no user.name/user.email, which is the
+    // default for anyone who installed Git for Windows and never configured
+    // it. Set it repo-locally only when git cannot resolve one already.
+    if (!(await git(["var", "GIT_AUTHOR_IDENT"])).ok) {
+      await git(["config", "user.name", "Argus"]);
+      await git(["config", "user.email", "argus@localhost"]);
+    }
+
+    await git(["add", "-A"]);
+    const commit = await git(["commit", "-m", "chore: initial snapshot for Argus"]);
+    if (!commit.ok) return { ok: false, error: commit.err };
+    return { ok: true };
   });
 
   ipcMain.handle("doctor:run", () => runBackendCommand(["--doctor"]));

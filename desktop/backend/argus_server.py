@@ -49,8 +49,9 @@ def _exit_when_parent_dies(parent_pid: int) -> None:
     if sys.platform == "win32":
         import ctypes
 
-        SYNCHRONIZE = 0x00100000
-        INFINITE = 0xFFFFFFFF
+        # Win32 constant names, kept as-is for greppability against MSDN.
+        SYNCHRONIZE = 0x00100000  # noqa: N806
+        INFINITE = 0xFFFFFFFF  # noqa: N806
         kernel32 = ctypes.windll.kernel32
         handle = kernel32.OpenProcess(SYNCHRONIZE, False, parent_pid)
         if not handle:
