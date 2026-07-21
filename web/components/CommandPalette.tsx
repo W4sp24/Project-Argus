@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/Toast";
-import { searchVault, useVault, type SearchResult } from "@/lib/api";
+import { apiFetch, searchVault, useVault, type SearchResult } from "@/lib/api";
 import { useChat } from "@/lib/chat";
 import { MODE_ROUTES, type Mode } from "@/lib/mode";
 import { useUi } from "@/lib/ui";
@@ -49,7 +49,7 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     hint: "compose + write today's briefing",
     run: (ctx) => {
       ctx.toast("briefing :: generating…");
-      fetch("/api/briefing/run", { method: "POST" })
+      apiFetch("/api/briefing/run", { method: "POST" })
         .then((response) =>
           ctx.toast(
             response.ok

@@ -1,0 +1,65 @@
+appId: com.argus.desktop
+productName: Argus
+copyright: Copyright © 2026
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - main.js
+  - preload.js
+  - lib/**/*
+  - onboarding/**/*
+  - splash/**/*
+  - build/icon.ico
+  - build/icon.png
+  - package.json
+  - "!**/*.map"
+
+asar: true
+
+# Kept OUTSIDE app.asar on purpose. Besides being required (the Python bundle
+# and Next's server are spawned as real processes and cannot live in an
+# archive), it is what makes differential updates cheap: torch_cpu.dll and the
+# model weights are byte-identical between releases, so electron-updater's
+# blockmap matches those blocks and skips re-downloading ~500MB.
+extraResources:
+  - from: resources/backend
+    to: backend
+    filter: ["**/*"]
+  - from: resources/web
+    to: web
+    filter: ["**/*"]
+  - from: resources/models
+    to: models
+    filter: ["**/*"]
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  # Unsigned build: electron-updater will not apply an update whose signature
+  # it cannot verify, so this must stay false until there is a code-signing
+  # certificate. See the README for what that costs users (SmartScreen).
+  verifyUpdateCodeSignature: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: false
+  differentialPackage: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Argus
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+
+publish:
+  - provider: github
+    owner: W4sp24
+    repo: Project-Argus
+    releaseType: release

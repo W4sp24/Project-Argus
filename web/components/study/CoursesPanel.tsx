@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRef, useState, type DragEvent } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
-import { ApiError, mutateJSON, useStudyCourses, useStudyExams } from "@/lib/api";
+import { ApiError, apiFetch, mutateJSON, useStudyCourses, useStudyExams } from "@/lib/api";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md"];
@@ -94,7 +94,7 @@ export default function CoursesPanel() {
     const body = new FormData();
     body.append("course", course);
     body.append("file", file);
-    const response = await fetch("/api/study/upload", { method: "POST", body });
+    const response = await apiFetch("/api/study/upload", { method: "POST", body });
     const payload = await response.json();
     show(response.ok ? `saved ${payload.path} — indexing in the background` : `upload failed: ${payload.detail}`);
     setBusyAction(null);
@@ -121,7 +121,7 @@ export default function CoursesPanel() {
   async function generate(kind: "guide" | "exam", course: string) {
     setBusyAction(`${kind}-${course}`);
     show(`generating ${kind} for ${course} — this can take a few minutes…`);
-    const response = await fetch(`/api/study/${kind}`, {
+    const response = await apiFetch(`/api/study/${kind}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(kind === "guide" ? { course } : { course, n: 10 }),

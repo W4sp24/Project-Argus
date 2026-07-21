@@ -2,7 +2,7 @@
 
 import useSWR from "swr";
 import Panel from "@/components/Panel";
-import { useNotes, useVault, type NoteInfo } from "@/lib/api";
+import { apiFetch, useNotes, useVault, type NoteInfo } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { parseProjectNote } from "@/lib/parseFrontmatter";
 
@@ -38,7 +38,7 @@ function useProjectContents(paths: string[]) {
   return useSWR(key, async () => {
     const entries = await Promise.all(
       paths.map(async (path) => {
-        const response = await fetch(`/api/note?path=${encodeURIComponent(path)}`);
+        const response = await apiFetch(`/api/note?path=${encodeURIComponent(path)}`);
         if (!response.ok) return [path, null] as const;
         const payload = (await response.json()) as NoteContentPayload;
         return [path, payload.content] as const;

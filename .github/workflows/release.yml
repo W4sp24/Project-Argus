@@ -1,0 +1,123 @@
+name: release
+
+# Tag-driven: `git tag v0.2.0 && git push origin v0.2.0` builds and publishes.
+# Pre-release tags (v0.0.1-test) are what you should use to rehearse the update
+# loop before shipping anything real.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+
+      # --- backend -------------------------------------------------------
+      # Windows PyPI torch is already CPU-only (no nvidia-* deps, no cu*.dll),
+      # so there is nothing to strip; pinning the index just keeps it explicit
+      # and immune to a future default change.
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[rag]"
+          pip install "pyinstaller==6.16.0" pyinstaller-hooks-contrib
+
+      - name: Pre-fetch the embedding model
+        run: |
+          python -c "from sentence_transformers import SentenceTransformer as S; S('BAAI/bge-small-en-v1.5').save('desktop/resources/models/bge-small-en-v1.5')"
+
+      - name: Freeze the backend
+        run: pyinstaller desktop/argus-backend.spec --noconfirm --distpath desktop/resources --workpath desktop/build-py
+
+      # Fails in ~2 minutes instead of after 25 minutes of packaging. Catches
+      # the silent freezing failures (keyring entry points, chromadb's SQL
+      # migrations, transformers metadata) that a /health probe would miss.
+      - name: Smoke-test the frozen backend
+        run: python desktop/tests/smoke_backend.py --target desktop/resources/backend/argus-backend.exe
+
+      # --- frontend ------------------------------------------------------
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      - name: Build and stage the dashboard
+        run: node scripts/stage.mjs
+        working-directory: desktop
+
+      # --- package -------------------------------------------------------
+      - name: Match package version to the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+        working-directory: desktop
+
+      # build/icon.ico is generated, not committed (so it can never go stale
+      # against icon.svg). electron-builder.yml references it for the app, the
+      # installer and the uninstaller, so this has to run before packaging --
+      # the npm scripts do it as a prebuild, but CI calls electron-builder
+      # directly.
+      - name: Generate the app icon
+        run: node scripts/make-icon.mjs
+        working-directory: desktop
+
+      - name: Build and publish the installer
+        shell: pwsh
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx electron-builder --win --publish always 2>&1 | Tee-Object -FilePath eb.log
+          if ($LASTEXITCODE -ne 0) {
+            # Raw step logs need a login to read; annotations don't.
+            $tail = ((Get-Content eb.log -Tail 30) -join ' | ')
+            Write-Host "::error title=electron-builder::$tail"
+            exit 1
+          }
+
+      # GitHub caps a single release asset at 2GB. The realistic installer is
+      # 550-700MB, so this is a tripwire, not an expected failure -- it tells
+      # you in CI rather than at upload time if a dependency bloats the bundle.
+      - name: Guard installer size
+        shell: pwsh
+        run: |
+          $limit = 1.5GB
+          $big = Get-ChildItem desktop/dist/*.exe | Where-Object { $_.Length -gt $limit }
+          Get-ChildItem desktop/dist/*.exe | ForEach-Object {
+            "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB)
+          }
+          if ($big) { throw "installer exceeds 1.5GB - see the packaging notes in desktop/README" }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: argus-windows
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.blockmap
+            desktop/dist/latest.yml
+          retention-days: 14

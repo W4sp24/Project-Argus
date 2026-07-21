@@ -1,0 +1,27 @@
+<!--
+  Desktop app icon. Derived from web/app/icon.svg (the favicon), with two
+  deliberate differences for the larger sizes a desktop icon is rendered at:
+
+    * rx 8 -> 6. The favicon's radius is tuned for 32px; scaled to 256 it
+      reads as a squircle rather than the square-cornered look the rest of
+      the product uses (tailwind.config.ts overrides borderRadius to `full`).
+    * slightly larger circle and a soft inner glow, which survive downscaling
+      to 16px better than the flat original.
+
+  Keep this in sync with the brand accents in web/tailwind.config.ts.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="dot" cx="35%" cy="30%" r="78%">
+      <stop offset="0%" stop-color="#a78bfa" />
+      <stop offset="100%" stop-color="#d946ef" />
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="55%" stop-color="#a78bfa" stop-opacity="0.30" />
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0b0614" />
+  <circle cx="128" cy="128" r="104" fill="url(#glow)" />
+  <circle cx="128" cy="128" r="76" fill="url(#dot)" />
+</svg>

@@ -8,10 +8,15 @@ they belong in the OS keyring (invariant I4).
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_ENV_FILE = Path(".env")
+# Repo-relative by default (dev, `argus web`, tests). The packaged desktop app
+# has no repo root, so the Electron shell points this at its own userData dir
+# via ARGUS_ENV_FILE — that one override reaches Settings.load, argus doctor,
+# reindex, watch, and init_vault's _write_env without changing any signature.
+DEFAULT_ENV_FILE = Path(os.environ.get("ARGUS_ENV_FILE", ".env"))
 DEFAULT_BACKEND_PORT = 8000
 
 # --- Model registry (redesign §7) -------------------------------------------
@@ -58,7 +63,11 @@ def parse_env_file(env_file: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not env_file.is_file():
         return values
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+    # utf-8-sig, not utf-8: Notepad and PowerShell's `Out-File -Encoding utf8`
+    # write a BOM, and Python's str.strip() does not remove ﻿ -- so the
+    # first key would silently parse as "﻿VAULT_PATH" and Argus would
+    # report VAULT_PATH as unconfigured. Identical to utf-8 when no BOM.
+    for raw_line in env_file.read_text(encoding="utf-8-sig").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

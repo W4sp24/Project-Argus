@@ -5,7 +5,7 @@ import { useRef, useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
-import { fetcher, mutateJSON } from "@/lib/api";
+import { apiFetch, fetcher, mutateJSON } from "@/lib/api";
 import { parseQuickAdd } from "@/lib/taskQuickAdd";
 
 interface AgendaTask {
@@ -91,7 +91,7 @@ export default function TasksPanel() {
 
   async function withRawLine(task: AgendaTask, action: (raw: string) => Promise<void>): Promise<void> {
     if (!task.path || !task.line) return;
-    const response = await fetch(`/api/note?path=${encodeURIComponent(task.path)}`);
+    const response = await apiFetch(`/api/note?path=${encodeURIComponent(task.path)}`);
     const note = (await response.json()) as { content: string };
     const raw = note.content.split("\n")[task.line - 1] ?? "";
     await action(raw);

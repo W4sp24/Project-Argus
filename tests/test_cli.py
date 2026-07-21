@@ -1,5 +1,6 @@
 """Tests for the `argus init` vault generator."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,33 @@ EXPECTED_FOLDERS = [
     "50-Reference",
     "99-Private",
 ]
+
+
+def test_init_vault_without_a_global_git_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A machine with no user.name/user.email must still get a vault.
+
+    That is the default state after installing Git for Windows without
+    configuring it -- i.e. most non-developers, and every fresh CI runner.
+    `git commit` fails with "Author identity unknown" unless init_vault
+    supplies one, which used to break the onboarding wizard outright.
+    """
+    blank = tmp_path / "blank-gitconfig"
+    blank.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(blank))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(blank))
+    for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+
+    dest = tmp_path / "vault"
+    init_vault(dest, tmp_path / ".env")
+
+    assert (dest / ".git").is_dir()
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=dest, capture_output=True, text=True, check=False
+    )
+    assert log.returncode == 0 and log.stdout.strip(), "the initial commit must exist"
 
 
 def test_init_vault_copies_template_and_inits_git(tmp_path: Path) -> None:

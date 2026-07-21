@@ -1,0 +1,27 @@
+{
+  "name": "argus-desktop",
+  "productName": "Argus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Argus desktop shell",
+  "main": "main.js",
+  "scripts": {
+    "icon": "node scripts/make-icon.mjs",
+    "stage": "node scripts/stage.mjs",
+    "start": "electron .",
+    "dev": "cross-env ARGUS_DEV=1 electron .",
+    "pack": "npm run icon && electron-builder --win --dir",
+    "dist": "npm run icon && electron-builder --win",
+    "release": "npm run icon && electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-log": "^5.2.0",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^2.1.8",
+    "sharp": "^0.33.5"
+  }
+}

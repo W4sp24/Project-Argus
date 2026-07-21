@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
-import { fetcher, useStudyCourses, useStudyExams } from "@/lib/api";
+import { apiFetch, fetcher, useStudyCourses, useStudyExams } from "@/lib/api";
 
 interface QuizQuestion {
   q: string;
@@ -54,7 +54,7 @@ export default function ExamWorkspace() {
     if (!genCourse) return;
     setGenerating(true);
     show(`generating exam for ${genCourse} — this can take a few minutes…`);
-    const response = await fetch("/api/study/exam", {
+    const response = await apiFetch("/api/study/exam", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ course: genCourse, n: 10 }),
@@ -79,7 +79,7 @@ export default function ExamWorkspace() {
 
   async function submitQuiz() {
     if (!quiz) return;
-    const response = await fetch(`/api/study/exams/${quiz.examId}/attempt`, {
+    const response = await apiFetch(`/api/study/exams/${quiz.examId}/attempt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ answers }),

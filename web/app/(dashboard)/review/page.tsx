@@ -4,7 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
-import { fetcher } from "@/lib/api";
+import { apiFetch, fetcher } from "@/lib/api";
 
 interface ScheduleBlock {
   title: string;
@@ -63,7 +63,7 @@ export default function ReviewPage() {
 
   async function act(id: number, action: "approve" | "dismiss", reason?: string) {
     setBusy(id);
-    const response = await fetch(`/api/review/${id}/${action}`, {
+    const response = await apiFetch(`/api/review/${id}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: action === "dismiss" ? JSON.stringify({ reason: reason ?? "" }) : "{}",

@@ -2,9 +2,45 @@
 
 import useSWR from "swr";
 
+/**
+ * Backend base URL. In the browser (dev + `argus web`) this is "" and requests
+ * stay relative, resolved by the Next rewrite in next.config.mjs. In the
+ * desktop shell there is no rewrite — Next rewrites bake at build time, so a
+ * dynamically-allocated backend port can't go through them — and Electron's
+ * preload injects the real origin as `window.__ARGUS__`.
+ */
+interface ArgusBridge {
+  apiBase: string;
+  wsBase: string;
+}
+
+function bridge(): ArgusBridge | undefined {
+  return (globalThis as { __ARGUS__?: ArgusBridge }).__ARGUS__;
+}
+
+export function apiBase(): string {
+  return bridge()?.apiBase ?? "";
+}
+
+/** WebSocket origin for /ws/chat. Falls back to the dev backend on :8000. */
+export function wsBase(): string {
+  const injected = bridge()?.wsBase;
+  if (injected) return injected;
+  return `ws://${globalThis.location?.hostname ?? "127.0.0.1"}:8000`;
+}
+
+/**
+ * `fetch` against the Argus backend. Always use this for `/api/*` and
+ * `/health` — a bare `fetch("/api/...")` works in dev but silently 404s in
+ * the packaged desktop app. Absolute URLs pass through untouched.
+ */
+export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(path.startsWith("/") ? apiBase() + path : path, init);
+}
+
 /** Shared JSON fetcher for SWR — throws on non-2xx so errors surface in hooks. */
 export async function fetcher<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  const response = await apiFetch(url);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail ?? `Request failed: ${response.status}`);
@@ -28,7 +64,7 @@ export async function mutateJSON<T>(
   body: unknown,
   method: "POST" | "PUT" | "DELETE" = "POST",
 ): Promise<T> {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
