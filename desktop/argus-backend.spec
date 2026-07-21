@@ -16,12 +16,30 @@ the relevant feature. Do not trim this list without re-running
 desktop/tests/smoke_backend.py against the frozen exe.
 """
 
+import os
+import sys
+
 from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
     copy_metadata,
 )
+
+# PyInstaller resolves relative paths in a spec against the *current working
+# directory*, not the spec's location -- so `pathex=[".."]` means different
+# things when you run from desktop/ versus from the repo root. That discrepancy
+# silently produced a build without `backend.cli` (freeze succeeded, --init
+# died at runtime with ModuleNotFoundError). Everything below is anchored to
+# SPECPATH so the build is identical from any directory.
+SPEC_DIR = os.path.abspath(SPECPATH)  # noqa: F821 - injected by PyInstaller
+REPO_ROOT = os.path.dirname(SPEC_DIR)
+
+# collect_submodules() imports the package using the *interpreter's* sys.path,
+# not pathex, so `backend` has to be importable while this spec is evaluated --
+# otherwise it silently returns nothing.
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 datas = []
 binaries = []
@@ -42,9 +60,17 @@ def safe_metadata(name):
 # TEMPLATE_DIR resolves to _MEIPASS/vault-template. Both must land there or
 # chat and `--init` fail at runtime with a bare FileNotFoundError.
 datas += [
-    ("../backend/agent/prompts", "backend/agent/prompts"),
-    ("../vault-template", "vault-template"),
+    (os.path.join(REPO_ROOT, "backend", "agent", "prompts"), "backend/agent/prompts"),
+    (os.path.join(REPO_ROOT, "vault-template"), "vault-template"),
 ]
+
+# Argus itself. argus_server.py imports backend.cli / backend.doctor /
+# backend.main lazily inside functions, and the app defers most of the rest
+# (agent runtime, rag, study, connectors) the same way, so static analysis has
+# little to go on. Collecting the whole first-party package is cheap -- it is
+# pure Python -- and removes an entire class of "frozen build starts fine then
+# ModuleNotFoundErrors on first real use".
+hiddenimports += collect_submodules("backend")
 
 # --- uvicorn ---------------------------------------------------------------
 # argus_server.py names http/ws/loop explicitly, which is the real fix for
@@ -188,8 +214,11 @@ excludes = [
 
 
 a = Analysis(
-    ["backend/argus_server.py"],
-    pathex=[".."],
+    [os.path.join(SPEC_DIR, "backend", "argus_server.py")],
+    # Repo root on sys.path so the `backend` package is importable. The lazy
+    # `from backend.cli import ...` inside _cmd_init is only reachable if this
+    # is right, and getting it wrong fails at runtime, not at build time.
+    pathex=[REPO_ROOT],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
