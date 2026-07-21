@@ -67,9 +67,22 @@ export default function UsageBlock({
       {pctOfCap !== undefined && (
         <div className="mt-2">
           <div className="h-1 w-full bg-sunken">
-            <div className="h-1 bg-[var(--ac)]" style={{ width: `${pctOfCap}%` }} />
+            <div
+              className={`h-1 ${
+                pctOfCap >= 90
+                  ? "bg-danger"
+                  : pctOfCap >= 75
+                    ? "bg-amber-400"
+                    : "bg-[var(--ac)]"
+              }`}
+              style={{ width: `${pctOfCap}%` }}
+            />
           </div>
-          <p className="mt-1 font-mono text-[10px] text-ink-faint">{pctOfCap}% of soft cap</p>
+          <p className="mt-1 font-mono text-[10px] text-ink-faint">
+            {pctOfCap}% of soft cap
+            {pctOfCap >= 90 && (pctOfCap === 100 ? " · at limit" : " · near limit")}
+            {pctOfCap >= 75 && pctOfCap < 90 && " · high"}
+          </p>
         </div>
       )}
     </div>
