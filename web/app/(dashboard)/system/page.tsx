@@ -6,6 +6,7 @@ import Integrations from "@/components/system/Integrations";
 import McpServers from "@/components/system/McpServers";
 import ModelsPanel from "@/components/system/ModelsPanel";
 import SetupGuide from "@/components/system/SetupGuide";
+import UsageCapsPanel from "@/components/system/UsageCapsPanel";
 
 /** System mode (§12) — setup guide, health, MCP servers, integrations, models. */
 export default function SystemPage() {
@@ -19,6 +20,7 @@ export default function SystemPage() {
         <McpServers />
 
         <CliUsage size="large" />
+        <UsageCapsPanel />
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="flex min-w-0 flex-col gap-4">

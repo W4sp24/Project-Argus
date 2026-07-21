@@ -61,7 +61,7 @@ export default function TokenUsage() {
         inputTokens={data?.input_tokens ?? 0}
         outputTokens={data?.output_tokens ?? 0}
         estimatedCostUsd={data?.estimated_cost_usd ?? 0}
-        pctOfCap={pctOfCap}
+        capBars={[{ pctOfCap }]}
         series={(data?.series ?? []).map((point) => ({
           label: chartLabel(view, point.label),
           value: point.total_tokens,

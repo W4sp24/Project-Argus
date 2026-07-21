@@ -3,10 +3,11 @@
 import { useState } from "react";
 import Panel from "@/components/Panel";
 import UsageBlock from "@/components/UsageBlock";
-import { useCliUsage, type CliUsageRange } from "@/lib/api";
+import { useCliUsage, useUsageCaps, type CliUsageRange } from "@/lib/api";
+import type { CapBar } from "@/components/UsageBlock";
 
 const VIEWS: CliUsageRange[] = ["today", "week", "all"];
-const VIEW_LABEL: Record<CliUsageRange, string> = { today: "TODAY", week: "WEEK", all: "ALL" };
+const VIEW_LABEL: Record<CliUsageRange, string> = { "5h": "5H", today: "TODAY", week: "WEEK", all: "ALL" };
 
 function chartLabel(range: CliUsageRange, label: string): string {
   if (range === "all") return label; // already "YYYY-wNN"
@@ -25,6 +26,23 @@ function chartLabel(range: CliUsageRange, label: string): string {
 export default function CliUsage({ size = "default" }: { size?: "default" | "large" }) {
   const [view, setView] = useState<CliUsageRange>("today");
   const { data, isLoading } = useCliUsage(view);
+  const { data: fiveHourData } = useCliUsage("5h");
+  const { data: weekData } = useCliUsage("week");
+  const { data: caps } = useUsageCaps();
+
+  let capBars: CapBar[] | undefined;
+  if (caps && fiveHourData && weekData) {
+    const fiveHourPct = caps.five_hour_cap
+      ? Math.min(100, Math.round((fiveHourData.total_tokens / caps.five_hour_cap) * 100))
+      : null;
+    const weeklyPct = caps.weekly_cap
+      ? Math.min(100, Math.round((weekData.total_tokens / caps.weekly_cap) * 100))
+      : null;
+    capBars = [
+      { label: "5H WINDOW", pctOfCap: fiveHourPct, capNoun: "of ~5h estimate" },
+      { label: "WEEKLY", pctOfCap: weeklyPct },
+    ];
+  }
 
   return (
     <Panel
@@ -54,6 +72,7 @@ export default function CliUsage({ size = "default" }: { size?: "default" | "lar
         inputTokens={data?.input_tokens ?? 0}
         outputTokens={data?.output_tokens ?? 0}
         estimatedCostUsd={data?.estimated_cost_usd ?? 0}
+        capBars={capBars}
         series={(data?.series ?? []).map((point) => ({
           label: chartLabel(view, point.label),
           value: point.total_tokens,

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import MiniLineChart from "@/components/charts/MiniLineChart";
 
 export interface UsageBlockPoint {
@@ -10,14 +11,36 @@ export interface UsageBlockRow {
   value: number;
 }
 
+export interface CapBar {
+  /** Short label rendered above the bar, e.g. "5H WINDOW" or "WEEKLY". Omit for the single-bar case (ARGUS.USAGE) to keep that panel's existing look unchanged (no label line was there before). */
+  label?: string;
+  /** 0-100, or null if no cap is configured (renders a "not set" link instead of a bar). */
+  pctOfCap: number | null;
+  /** Optional caption suffix appended after the percentage, e.g. "of ~5h estimate" instead of the default "of soft cap". */
+  capNoun?: string;
+  /** Where the "not set →" link should point when pctOfCap is null. Defaults to "/system". */
+  configureHref?: string;
+}
+
+function capBarColor(pct: number): string {
+  return pct >= 90 ? "bg-danger" : pct >= 75 ? "bg-amber-400" : "bg-[var(--ac)]";
+}
+
+function capBarCaption(pct: number, noun: string): string {
+  let caption = `${pct}% ${noun}`;
+  if (pct >= 90) caption += pct === 100 ? " · at limit" : " · near limit";
+  else if (pct >= 75) caption += " · high";
+  return caption;
+}
+
 interface UsageBlockProps {
   isLoading: boolean;
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
   estimatedCostUsd: number;
-  /** Percent of a soft cap (0-100). Omit to skip the cap bar entirely (e.g. CLI usage has no configured cap). */
-  pctOfCap?: number;
+  /** One progress bar per entry, rendered in order. Omit to skip the cap-bar section entirely (e.g. CLI usage previously had no configured cap). */
+  capBars?: CapBar[];
   series: UsageBlockPoint[];
   rows: UsageBlockRow[];
   emptyMessage?: string;
@@ -36,7 +59,7 @@ export default function UsageBlock({
   inputTokens,
   outputTokens,
   estimatedCostUsd,
-  pctOfCap,
+  capBars,
   series,
   rows,
   emptyMessage = "no usage recorded yet",
@@ -64,27 +87,35 @@ export default function UsageBlock({
         {estimatedCostUsd.toFixed(2)}
       </p>
 
-      {pctOfCap !== undefined && (
-        <div className="mt-2">
-          <div className="h-1 w-full bg-sunken">
-            <div
-              className={`h-1 ${
-                pctOfCap >= 90
-                  ? "bg-danger"
-                  : pctOfCap >= 75
-                    ? "bg-amber-400"
-                    : "bg-[var(--ac)]"
-              }`}
-              style={{ width: `${pctOfCap}%` }}
-            />
-          </div>
-          <p className="mt-1 font-mono text-[10px] text-ink-faint">
-            {pctOfCap}% of soft cap
-            {pctOfCap >= 90 && (pctOfCap === 100 ? " · at limit" : " · near limit")}
-            {pctOfCap >= 75 && pctOfCap < 90 && " · high"}
-          </p>
+      {capBars?.map((bar, index) => (
+        <div key={bar.label ?? index} className="mt-2">
+          {bar.label && (
+            <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-faint">
+              {bar.label}
+            </p>
+          )}
+          {bar.pctOfCap === null ? (
+            <Link
+              href={bar.configureHref ?? "/system"}
+              className="font-mono text-[10px] uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]"
+            >
+              NOT SET →
+            </Link>
+          ) : (
+            <>
+              <div className="h-1 w-full bg-sunken">
+                <div
+                  className={`h-1 ${capBarColor(bar.pctOfCap)}`}
+                  style={{ width: `${bar.pctOfCap}%` }}
+                />
+              </div>
+              <p className="mt-1 font-mono text-[10px] text-ink-faint">
+                {capBarCaption(bar.pctOfCap, bar.capNoun ?? "of soft cap")}
+              </p>
+            </>
+          )}
         </div>
-      )}
+      ))}
     </div>
   );
 

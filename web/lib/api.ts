@@ -250,7 +250,7 @@ export interface CliUsagePoint {
   total_tokens: number;
 }
 
-export type CliUsageRange = "today" | "week" | "all";
+export type CliUsageRange = "5h" | "today" | "week" | "all";
 
 export interface CliUsageReport {
   range: CliUsageRange;
@@ -264,9 +264,24 @@ export interface CliUsageReport {
   models: CliModelUsage[];
 }
 
-/** CLAUDE CODE — account-wide CLI usage, GET /api/usage/cli?range=today|week|all. */
+/** CLAUDE CODE — account-wide CLI usage, GET /api/usage/cli?range=5h|today|week|all. */
 export function useCliUsage(range: CliUsageRange) {
   return useSWR<CliUsageReport>(`/api/usage/cli?range=${range}`, fetcher);
+}
+
+export interface UsageCaps {
+  five_hour_cap: number;
+  weekly_cap: number | null;
+}
+
+/** Configured soft caps for the CLAUDE CODE panel's 5H WINDOW / WEEKLY bars — GET /api/usage/caps. */
+export function useUsageCaps() {
+  return useSWR<UsageCaps>("/api/usage/caps", fetcher);
+}
+
+/** Persist new soft caps — PUT /api/usage/caps. Returns the saved shape. */
+export function saveUsageCaps(caps: UsageCaps) {
+  return mutateJSON<UsageCaps>("/api/usage/caps", caps, "PUT");
 }
 
 export interface DoctorCheck {
