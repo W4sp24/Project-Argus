@@ -175,6 +175,16 @@ def create_app(
 
     app.include_router(build_notes_router(resolved))
 
+    from backend.flashcards_api import build_flashcards_router
+
+    app.include_router(build_flashcards_router(resolved))
+
+    from backend.search_api import build_search_router
+
+    app.include_router(
+        build_search_router(resolved, index_factory or _default_index_factory)
+    )
+
     def _default_planner():
         from backend.agent.planner import run_planner
 
