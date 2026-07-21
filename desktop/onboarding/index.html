@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src data:"
+    />
+    <title>Welcome to Argus</title>
+    <link rel="stylesheet" href="wizard.css" />
+  </head>
+  <body>
+    <header>
+      <div class="mark"></div>
+      <div>
+        <h1>Argus</h1>
+        <p class="sub">Your second brain, on your machine.</p>
+      </div>
+      <ol class="steps">
+        <li data-step="welcome" class="on">1</li>
+        <li data-step="prereqs">2</li>
+        <li data-step="vault">3</li>
+        <li data-step="check">4</li>
+      </ol>
+    </header>
+
+    <main>
+      <!-- 1 ------------------------------------------------------------- -->
+      <section data-panel="welcome" class="on">
+        <h2>Everything stays here</h2>
+        <p>
+          Argus reads and writes plain Markdown in an Obsidian vault on this
+          computer. Your notes are never uploaded, and the folder stays yours —
+          you can open it in Obsidian, or in any text editor, at any time.
+        </p>
+        <p class="muted">
+          Two things need to be installed before it can work. Let's check them.
+        </p>
+        <footer><button class="primary" data-go="prereqs">Get started</button></footer>
+      </section>
+
+      <!-- 2 ------------------------------------------------------------- -->
+      <section data-panel="prereqs">
+        <h2>Required software</h2>
+        <p class="muted">
+          These can't ship inside Argus — Claude Code signs in with your own
+          Claude subscription, and git is what lets Argus snapshot your vault
+          before it changes anything.
+        </p>
+        <div id="prereq-list" class="rows"><p class="muted">Checking…</p></div>
+        <footer>
+          <button data-go="welcome">Back</button>
+          <button id="recheck">Check again</button>
+          <button class="primary" id="prereq-next" data-go="vault" disabled>Continue</button>
+        </footer>
+      </section>
+
+      <!-- 3 ------------------------------------------------------------- -->
+      <section data-panel="vault">
+        <h2>Choose a vault</h2>
+        <div class="choice">
+          <label><input type="radio" name="mode" value="existing" checked /> Use an existing Obsidian vault</label>
+          <label><input type="radio" name="mode" value="new" /> Create a new vault</label>
+        </div>
+
+        <div id="pane-existing" class="pane">
+          <div class="pick">
+            <input id="existing-path" type="text" readonly placeholder="No folder chosen" />
+            <button id="browse-existing">Browse…</button>
+          </div>
+          <p class="muted" id="existing-note"></p>
+        </div>
+
+        <div id="pane-new" class="pane hidden">
+          <div class="pick">
+            <input id="parent-path" type="text" readonly placeholder="No folder chosen" />
+            <button id="browse-parent">Browse…</button>
+          </div>
+          <div class="pick">
+            <input id="vault-name" type="text" placeholder="Vault folder name, e.g. Scientia" />
+          </div>
+          <p class="muted">
+            Argus creates the folder, fills it with a starter structure, and makes
+            the first git commit.
+          </p>
+        </div>
+
+        <p class="error" id="vault-error"></p>
+        <footer>
+          <button data-go="prereqs">Back</button>
+          <button class="primary" id="vault-next">Continue</button>
+        </footer>
+      </section>
+
+      <!-- 4 ------------------------------------------------------------- -->
+      <section data-panel="check">
+        <h2>Health check</h2>
+        <p class="muted">Argus ran its own diagnostics against your vault.</p>
+        <div id="doctor-list" class="rows"><p class="muted">Running…</p></div>
+        <p class="error" id="check-error"></p>
+        <footer>
+          <button id="rerun">Run again</button>
+          <button class="primary" id="finish" disabled>Open Argus</button>
+        </footer>
+      </section>
+    </main>
+
+    <script src="wizard.js"></script>
+  </body>
+</html>

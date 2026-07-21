@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:"
+    />
+    <title>Argus</title>
+    <style>
+      /* Terminal-HUD palette from web/tailwind.config.ts. Square corners are
+         deliberate: the design system overrides borderRadius to `full` only. */
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 100vw; height: 100vh; overflow: hidden;
+        background: #06040c;
+        border: 1px solid #1e1733;
+        color: #e8e4f3;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        display: flex; flex-direction: column;
+        justify-content: center; align-items: center;
+        gap: 22px;
+        -webkit-user-select: none; user-select: none;
+        -webkit-app-region: drag;
+      }
+      .mark {
+        width: 46px; height: 46px;
+        background: radial-gradient(circle at 40% 35%, #a78bfa, #d946ef);
+        border-radius: 999px;
+        box-shadow: 0 0 34px rgba(167, 139, 250, 0.42);
+        animation: pulse 2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.72; transform: scale(0.94); }
+      }
+      h1 {
+        font-size: 13px; font-weight: 600;
+        letter-spacing: 0.42em; text-transform: uppercase;
+        color: #cfc7e8;
+      }
+      #stage {
+        font-family: "Cascadia Mono", "Consolas", monospace;
+        font-size: 11px; color: #7c729a;
+        min-height: 15px; text-align: center;
+        padding: 0 28px; max-width: 100%;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      /* Cold start is dominated by importing torch, which can take 15s+ on a
+         spinning disk. Without visible motion the window reads as hung. */
+      .bar { width: 190px; height: 2px; background: #1e1733; overflow: hidden; }
+      .bar::after {
+        content: ""; display: block; width: 40%; height: 100%;
+        background: linear-gradient(90deg, transparent, #a78bfa, transparent);
+        animation: sweep 1.5s ease-in-out infinite;
+      }
+      @keyframes sweep {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(350%); }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="mark"></div>
+    <h1>Argus</h1>
+    <div class="bar"></div>
+    <div id="stage">starting…</div>
+    <script>
+      const LABELS = {
+        backend: "starting Argus services",
+        ui: "starting the dashboard",
+      };
+      const el = document.getElementById("stage");
+      window.argus.onBootStage(({ stage, detail }) => {
+        el.textContent = detail || LABELS[stage] || stage;
+      });
+    </script>
+  </body>
+</html>

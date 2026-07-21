@@ -1,0 +1,16 @@
+# CI/stage output — never committed, always rebuilt
+resources/
+dist/
+node_modules/
+
+# PyInstaller work directories. `build/` also holds the icon sources, so this
+# ignores the spec's output subdir by name rather than the whole folder.
+build-py/
+build/argus-backend/
+
+# generated from build/icon.svg by scripts/make-icon.mjs
+build/icon.ico
+build/icon.png
+
+# local updater override for rehearsing the update loop against a pre-release
+dev-app-update.yml

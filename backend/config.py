@@ -63,7 +63,11 @@ def parse_env_file(env_file: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not env_file.is_file():
         return values
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+    # utf-8-sig, not utf-8: Notepad and PowerShell's `Out-File -Encoding utf8`
+    # write a BOM, and Python's str.strip() does not remove ﻿ -- so the
+    # first key would silently parse as "﻿VAULT_PATH" and Argus would
+    # report VAULT_PATH as unconfigured. Identical to utf-8 when no BOM.
+    for raw_line in env_file.read_text(encoding="utf-8-sig").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
