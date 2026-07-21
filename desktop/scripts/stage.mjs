@@ -26,6 +26,25 @@ const resources = path.join(desktop, "resources");
 
 const skipBuild = process.argv.includes("--no-build");
 
+/**
+ * Emit a GitHub Actions error annotation. Raw step logs are only visible to
+ * signed-in users; annotations show on the run summary page, so this is what
+ * makes a CI failure diagnosable from outside the repo. No-op locally.
+ */
+function annotate(message) {
+  if (!process.env.GITHUB_ACTIONS) return;
+  const flat = String(message).replace(/\s+/g, " ").slice(0, 900);
+  console.log(`::error title=stage::${flat}`);
+}
+
+// Any uncaught throw (a failed npm build, a bad copy) surfaces as an
+// annotation rather than a bare "exit code 1".
+process.on("uncaughtException", (error) => {
+  annotate(error?.message ?? String(error));
+  console.error(error);
+  process.exit(1);
+});
+
 async function copyDir(from, to) {
   await fsp.cp(from, to, { recursive: true, force: true });
 }
@@ -33,6 +52,7 @@ async function copyDir(from, to) {
 function need(target, hint) {
   if (!fs.existsSync(target)) {
     console.error(`missing: ${target}\n  ${hint}`);
+    annotate(`missing: ${target} - ${hint}`);
     process.exit(1);
   }
 }
@@ -41,11 +61,16 @@ function need(target, hint) {
 
 if (!skipBuild) {
   console.log("building the dashboard (ARGUS_PACKAGED=1)…");
-  // npm.cmd directly rather than shell:true — with a shell, args are
-  // concatenated unescaped (Node DEP0190).
-  execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], {
+  // On Windows npm is npm.cmd, and since the CVE-2024-27980 fix (Node
+  // >=18.20.2 / 20.12.2) spawning a .cmd without a shell throws EINVAL. So
+  // shell:true is required here, not optional. It emits DEP0190 because a
+  // shell concatenates args unescaped — harmless in this case since the args
+  // are fixed literals with nothing interpolated into them.
+  const isWindows = process.platform === "win32";
+  execFileSync(isWindows ? "npm.cmd" : "npm", ["run", "build"], {
     cwd: web,
     stdio: "inherit",
+    shell: isWindows,
     env: { ...process.env, ARGUS_PACKAGED: "1" },
   });
 }
