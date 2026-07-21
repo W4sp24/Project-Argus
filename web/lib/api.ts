@@ -297,3 +297,77 @@ export interface ModelInfo {
 export function useModels() {
   return useSWR<ModelInfo[]>("/api/models", fetcher);
 }
+
+// --- Flashcards (real FSRS spaced repetition) --------------------------
+
+export interface FlashcardDeck {
+  id: number;
+  course: string;
+  title: string;
+  created_at: string;
+  cards: number;
+}
+
+export interface DueCard {
+  id: string;
+  front: string;
+  back: string;
+  due_at: string;
+  state: string;
+}
+
+export type FlashcardGrade = "again" | "hard" | "good" | "easy";
+
+export interface FlashcardGradeResult {
+  card_id: string;
+  grade: FlashcardGrade;
+  stability: number;
+  difficulty: number;
+  due_at: string;
+  state: string;
+}
+
+/** Generated flashcard decks, optionally scoped to one course. */
+export function useFlashcardDecks(course?: string) {
+  const query = course ? `?course=${encodeURIComponent(course)}` : "";
+  return useSWR<FlashcardDeck[]>(`/api/flashcards/decks${query}`, fetcher);
+}
+
+/** Cards due for review in one deck, soonest-due first. */
+export function useDueCards(deckId: number | null) {
+  return useSWR<DueCard[]>(
+    deckId !== null ? `/api/flashcards/decks/${deckId}/due` : null,
+    fetcher,
+  );
+}
+
+/** Parse `Q:: A::` pairs from `15-Courses/<CODE>/flashcards.md` into a new deck. */
+export function generateFlashcardDeck(course: string) {
+  return mutateJSON<FlashcardDeck>("/api/flashcards/decks", { course });
+}
+
+/** Grade one card — updates its FSRS state and schedules the next `due_at`. */
+export function gradeFlashcard(deckId: number, cardId: string, grade: FlashcardGrade) {
+  return mutateJSON<FlashcardGradeResult>(
+    `/api/flashcards/decks/${deckId}/cards/${encodeURIComponent(cardId)}/grade`,
+    { grade },
+  );
+}
+
+// --- Search (command palette) -----------------------------------------
+
+export interface SearchResult {
+  snippet: string;
+  source_path: string;
+  title: string | null;
+  score: number;
+}
+
+/** Standalone semantic search — hybrid vector+BM25 citations only, no chat
+ * loop. GET /api/search?q=. Not an SWR hook: the palette calls this once per
+ * keystroke/submit, not as a subscribed resource. */
+export async function searchVault(query: string): Promise<SearchResult[]> {
+  const q = query.trim();
+  if (!q) return [];
+  return fetcher<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`);
+}

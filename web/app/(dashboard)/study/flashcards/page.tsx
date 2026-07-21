@@ -1,6 +1,6 @@
 "use client";
 
-import Flashcards from "@/components/preview/Flashcards";
+import Flashcards from "@/components/study/Flashcards";
 import StudyStatusLine from "@/components/study/StudyStatusLine";
 import StudyTabs from "@/components/study/StudyTabs";
 

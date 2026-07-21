@@ -90,6 +90,29 @@ CREATE TABLE IF NOT EXISTS cli_usage (
     cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cli_usage_file_path ON cli_usage(file_path);
+
+CREATE TABLE IF NOT EXISTS flashcard_decks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    course     TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    cards_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS flashcard_reviews (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    card_id        TEXT NOT NULL,
+    deck_id        INTEGER NOT NULL REFERENCES flashcard_decks(id),
+    grade          TEXT NOT NULL CHECK (grade IN ('again', 'hard', 'good', 'easy')),
+    state          INTEGER NOT NULL,
+    step           INTEGER,
+    stability      REAL NOT NULL,
+    difficulty     REAL NOT NULL,
+    due_at         TEXT NOT NULL,
+    last_review_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_card ON flashcard_reviews(deck_id, card_id);
 """
 
 
