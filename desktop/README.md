@@ -86,6 +86,26 @@ npm run pack          # unpacked, into dist/win-unpacked — fast
 npm run dist          # full NSIS installer, into dist/
 ```
 
+<details>
+<summary><strong>"Cannot create symbolic link: A required privilege is not held by the client"</strong></summary>
+
+`npm run pack` succeeds and `npm run dist` then fails during the NSIS step.
+
+electron-builder unpacks a `winCodeSign` bundle that contains **macOS** OpenSSL
+dylibs stored as symlinks. Creating a symlink on Windows requires Developer
+Mode or an elevated shell, so the extraction fails — even though we're building
+for Windows and signing nothing.
+
+**Fix: turn on Settings → System → For developers → Developer Mode**, then
+rerun. An elevated PowerShell works too.
+
+Pre-extracting the cache by hand does *not* help: electron-builder downloads to
+a freshly randomised `<hash>.7z` on every invocation, so there is nothing
+stable to prepare.
+
+CI is unaffected — `windows-latest` runners already hold the privilege.
+</details>
+
 ## Cutting a release
 
 ```powershell

@@ -1,5 +1,6 @@
 {
   "name": "argus-desktop",
+  "productName": "Argus",
   "version": "0.1.0",
   "private": true,
   "description": "Argus desktop shell",

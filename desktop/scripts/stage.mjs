@@ -73,6 +73,24 @@ await fsp.copyFile(
   path.join(webOut, "argus-bootstrap.js"),
 );
 
+// --- embedding model -------------------------------------------------------
+// CI pre-bakes the weights here so a fresh install never depends on a
+// HuggingFace fetch. Locally the directory is usually empty, and the app
+// handles that by falling back to downloading on first index (paths.js
+// returns null, so ARGUS_EMBED_MODEL/HF_HUB_OFFLINE are simply not set).
+// It still has to exist, because electron-builder errors on a missing
+// extraResources source.
+const modelsDir = path.join(resources, "models");
+await fsp.mkdir(modelsDir, { recursive: true });
+if (fs.readdirSync(modelsDir).length === 0) {
+  await fsp.writeFile(
+    path.join(modelsDir, "README.txt"),
+    "Populated by CI with BAAI/bge-small-en-v1.5.\n" +
+      "When empty, Argus downloads the model on first index instead.\n",
+    "utf8",
+  );
+}
+
 // --- report ----------------------------------------------------------------
 
 function sizeMb(target) {
