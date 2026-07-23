@@ -407,3 +407,38 @@ export async function searchVault(query: string): Promise<SearchResult[]> {
   if (!q) return [];
   return fetcher<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`);
 }
+
+// --- Quick Links --------------------------------------------------------
+
+export interface QuickLink {
+  id: number;
+  label: string;
+  url: string;
+  icon: string | null;
+  sort_order: number;
+  created_at?: string;
+}
+
+/** User's pinned quick-launch links, in `sort_order`. GET /api/quick-links. */
+export function useQuickLinks() {
+  // Backend returns a bare array (mirrors the flashcards `GET /decks` convention).
+  return useSWR<QuickLink[]>("/api/quick-links", fetcher);
+}
+
+/** Create a quick link. POST /api/quick-links. */
+export function createQuickLink(body: { label: string; url: string; icon?: string | null }) {
+  return mutateJSON<QuickLink>("/api/quick-links", body, "POST");
+}
+
+/** Partially update a quick link (label/url/icon/sort_order). PUT /api/quick-links/{id}. */
+export function updateQuickLink(
+  id: number,
+  body: { label?: string; url?: string; icon?: string | null; sort_order?: number },
+) {
+  return mutateJSON<QuickLink>(`/api/quick-links/${id}`, body, "PUT");
+}
+
+/** Delete a quick link. DELETE /api/quick-links/{id}. */
+export function deleteQuickLink(id: number) {
+  return mutateJSON<{ ok: boolean }>(`/api/quick-links/${id}`, undefined, "DELETE");
+}

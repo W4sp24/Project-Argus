@@ -10,6 +10,7 @@ import Heatmap from "@/components/dashboard/Heatmap";
 import IngestPanel from "@/components/dashboard/IngestPanel";
 import InsightsChart from "@/components/dashboard/InsightsChart";
 import PlannerTimeline from "@/components/dashboard/PlannerTimeline";
+import QuickLinks from "@/components/dashboard/QuickLinks";
 import TasksPanel from "@/components/dashboard/TasksPanel";
 import { useDashboardStats } from "@/lib/useDashboardStats";
 import { useTypewriter } from "@/lib/useTypewriter";
@@ -60,6 +61,7 @@ export default function DashboardPage() {
           <div className="flex min-w-0 flex-col gap-4">
             {/* Chat moved to the ChatDrawer (TopBar CHAT / ⌘K), shared with /chat. */}
             <BriefingCard />
+            <QuickLinks />
             <TokenUsage />
             <CliUsage />
             <ActivityFeed />
