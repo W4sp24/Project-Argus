@@ -15,10 +15,16 @@ const packaged = process.env.ARGUS_PACKAGED === "1";
  * must not be able to reach a remote origin with vault content. Scripts need
  * 'unsafe-inline' for Next's hydration payload (nonces would require a
  * middleware, which isn't worth it for a local-only app).
+ *
+ * `next dev` (webpack) serves its React Refresh / HMR runtime through eval(),
+ * so dev additionally needs 'unsafe-eval' — without it no client component
+ * hydrates (this is Next's documented dev requirement). Production and packaged
+ * builds don't use eval-based refresh, so they keep the strict policy.
  */
+const isDev = process.env.NODE_ENV !== "production";
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
