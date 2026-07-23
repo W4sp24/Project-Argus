@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS flashcard_reviews (
     last_review_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_flashcard_reviews_card ON flashcard_reviews(deck_id, card_id);
+
+CREATE TABLE IF NOT EXISTS quick_links (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    label      TEXT NOT NULL,
+    url        TEXT NOT NULL,
+    icon       TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_quick_links_sort_order ON quick_links(sort_order);
 """
 
 

@@ -191,6 +191,10 @@ def create_app(
 
     app.include_router(build_flashcards_router(resolved))
 
+    from backend.quick_links_api import build_quick_links_router
+
+    app.include_router(build_quick_links_router(resolved))
+
     from backend.search_api import build_search_router
 
     app.include_router(
