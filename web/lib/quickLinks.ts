@@ -104,6 +104,112 @@ export function isValidUrl(raw: string): boolean {
   }
 }
 
+// --- custom icons -----------------------------------------------------------
+
+/** Prefix every stored image icon must carry (mirrors the backend). */
+const IMAGE_DATA_URI_PREFIX = "data:image/png;base64,";
+/** Preset keys accepted by the backend (`^[a-z0-9_-]{1,32}$`). */
+const PRESET_KEY_RE = /^[a-z0-9_-]{1,32}$/;
+/** ~24 KB cap on a stored image data URI, matching `_MAX_ICON_DATA_LEN`. */
+const MAX_ICON_DATA_LEN = 24_000;
+
+/**
+ * Client-side mirror of `backend/quick_links.sanitize_icon_value` (defense in
+ * depth, same rationale as {@link sanitizeUrl}): the server is the source of
+ * truth, but validating here lets the panel reject a too-big image before the
+ * request and keeps the picker honest.
+ *
+ * - `kind === null` → no custom icon; any value is fine (ignored).
+ * - `"preset"` → short `[a-z0-9_-]` key.
+ * - `"image"`  → a `data:image/png;base64,…` URI within the size cap.
+ */
+export function isValidIconValue(kind: string | null, value: string | null): boolean {
+  if (kind === null) return true;
+  if (!value) return false;
+  if (kind === "preset") return PRESET_KEY_RE.test(value);
+  if (kind === "image") {
+    return value.startsWith(IMAGE_DATA_URI_PREFIX) && value.length <= MAX_ICON_DATA_LEN;
+  }
+  return false;
+}
+
+/**
+ * Downscale any picked image `File` to a square PNG **data URI** (default
+ * 64x64), preserving aspect ratio and centering on a transparent canvas.
+ *
+ * This is the single normalization point for *both* icon-upload paths — the
+ * web `<input type="file">` and the Electron `argus.pickIcon()` dialog — so the
+ * value stored in SQLite is always a small `data:image/png` regardless of the
+ * source format (png/jpg/webp/svg) or original dimensions. The result renders
+ * under the existing `img-src 'self' data: blob:` CSP with no policy change.
+ *
+ * Rejects (rejects the promise) if the file isn't a decodable image or the
+ * downscaled result would still exceed the stored-size cap.
+ */
+export function fileToPngDataUrl(file: File | Blob, size = 64): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas is not available"));
+          return;
+        }
+        // "contain" fit: scale the longest side to `size`, center the rest.
+        const scale = Math.min(size / img.width, size / img.height) || 1;
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+        const dataUrl = canvas.toDataURL("image/png");
+        if (!dataUrl.startsWith(IMAGE_DATA_URI_PREFIX) || dataUrl.length > MAX_ICON_DATA_LEN) {
+          reject(new Error("Image is too large after downscaling"));
+          return;
+        }
+        resolve(dataUrl);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error("Could not process image"));
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Could not load image"));
+    };
+    img.src = objectUrl;
+  });
+}
+
+/**
+ * Decode a `data:<mime>;base64,<body>` URI to a `Blob` without any network
+ * request. Used for the Electron `argus.pickIcon()` result — `fetch()` on a
+ * `data:` URL can be blocked by the loopback `connect-src` CSP, so we parse it
+ * by hand instead. Throws on a non-base64 `data:` URI.
+ */
+function dataUrlToBlob(dataUrl: string): Blob {
+  const match = /^data:([^;,]*)?(;base64)?,(.*)$/s.exec(dataUrl);
+  if (!match) throw new Error("Not a data URI");
+  const mime = match[1] || "application/octet-stream";
+  const isBase64 = Boolean(match[2]);
+  const body = match[3];
+  const binary = isBase64 ? atob(body) : decodeURIComponent(body);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+/**
+ * Turn a raw `data:` URI (e.g. the value the Electron main process returns from
+ * `argus.pickIcon()`) into a downscaled PNG data URI via {@link fileToPngDataUrl}.
+ */
+export async function dataUrlToPngDataUrl(dataUrl: string, size = 64): Promise<string> {
+  return fileToPngDataUrl(dataUrlToBlob(dataUrl), size);
+}
+
 /**
  * Open a Quick Link in the user's real browser. Under the Electron desktop
  * shell this goes through the `window.argus.openExternal` preload bridge

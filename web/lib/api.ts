@@ -410,13 +410,26 @@ export async function searchVault(query: string): Promise<SearchResult[]> {
 
 // --- Quick Links --------------------------------------------------------
 
+/** How a Quick Link's icon is stored. `null` kind => fall back to the `icon` glyph. */
+export type QuickLinkIconKind = "preset" | "image";
+
 export interface QuickLink {
   id: number;
   label: string;
   url: string;
   icon: string | null;
+  /** `"preset"` (icon_value = a bundled SVG key) or `"image"` (icon_value = a PNG data URI). */
+  icon_kind: QuickLinkIconKind | null;
+  icon_value: string | null;
   sort_order: number;
   created_at?: string;
+}
+
+/** The icon fields shared by create/update request bodies. */
+export interface QuickLinkIconFields {
+  icon?: string | null;
+  icon_kind?: QuickLinkIconKind | null;
+  icon_value?: string | null;
 }
 
 /** User's pinned quick-launch links, in `sort_order`. GET /api/quick-links. */
@@ -426,14 +439,20 @@ export function useQuickLinks() {
 }
 
 /** Create a quick link. POST /api/quick-links. */
-export function createQuickLink(body: { label: string; url: string; icon?: string | null }) {
+export function createQuickLink(body: { label: string; url: string } & QuickLinkIconFields) {
   return mutateJSON<QuickLink>("/api/quick-links", body, "POST");
 }
 
-/** Partially update a quick link (label/url/icon/sort_order). PUT /api/quick-links/{id}. */
+/**
+ * Partially update a quick link. PUT /api/quick-links/{id}. Only the keys
+ * present in `body` are changed server-side (the backend forwards just the
+ * fields it received), so a reorder can send `{ sort_order }` alone without
+ * disturbing the icon, and an edit can clear a custom icon by sending
+ * `icon_kind: null`.
+ */
 export function updateQuickLink(
   id: number,
-  body: { label?: string; url?: string; icon?: string | null; sort_order?: number },
+  body: { label?: string; url?: string; sort_order?: number } & QuickLinkIconFields,
 ) {
   return mutateJSON<QuickLink>(`/api/quick-links/${id}`, body, "PUT");
 }

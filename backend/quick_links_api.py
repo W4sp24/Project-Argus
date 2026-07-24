@@ -31,6 +31,11 @@ class QuickLink(BaseModel):
     label: str
     url: str
     icon: str | None = None
+    # Custom icon (additive; NULL kind => fall back to the ``icon`` glyph).
+    # ``icon_kind`` is 'preset' (icon_value = a bundled SVG key) or 'image'
+    # (icon_value = a downscaled PNG data URI).
+    icon_kind: str | None = None
+    icon_value: str | None = None
     sort_order: int
 
 
@@ -38,12 +43,16 @@ class CreateLinkRequest(BaseModel):
     label: str
     url: str
     icon: str | None = None
+    icon_kind: str | None = None
+    icon_value: str | None = None
 
 
 class UpdateLinkRequest(BaseModel):
     label: str | None = None
     url: str | None = None
     icon: str | None = None
+    icon_kind: str | None = None
+    icon_value: str | None = None
     sort_order: int | None = None
 
 
@@ -68,7 +77,14 @@ def build_quick_links_router(settings: Settings) -> APIRouter:
     def create(request: CreateLinkRequest) -> QuickLink:
         conn = db()
         try:
-            row = create_link(conn, label=request.label, url=request.url, icon=request.icon)
+            row = create_link(
+                conn,
+                label=request.label,
+                url=request.url,
+                icon=request.icon,
+                icon_kind=request.icon_kind,
+                icon_value=request.icon_value,
+            )
         except QuickLinksError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
@@ -77,16 +93,19 @@ def build_quick_links_router(settings: Settings) -> APIRouter:
 
     @router.put("/{link_id}", response_model=QuickLink)
     def update(link_id: int, request: UpdateLinkRequest) -> QuickLink:
+        # Forward ONLY the fields the client actually sent, so a drag-reorder
+        # (``{sort_order}`` alone) leaves every icon column untouched, while an
+        # edit that includes the icon fields can clear them to NULL. The writer
+        # uses an _UNSET sentinel to tell "omitted" from an explicit null.
+        sent = request.model_fields_set
+        kwargs: dict[str, object] = {}
+        for name in ("label", "url", "icon", "icon_kind", "icon_value", "sort_order"):
+            if name in sent:
+                kwargs[name] = getattr(request, name)
+
         conn = db()
         try:
-            row = update_link(
-                conn,
-                link_id,
-                label=request.label,
-                url=request.url,
-                icon=request.icon,
-                sort_order=request.sort_order,
-            )
+            row = update_link(conn, link_id, **kwargs)  # type: ignore[arg-type]
         except QuickLinksError as exc:
             if str(exc).startswith("quick link not found"):
                 raise HTTPException(status_code=404, detail=str(exc)) from exc

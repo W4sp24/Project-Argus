@@ -164,3 +164,79 @@ test("clicking a link opens its sanitized URL via the window.open fallback", asy
     "https://playwright.dev/",
   );
 });
+
+test("adding a link with a preset icon renders an svg in the row", async ({ page }) => {
+  const label = uniq("E2E Preset Icon");
+
+  const form = addForm(page);
+  await form.getByLabel("Link label").fill(label);
+  await form.getByLabel("Link URL").fill("https://github.com");
+  await form.getByRole("button", { name: "Use github icon" }).click();
+  await form.getByRole("button", { name: "ADD" }).click();
+
+  const panel = quickLinksPanel(page);
+  const row = panel.locator("li").filter({ hasText: label });
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  await expect(row.locator("svg")).toHaveCount(1);
+});
+
+test("editing a link to a preset icon then clearing it falls back to the default glyph", async ({ page }) => {
+  const label = uniq("E2E Edit Icon");
+  await addLink(page, label, "https://example.org");
+
+  const panel = quickLinksPanel(page);
+  let row = panel.locator("li").filter({ hasText: label });
+  await expect(row).toBeVisible();
+  await row.hover();
+  await row.getByRole("button", { name: "Edit link" }).click();
+
+  const editForm = panel.locator("li form");
+  await editForm.getByRole("button", { name: "Use star icon" }).click();
+  await editForm.getByRole("button", { name: "SAVE" }).click();
+
+  row = panel.locator("li").filter({ hasText: label });
+  await expect(row).toBeVisible();
+  await expect(row.locator("svg")).toHaveCount(1);
+
+  await row.hover();
+  await row.getByRole("button", { name: "Edit link" }).click();
+  const editForm2 = panel.locator("li form");
+  await editForm2.getByRole("button", { name: "Clear icon" }).click();
+  await editForm2.getByRole("button", { name: "SAVE" }).click();
+
+  row = panel.locator("li").filter({ hasText: label });
+  await expect(row).toBeVisible();
+  await expect(row.locator("svg")).toHaveCount(0);
+});
+
+test("uploading an image icon via the hidden file input renders as an img", async ({ page }) => {
+  const label = uniq("E2E Image Icon");
+
+  const form = addForm(page);
+  await form.getByLabel("Link label").fill(label);
+  await form.getByLabel("Link URL").fill("https://example.com");
+
+  const fileInput = form.locator('input[type="file"]');
+  await fileInput.setInputFiles({
+    name: "icon.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+
+  // The upload downscales client-side (canvas → PNG data URI) before the icon
+  // preview <img> in the picker appears — wait for it so the row's own <img>
+  // (asserted below) reflects a fully-processed icon_value, not a race.
+  await expect(form.locator('img[src^="data:image/png"]')).toBeVisible({ timeout: 10_000 });
+
+  await form.getByRole("button", { name: "ADD" }).click();
+
+  const panel = quickLinksPanel(page);
+  const row = panel.locator("li").filter({ hasText: label });
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  const rowImg = row.locator("img");
+  await expect(rowImg).toHaveCount(1);
+  await expect(rowImg).toHaveAttribute("src", /^data:image\/png/);
+});

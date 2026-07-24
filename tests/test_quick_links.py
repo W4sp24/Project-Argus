@@ -11,9 +11,17 @@ from backend.quick_links import (
     delete_link,
     list_links,
     sanitize_icon,
+    sanitize_icon_kind,
+    sanitize_icon_value,
     sanitize_label,
     sanitize_url,
     update_link,
+)
+
+# A 1x1 transparent PNG as a data URI — the shape the renderer canvas produces.
+_PNG_DATA_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 )
 
 # --- fixtures --------------------------------------------------------------
@@ -143,6 +151,70 @@ def test_sanitize_icon_caps_overly_long_input() -> None:
     assert result == "x" * 8
 
 
+# --- sanitize_icon_kind ------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_sanitize_icon_kind_none_or_empty_becomes_none(raw) -> None:
+    assert sanitize_icon_kind(raw) is None
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("preset", "preset"), ("IMAGE", "image")])
+def test_sanitize_icon_kind_accepts_allowlist_case_insensitively(raw, expected) -> None:
+    assert sanitize_icon_kind(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["url", "local_path", "svg", "glyph"])
+def test_sanitize_icon_kind_rejects_unknown(raw) -> None:
+    with pytest.raises(QuickLinksError):
+        sanitize_icon_kind(raw)
+
+
+# --- sanitize_icon_value -----------------------------------------------------
+
+
+def test_sanitize_icon_value_none_kind_returns_none() -> None:
+    assert sanitize_icon_value(None, "anything") is None
+
+
+def test_sanitize_icon_value_accepts_preset_key() -> None:
+    assert sanitize_icon_value("preset", "github") == "github"
+    assert sanitize_icon_value("preset", "book-open_2") == "book-open_2"
+
+
+@pytest.mark.parametrize("bad", ["Bad Key", "has space", "emoji★", "x" * 33, "path/traversal", ""])
+def test_sanitize_icon_value_rejects_bad_preset_key(bad) -> None:
+    with pytest.raises(QuickLinksError):
+        sanitize_icon_value("preset", bad)
+
+
+def test_sanitize_icon_value_accepts_small_png_data_uri() -> None:
+    assert sanitize_icon_value("image", _PNG_DATA_URI) == _PNG_DATA_URI
+
+
+def test_sanitize_icon_value_rejects_non_png_data_uri() -> None:
+    with pytest.raises(QuickLinksError):
+        sanitize_icon_value("image", "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=")
+    with pytest.raises(QuickLinksError):
+        sanitize_icon_value("image", "https://cdn.example.com/logo.png")
+
+
+def test_sanitize_icon_value_rejects_oversized_image() -> None:
+    huge = "data:image/png;base64," + ("A" * 30_000)
+    with pytest.raises(QuickLinksError):
+        sanitize_icon_value("image", huge)
+
+
+def test_sanitize_icon_value_rejects_invalid_base64() -> None:
+    with pytest.raises(QuickLinksError):
+        sanitize_icon_value("image", "data:image/png;base64,not!valid!base64!")
+
+
+def test_sanitize_icon_value_required_when_kind_set() -> None:
+    with pytest.raises(QuickLinksError):
+        sanitize_icon_value("preset", None)
+
+
 # --- CRUD + reorder roundtrip -------------------------------------------------
 
 
@@ -214,3 +286,135 @@ def test_delete_link_nonexistent_id_raises(conn) -> None:
     # for an unknown id -- same documented behavior as update_link.
     with pytest.raises(QuickLinksError, match="quick link not found"):
         delete_link(conn, 99999)
+
+
+# --- custom icon roundtrip ---------------------------------------------------
+
+
+def test_create_link_roundtrips_preset_icon(conn) -> None:
+    row = create_link(
+        conn,
+        label="GitHub",
+        url="https://github.com",
+        icon=None,
+        icon_kind="preset",
+        icon_value="github",
+    )
+    assert row["icon_kind"] == "preset"
+    assert row["icon_value"] == "github"
+    assert list_links(conn)[0]["icon_value"] == "github"
+
+
+def test_create_link_roundtrips_image_icon(conn) -> None:
+    row = create_link(
+        conn,
+        label="Custom",
+        url="https://a.com",
+        icon=None,
+        icon_kind="image",
+        icon_value=_PNG_DATA_URI,
+    )
+    assert row["icon_kind"] == "image"
+    assert row["icon_value"] == _PNG_DATA_URI
+
+
+def test_create_link_rejects_bad_icon_before_insert(conn) -> None:
+    with pytest.raises(QuickLinksError):
+        create_link(
+            conn,
+            label="Bad",
+            url="https://a.com",
+            icon=None,
+            icon_kind="image",
+            icon_value="https://evil.com/x.png",
+        )
+    assert list_links(conn) == []
+
+
+def test_update_link_sets_and_clears_custom_icon(conn) -> None:
+    created = create_link(
+        conn,
+        label="Link",
+        url="https://a.com",
+        icon="★",
+        icon_kind="preset",
+        icon_value="book",
+    )
+    # Switch preset -> image.
+    updated = update_link(conn, created["id"], icon_kind="image", icon_value=_PNG_DATA_URI)
+    assert updated["icon_kind"] == "image"
+    assert updated["icon_value"] == _PNG_DATA_URI
+
+    # Clear the custom icon back to the glyph (explicit None clears to NULL).
+    cleared = update_link(conn, created["id"], icon_kind=None, icon_value=None)
+    assert cleared["icon_kind"] is None
+    assert cleared["icon_value"] is None
+    assert cleared["icon"] == "★"  # glyph untouched by the icon-pair clear
+
+
+def test_update_link_reorder_leaves_icon_untouched(conn) -> None:
+    created = create_link(
+        conn,
+        label="Link",
+        url="https://a.com",
+        icon=None,
+        icon_kind="preset",
+        icon_value="star",
+    )
+    # A reorder that only passes sort_order must not clear the icon (the API
+    # relies on this by forwarding only the fields the client actually sent).
+    update_link(conn, created["id"], sort_order=9)
+    row = list_links(conn)[0]
+    assert row["icon_kind"] == "preset"
+    assert row["icon_value"] == "star"
+    assert row["sort_order"] == 9
+
+
+# --- schema migration --------------------------------------------------------
+
+
+def test_init_schema_migrates_pre_icon_quick_links_table(tmp_path: Path) -> None:
+    """A DB whose quick_links predates the icon columns gains them without loss."""
+    connection = connect(tmp_path / "old.db")
+    # Simulate the pre-custom-icon schema (no icon_kind/icon_value).
+    connection.executescript(
+        """
+        CREATE TABLE quick_links (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            label      TEXT NOT NULL,
+            url        TEXT NOT NULL,
+            icon       TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    connection.execute(
+        "INSERT INTO quick_links (label, url, icon, sort_order)"
+        " VALUES ('Old', 'https://a.com', '★', 1)"
+    )
+    connection.commit()
+
+    init_schema(connection)  # should ALTER in the new columns, not drop the row
+
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(quick_links)")}
+    assert {"icon_kind", "icon_value"} <= columns
+
+    links = list_links(connection)
+    assert len(links) == 1
+    assert links[0]["label"] == "Old"
+    assert links[0]["icon"] == "★"
+    assert links[0]["icon_kind"] is None
+    assert links[0]["icon_value"] is None
+
+    # And the migrated table now accepts a custom icon.
+    created = create_link(
+        connection,
+        label="New",
+        url="https://b.com",
+        icon=None,
+        icon_kind="preset",
+        icon_value="link",
+    )
+    assert created["icon_value"] == "link"
+    connection.close()

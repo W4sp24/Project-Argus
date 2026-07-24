@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS quick_links (
     label      TEXT NOT NULL,
     url        TEXT NOT NULL,
     icon       TEXT,
+    icon_kind  TEXT,
+    icon_value TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_quick_links_sort_order ON quick_links(sort_order);
@@ -144,6 +146,15 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE suggestions ADD COLUMN dismiss_reason TEXT")
     usage_columns = {row["name"] for row in conn.execute("PRAGMA table_info(token_usage)")}
     if "cache_creation_input_tokens" not in usage_columns:  # migration for pre-cache-token DBs
-        conn.execute("ALTER TABLE token_usage ADD COLUMN cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0")
-        conn.execute("ALTER TABLE token_usage ADD COLUMN cache_read_input_tokens INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "ALTER TABLE token_usage ADD COLUMN "
+            "cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            "ALTER TABLE token_usage ADD COLUMN cache_read_input_tokens INTEGER NOT NULL DEFAULT 0"
+        )
+    ql_columns = {row["name"] for row in conn.execute("PRAGMA table_info(quick_links)")}
+    if "icon_kind" not in ql_columns:  # migration for pre-custom-icon DBs (glyph-only)
+        conn.execute("ALTER TABLE quick_links ADD COLUMN icon_kind TEXT")
+        conn.execute("ALTER TABLE quick_links ADD COLUMN icon_value TEXT")
     conn.commit()

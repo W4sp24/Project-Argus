@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld("argus", {
 
   // --- shell ---
   openExternal: (url) => ipcRenderer.invoke("shell:open", url),
+  pickIcon: () => ipcRenderer.invoke("icon:pick"),
   appVersion: () => ipcRenderer.invoke("app:version"),
 
   // --- events ---

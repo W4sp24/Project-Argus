@@ -3,11 +3,13 @@
 import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
+import IconPicker, { type IconSelection } from "@/components/quicklinks/IconPicker";
 import { createQuickLink, deleteQuickLink, updateQuickLink, useQuickLinks, type QuickLink } from "@/lib/api";
 import { FLAGS } from "@/lib/flags";
+import { QuickLinkIcon } from "@/lib/icons";
 import { isValidUrl, openExternalUrl } from "@/lib/quickLinks";
 
-const PRESET_ICONS = ["★", "◆", "⬡", "▲", "●", "⌂", "✉", "⚙", "↗"];
+const EMPTY_ICON: IconSelection = { icon: null, icon_kind: null, icon_value: null };
 
 /**
  * QUICK.LINKS (§ dashboard) — pinned launch links, backed for real by
@@ -21,19 +23,19 @@ export default function QuickLinks() {
   const { show } = useToast();
 
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editIcon, setEditIcon] = useState("");
+  const [editIcon, setEditIcon] = useState<IconSelection>(EMPTY_ICON);
   const [editLabel, setEditLabel] = useState("");
   const [editUrl, setEditUrl] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
-  const [addIcon, setAddIcon] = useState("");
+  const [addIcon, setAddIcon] = useState<IconSelection>(EMPTY_ICON);
   const [addLabel, setAddLabel] = useState("");
   const [addUrl, setAddUrl] = useState("");
   const [adding, setAdding] = useState(false);
 
   function startEdit(link: QuickLink) {
     setEditingId(link.id);
-    setEditIcon(link.icon ?? "");
+    setEditIcon({ icon: link.icon, icon_kind: link.icon_kind, icon_value: link.icon_value });
     setEditLabel(link.label);
     setEditUrl(link.url);
   }
@@ -51,7 +53,13 @@ export default function QuickLinks() {
     }
     setSavingEdit(true);
     try {
-      await updateQuickLink(link.id, { label, url: editUrl, icon: editIcon.trim() || null });
+      await updateQuickLink(link.id, {
+        label,
+        url: editUrl,
+        icon: editIcon.icon,
+        icon_kind: editIcon.icon_kind,
+        icon_value: editIcon.icon_value,
+      });
       setEditingId(null);
       show(`quick-links :: saved ${label}`);
     } catch (error) {
@@ -103,8 +111,14 @@ export default function QuickLinks() {
     }
     setAdding(true);
     try {
-      await createQuickLink({ label, url: addUrl, icon: addIcon.trim() || null });
-      setAddIcon("");
+      await createQuickLink({
+        label,
+        url: addUrl,
+        icon: addIcon.icon,
+        icon_kind: addIcon.icon_kind,
+        icon_value: addIcon.icon_value,
+      });
+      setAddIcon(EMPTY_ICON);
       setAddLabel("");
       setAddUrl("");
       show(`quick-links :: added ${label}`);
@@ -120,52 +134,34 @@ export default function QuickLinks() {
     <Panel label="QUICK.LINKS" preview={(FLAGS.quickLinks as string) === "preview"}>
       <form
         onSubmit={submitAdd}
-        className="mb-4 flex items-center gap-2 border border-line px-3 py-2 focus-within:border-lineHi"
+        className="mb-4 flex flex-col gap-2 border border-line px-3 py-2 focus-within:border-lineHi"
       >
-        <span className="shrink-0 font-mono text-[var(--ac)]">＋</span>
-        <input
-          value={addIcon}
-          onChange={(event) => setAddIcon(event.target.value)}
-          placeholder="↗"
-          aria-label="Icon glyph"
-          className="w-10 shrink-0 bg-transparent text-center text-[13.5px] placeholder:text-ink-faint focus:outline-none"
-        />
-        <input
-          value={addLabel}
-          onChange={(event) => setAddLabel(event.target.value)}
-          placeholder="label"
-          aria-label="Link label"
-          className="min-w-0 flex-[0.8] bg-transparent text-[13.5px] placeholder:text-ink-faint focus:outline-none"
-        />
-        <input
-          value={addUrl}
-          onChange={(event) => setAddUrl(event.target.value)}
-          placeholder="https://…"
-          aria-label="Link URL"
-          className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-ink-faint focus:outline-none"
-        />
-        <button
-          type="submit"
-          disabled={adding}
-          className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
-        >
-          ADD
-        </button>
-      </form>
-
-      <div className="mb-3 flex items-center gap-1.5">
-        {PRESET_ICONS.map((glyph) => (
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 font-mono text-[var(--ac)]">＋</span>
+          <input
+            value={addLabel}
+            onChange={(event) => setAddLabel(event.target.value)}
+            placeholder="label"
+            aria-label="Link label"
+            className="min-w-0 flex-[0.8] bg-transparent text-[13.5px] placeholder:text-ink-faint focus:outline-none"
+          />
+          <input
+            value={addUrl}
+            onChange={(event) => setAddUrl(event.target.value)}
+            placeholder="https://…"
+            aria-label="Link URL"
+            className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-ink-faint focus:outline-none"
+          />
           <button
-            key={glyph}
-            type="button"
-            onClick={() => setAddIcon(glyph)}
-            aria-label={`Use ${glyph} icon`}
-            className="font-mono text-xs text-ink-faint hover:text-[var(--ac)]"
+            type="submit"
+            disabled={adding}
+            className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
           >
-            {glyph}
+            ADD
           </button>
-        ))}
-      </div>
+        </div>
+        <IconPicker value={addIcon} onChange={setAddIcon} onError={show} />
+      </form>
 
       {isLoading ? (
         <p className="py-1 text-[12px] text-ink-faint">loading…</p>
@@ -179,45 +175,42 @@ export default function QuickLinks() {
               <li key={link.id} className="group flex items-center gap-2.5 py-1.5">
                 {editing ? (
                   <form
-                    className="flex min-w-0 flex-1 items-center gap-2"
+                    className="flex min-w-0 flex-1 flex-col gap-2"
                     onSubmit={(event) => {
                       event.preventDefault();
                       saveEdit(link);
                     }}
                   >
-                    <input
-                      value={editIcon}
-                      onChange={(event) => setEditIcon(event.target.value)}
-                      aria-label="Icon glyph"
-                      className="w-8 shrink-0 border border-lineHi bg-sunken px-1 py-1 text-center text-[13.5px] focus:outline-none"
-                    />
-                    <input
-                      autoFocus
-                      value={editLabel}
-                      onChange={(event) => setEditLabel(event.target.value)}
-                      aria-label="Link label"
-                      className="min-w-0 flex-[0.8] border border-lineHi bg-sunken px-2 py-1 text-[13.5px] focus:outline-none"
-                    />
-                    <input
-                      value={editUrl}
-                      onChange={(event) => setEditUrl(event.target.value)}
-                      aria-label="Link URL"
-                      className="min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1 text-[13.5px] focus:outline-none"
-                    />
-                    <button
-                      type="submit"
-                      disabled={savingEdit}
-                      className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--ac)] disabled:opacity-40"
-                    >
-                      SAVE
-                    </button>
-                    <button
-                      type="button"
-                      onClick={cancelEdit}
-                      className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint hover:text-ink"
-                    >
-                      CANCEL
-                    </button>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <input
+                        autoFocus
+                        value={editLabel}
+                        onChange={(event) => setEditLabel(event.target.value)}
+                        aria-label="Link label"
+                        className="min-w-0 flex-[0.8] border border-lineHi bg-sunken px-2 py-1 text-[13.5px] focus:outline-none"
+                      />
+                      <input
+                        value={editUrl}
+                        onChange={(event) => setEditUrl(event.target.value)}
+                        aria-label="Link URL"
+                        className="min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1 text-[13.5px] focus:outline-none"
+                      />
+                      <button
+                        type="submit"
+                        disabled={savingEdit}
+                        className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--ac)] disabled:opacity-40"
+                      >
+                        SAVE
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelEdit}
+                        className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint hover:text-ink"
+                      >
+                        CANCEL
+                      </button>
+                    </div>
+                    <IconPicker value={editIcon} onChange={setEditIcon} onError={show} />
                   </form>
                 ) : (
                   <>
@@ -227,7 +220,9 @@ export default function QuickLinks() {
                       title={link.url}
                       className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13.5px] text-ink transition-colors hover:text-ink-bright"
                     >
-                      <span className="shrink-0 font-mono text-ink-faint">{link.icon || "↗"}</span>
+                      <span className="flex shrink-0 items-center font-mono text-ink-faint">
+                        <QuickLinkIcon link={link} />
+                      </span>
                       <span className="min-w-0 truncate">{link.label}</span>
                     </button>
                     <span className="hidden shrink-0 items-center gap-2 group-hover:flex">
