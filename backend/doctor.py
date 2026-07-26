@@ -111,13 +111,11 @@ def _check_ollama() -> Check:
     and Claude Code are the others), so its absence is a missing option, not a
     broken install — same reasoning as the gcal/todoist connector checks.
     """
-    import asyncio
-
     from backend.agent.hardware import ollama_available, ollama_base_url, ollama_reachable
 
     url = ollama_base_url()
     try:
-        running = asyncio.run(ollama_reachable())
+        running = ollama_reachable()
     except Exception as exc:  # noqa: BLE001 - a failed probe is not a failed install
         return Check(name="ollama", status="WARN", detail=f"could not probe {url}: {exc}")
     if running:

@@ -40,7 +40,10 @@ const PROVIDERS: ProviderOption[] = [
     local: true,
     needsEndpoint: true,
     needsKey: false,
-    defaultEndpoint: "http://localhost:11434/v1",
+    // 127.0.0.1 rather than "localhost": that name resolves to ::1 first, and
+    // Ollama binds the IPv4 loopback, so every request would pay a failed IPv6
+    // attempt before falling through.
+    defaultEndpoint: "http://127.0.0.1:11434/v1",
   },
   {
     id: "openai-compat",
@@ -288,7 +291,7 @@ export default function AddModelDialog({
                     setEndpoint(event.target.value);
                     invalidate();
                   }}
-                  placeholder="http://localhost:11434/v1"
+                  placeholder="http://127.0.0.1:11434/v1"
                   className={INPUT}
                 />
               </label>

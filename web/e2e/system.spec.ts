@@ -49,8 +49,8 @@ test("adding a model requires passing the connection test first", async ({ page 
   // Ollama is the default choice, so the endpoint is prefilled — a
   // non-developer never has to know this URL.
   await expect(dialog.getByLabel("Display name")).toBeVisible();
-  await expect(page.getByPlaceholder("http://localhost:11434/v1")).toHaveValue(
-    "http://localhost:11434/v1",
+  await expect(page.getByPlaceholder("http://127.0.0.1:11434/v1")).toHaveValue(
+    "http://127.0.0.1:11434/v1",
   );
 
   // Naming it is not enough: Save stays locked until the test goes green.

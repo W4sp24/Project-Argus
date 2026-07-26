@@ -22,7 +22,14 @@ from dataclasses import dataclass
 
 BYTES_PER_GB = 1024**3
 PROBE_TIMEOUT_SECONDS = 5
-OLLAMA_DEFAULT_URL = "http://localhost:11434"
+# 127.0.0.1, not "localhost": that name resolves to ::1 *and* 127.0.0.1, and
+# Ollama binds the IPv4 loopback, so every connection attempt pays a full
+# timeout against ::1 before falling through. Measured 1.6s vs 0.8s on a closed
+# port, doubled on every request once a model is actually registered.
+OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
+# See ollama_reachable: bounded by the timeout, not by the refusal, so keep it
+# well under a second while staying far above a live server's response time.
+REACHABILITY_TIMEOUT_SECONDS = 0.8
 
 
 @dataclass(frozen=True)
@@ -184,13 +191,33 @@ def ollama_available() -> bool:
     return shutil.which("ollama") is not None
 
 
-async def ollama_reachable(timeout: float = 3.0) -> bool:
-    """True when an Ollama server answers on its API port."""
-    import httpx
+def ollama_reachable(timeout: float = REACHABILITY_TIMEOUT_SECONDS) -> bool:
+    """True when something is listening on Ollama's API port.
 
+    A plain socket connect rather than an HTTP request, and synchronous rather
+    than async, because both cost more than the question is worth: `argus
+    doctor` runs on every /system page load and in the setup wizard, and an
+    HTTP round trip through a fresh httpx client inside ``asyncio.run`` added
+    ~1.5s on Windows even when the port was closed. "Is the port open" is the
+    thing being asked, and a socket answers it immediately.
+
+    The timeout is deliberately short: a live local server accepts in
+    single-digit milliseconds, while a *closed* loopback port can take seconds
+    to report a refusal on Windows, so the timeout — not the refusal — is what
+    bounds this call.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(ollama_base_url())
+    host = parsed.hostname or "127.0.0.1"
+    # Same dual-stack trap as OLLAMA_DEFAULT_URL, for a user-supplied
+    # OLLAMA_HOST that spells the loopback by name.
+    if host == "localhost":
+        host = "127.0.0.1"
+    port = parsed.port or 11434
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(f"{ollama_base_url()}/api/tags")
-        return response.status_code < 400
-    except Exception:  # noqa: BLE001 - not running is the expected case
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:  # refused, filtered, or timed out — all mean "not running"
         return False

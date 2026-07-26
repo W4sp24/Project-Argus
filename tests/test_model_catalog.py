@@ -160,10 +160,31 @@ def test_total_ram_is_detected_on_this_machine() -> None:
 
 def test_ollama_base_url_honours_the_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
-    assert ollama_base_url() == "http://localhost:11434"
+    # 127.0.0.1, not "localhost": that name resolves to ::1 first and Ollama
+    # binds IPv4, so the name costs a failed connect attempt on every call.
+    assert ollama_base_url() == "http://127.0.0.1:11434"
 
     monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:22222")
     assert ollama_base_url() == "http://127.0.0.1:22222"
 
     monkeypatch.setenv("OLLAMA_HOST", "https://ollama.example.com/")
     assert ollama_base_url() == "https://ollama.example.com"
+
+
+def test_ollama_reachability_probe_is_fast_when_nothing_is_listening() -> None:
+    """`argus doctor` runs on every /system load and in the setup wizard.
+
+    Regression guard: this check originally used an httpx request inside
+    asyncio.run against "localhost", which cost ~3s — enough to visibly stall
+    the panel and time the e2e doctor test out. A closed loopback port is the
+    normal case for anyone not using Ollama, so it has to be cheap.
+    """
+    import time
+
+    from backend.agent.hardware import ollama_reachable
+
+    started = time.monotonic()
+    ollama_reachable()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.5, f"the reachability probe took {elapsed:.2f}s"
