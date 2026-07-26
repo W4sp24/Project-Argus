@@ -147,11 +147,21 @@ def create_app(
         return VaultIndex(resolved.db_path.parent / "chroma")
 
     def _default_generator(feature: str) -> Callable:
-        """agent_generate bound to a feature label + db so usage rows attribute."""
+        """agent_generate bound to a feature label + db so usage rows attribute.
+
+        ``model`` is optional and names a registry entry (§7); omitting it
+        keeps the historical default backend.
+        """
         from backend.agent.generate import agent_generate
 
-        def _generate(prompt: str):
-            return agent_generate(prompt, feature=feature, db_path=resolved.db_path)
+        def _generate(prompt: str, model: str | None = None):
+            return agent_generate(
+                prompt,
+                feature=feature,
+                db_path=resolved.db_path,
+                model=model,
+                settings=resolved,
+            )
 
         return _generate
 

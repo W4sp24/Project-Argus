@@ -30,6 +30,9 @@ SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ -]")
 class GuideRequest(BaseModel):
     course: str
     scope: str = "everything so far"
+    # A registry model name (§7). Omitted keeps the default backend, so every
+    # existing client keeps working without sending this.
+    model: str | None = None
 
 
 class ExamRequest(BaseModel):
@@ -37,6 +40,7 @@ class ExamRequest(BaseModel):
     topics: str | None = None
     n: int = 10
     difficulty: str = "medium"
+    model: str | None = None
 
 
 class ExamSummary(BaseModel):
@@ -94,12 +98,36 @@ def build_study_router(
         ).start()
         return {"path": rel_path, "status": "saved, indexing in background"}
 
+    def _generator_for(model: str | None) -> Generator:
+        """Bind the injected generator to a chosen model, if it accepts one.
+
+        Mirrors the ``/ws/chat`` bridge: model-aware generators get the model,
+        single-argument ones (every test fake) keep working untouched. The
+        TypeError is raised when the coroutine is *created*, not awaited, so it
+        can only mean a signature mismatch.
+        """
+        if not model:
+            return generator
+
+        async def run(prompt: str) -> str:
+            try:
+                call = generator(prompt, model=model)
+            except TypeError:
+                call = generator(prompt)
+            return await call
+
+        return run
+
     @router.post("/guide")
     async def guide(request: GuideRequest) -> dict[str, str]:
         corpus = course_corpus(index_factory(), request.course)
         try:
             path = await generate_study_guide(
-                settings.vault_path, generator, corpus, request.course, request.scope
+                settings.vault_path,
+                _generator_for(request.model),
+                corpus,
+                request.course,
+                request.scope,
             )
         except StudyError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -113,7 +141,7 @@ def build_study_router(
             exam_id, built, path = await generate_practice_exam(
                 settings.vault_path,
                 conn,
-                generator,
+                _generator_for(request.model),
                 corpus,
                 request.course,
                 request.topics,

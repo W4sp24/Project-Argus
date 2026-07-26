@@ -74,8 +74,7 @@ def test_add_model_validation(client: TestClient) -> None:
         == 409
     ), "cannot shadow a built-in"
     assert (
-        client.post("/api/models", json={"name": "bad", "endpoint": "not-a-url"}).status_code
-        == 422
+        client.post("/api/models", json={"name": "bad", "endpoint": "not-a-url"}).status_code == 422
     )
     assert (
         client.post("/api/models", json={"name": "../evil", "endpoint": "http://x/v1"}).status_code
@@ -89,6 +88,12 @@ def test_delete_model_guards(client: TestClient) -> None:
 
 
 def test_chat_agent_model_resolution(vault: Path) -> None:
+    """Registered models resolve to the id that will actually run.
+
+    Replaces the previous assertion that a non-anthropic provider raised
+    "localModels is preview" — that rejection is exactly what this branch
+    removes, so the test now pins the routing that took its place.
+    """
     from backend.agent.runtime import MODEL, ChatAgent
     from backend.config import save_user_models
 
@@ -101,7 +106,78 @@ def test_chat_agent_model_resolution(vault: Path) -> None:
 
     save_user_models(
         settings.models_file,
-        [{"name": "llama3", "provider": "openai-compat", "endpoint": "http://localhost:11434/v1"}],
+        [
+            {
+                "name": "llama3",
+                "provider": "openai-compat",
+                "endpoint": "http://localhost:11434/v1",
+            },
+            {
+                "name": "groq-llama",
+                "provider": "openai-compat",
+                "endpoint": "https://api.groq.com/openai/v1",
+                "model_id": "llama-3.3-70b-versatile",
+            },
+        ],
     )
-    with pytest.raises(RuntimeError, match="preview"):
-        agent._resolve_model("llama3")
+    assert agent._resolve_model("llama3") == "llama3", "local endpoints route for real now"
+    assert agent._resolve_model("groq-llama") == "llama-3.3-70b-versatile", (
+        "a display name may differ from the id the provider expects"
+    )
+
+
+def test_chat_agent_builds_the_right_adapter_per_provider(vault: Path) -> None:
+    """Each registry provider maps to its own engine, from one selector."""
+    from backend.agent.adapters import ClaudeSDKAdapter, resolve_adapter
+    from backend.agent.anthropic_api import AnthropicAPIAdapter
+    from backend.agent.credentials import KEYRING_SERVICE
+    from backend.agent.openai_compat import OpenAICompatAdapter
+    from backend.config import save_user_models
+
+    settings = Settings(_vault_path=vault)
+    save_user_models(
+        settings.models_file,
+        [
+            {
+                "name": "llama3",
+                "provider": "openai-compat",
+                "endpoint": "http://localhost:11434/v1",
+            },
+            {"name": "claude-key", "provider": "anthropic-api", "key_ref": "model:claude-key"},
+        ],
+    )
+
+    # No model at all keeps the historical Claude Code path.
+    assert isinstance(
+        resolve_adapter(settings, None, fallback_model="claude-opus-4-8"), ClaudeSDKAdapter
+    )
+    assert isinstance(resolve_adapter(settings, "claude-sonnet-5"), ClaudeSDKAdapter)
+
+    local = resolve_adapter(settings, "llama3")
+    assert isinstance(local, OpenAICompatAdapter)
+    assert local.endpoint == "http://localhost:11434/v1"
+    assert local.api_key is None, "a local endpoint needs no credentials"
+
+    import keyring
+
+    keyring.set_password(KEYRING_SERVICE, "model:claude-key", "sk-test")
+    try:
+        hosted = resolve_adapter(settings, "claude-key")
+        assert isinstance(hosted, AnthropicAPIAdapter)
+        assert hosted.api_key == "sk-test", "the key comes from the keyring, never models.json"
+    finally:
+        keyring.delete_password(KEYRING_SERVICE, "model:claude-key")
+
+
+def test_anthropic_api_model_without_a_stored_key_fails_readably(vault: Path) -> None:
+    from backend.agent.adapters import AgentError, resolve_adapter
+    from backend.config import save_user_models
+
+    settings = Settings(_vault_path=vault)
+    save_user_models(
+        settings.models_file,
+        [{"name": "keyless", "provider": "anthropic-api", "key_ref": "model:absent-on-purpose"}],
+    )
+
+    with pytest.raises(AgentError, match="no API key stored"):
+        resolve_adapter(settings, "keyless")

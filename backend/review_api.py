@@ -23,6 +23,9 @@ class DismissRequest(BaseModel):
 
 class PlanRequest(BaseModel):
     instruction: str = "Plan my day"
+    # A registry model name (§7). Omitted keeps the default backend, so every
+    # existing client keeps working without sending this.
+    model: str | None = None
 
 
 class PlanResponse(BaseModel):
@@ -70,7 +73,17 @@ def build_review_router(settings: Settings, planner: PlannerRunner) -> APIRouter
 
     @router.post("/plan", response_model=PlanResponse)
     async def plan(request: PlanRequest) -> PlanResponse:
-        created = await planner(settings, request.instruction)
-        return PlanResponse(created=created)
+        # Same shape as the /ws/chat bridge: model-aware planners get the
+        # model, single-argument test fakes keep working. The TypeError can
+        # only be a signature mismatch — it is raised when the coroutine is
+        # created, before anything inside it runs.
+        if request.model:
+            try:
+                call = planner(settings, request.instruction, request.model)
+            except TypeError:
+                call = planner(settings, request.instruction)
+        else:
+            call = planner(settings, request.instruction)
+        return PlanResponse(created=await call)
 
     return router
