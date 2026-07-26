@@ -112,14 +112,14 @@ export default function IconPicker({ value, onChange, onError }: IconPickerProps
           }}
           placeholder="↗"
           aria-label="Icon glyph"
-          className="w-10 shrink-0 border border-line bg-transparent px-1 py-1 text-center text-[13.5px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+          className="w-10 shrink-0 border border-line bg-transparent px-1 py-1 text-center text-body placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
         />
         <button
           type="button"
           onClick={handleUploadClick}
           disabled={uploading}
           aria-label="Upload icon image"
-          className="shrink-0 border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint transition-colors hover:border-lineHi hover:text-[var(--ac)] disabled:opacity-40"
+          className="shrink-0 border border-line px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint transition-colors hover:border-lineHi hover:text-[var(--ac)] disabled:opacity-40"
         >
           {uploading ? "…" : "upload"}
         </button>
@@ -127,7 +127,7 @@ export default function IconPicker({ value, onChange, onError }: IconPickerProps
           type="button"
           onClick={() => onChange({ icon: null, icon_kind: null, icon_value: null })}
           aria-label="Clear icon"
-          className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint hover:text-danger"
+          className="shrink-0 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint hover:text-danger"
         >
           clear
         </button>

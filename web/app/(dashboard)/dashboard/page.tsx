@@ -40,7 +40,7 @@ export default function DashboardPage() {
     <>
       <header className="mb-8 animate-rise">
         <p className="eyebrow mb-2">{`// SYS.GENERAL :: ${formatToday()} :: vault OK · index OK · agent idle`}</p>
-        <h1 className="font-mono text-[23px] font-semibold tracking-tight text-ink-bright">
+        <h1 className="font-mono text-display font-semibold tracking-tight text-ink-bright">
           {greeting}
           <span className={`text-[var(--ac)] ${greetingDone ? "animate-blink" : ""}`}>▊</span>
         </h1>
@@ -51,7 +51,7 @@ export default function DashboardPage() {
 
         <Heatmap className="col-span-full" />
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid gap-4 lg:grid-cols-shell">
           <div className="flex min-w-0 flex-col gap-4">
             <PlannerTimeline />
             <TasksPanel />
@@ -69,7 +69,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <nav className="flex gap-5 border-t border-line pt-4 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
+        <nav className="flex gap-5 border-t border-line pt-4 font-mono text-label uppercase tracking-[0.14em] text-ink-faint">
           <Link href="/journal" className="transition-colors hover:text-ink-bright">
             → JOURNAL
           </Link>

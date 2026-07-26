@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useToast } from "@/components/Toast";
+import Button from "@/components/ui/Button";
+import Dialog from "@/components/ui/Dialog";
 import { ApiError, mutateJSON } from "@/lib/api";
 import { useUi } from "@/lib/ui";
 
@@ -43,40 +45,9 @@ function NoteModalBody() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  // The focus trap that used to live here is now ui/Dialog — this component
+  // was the only one that had it right, so it became the shared version.
   const titleRef = useRef<HTMLInputElement>(null);
-  const restoreRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    restoreRef.current = document.activeElement as HTMLElement | null;
-    titleRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setNoteOpen(false);
-      } else if (event.key === "Tab" && dialogRef.current) {
-        // focus trap: cycle within the dialog's focusable controls
-        const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
-          "input, textarea, button:not([disabled])",
-        );
-        if (focusables.length === 0) return;
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    const restore = restoreRef.current;
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      restore?.focus?.();
-    };
-  }, [setNoteOpen]);
 
   async function save() {
     const trimmedTitle = title.trim();
@@ -102,7 +73,10 @@ function NoteModalBody() {
           await attempt(`00-Inbox/${day}-${slug}-${suffix + 1}.md`, suffix + 1);
           return;
         }
-        show(`note :: save failed — ${error instanceof Error ? error.message : "backend offline?"}`);
+        show(
+          `note :: save failed — ${error instanceof Error ? error.message : "backend offline?"}`,
+          { tone: "error" },
+        );
         setBusy(false);
       }
     }
@@ -111,57 +85,50 @@ function NoteModalBody() {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-[rgba(3,2,8,0.72)]"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) setNoteOpen(false);
-      }}
+    <Dialog
+      label="Add note"
+      onClose={() => setNoteOpen(false)}
+      initialFocusRef={titleRef}
+      className="w-[32.5rem] max-w-[calc(100vw-2rem)] p-5"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Add note"
-        className="animate-palette mx-auto mt-[16vh] w-[520px] max-w-[calc(100vw-2rem)] border border-lineHi bg-panel p-5"
+      <p className="eyebrow mb-3">▍QUICK.NOTE</p>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          save();
+        }}
+        className="flex flex-col gap-3"
       >
-        <p className="eyebrow mb-3">▍QUICK.NOTE</p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            save();
-          }}
-          className="flex flex-col gap-3"
-        >
-          <input
-            ref={titleRef}
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="title"
-            aria-label="Note title"
-            className="border border-line bg-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
-          />
-          <textarea
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            placeholder="markdown — [[wikilinks]] and #tags work here"
-            aria-label="Note body"
-            rows={6}
-            className="resize-none border border-line bg-sunken px-3 py-2 text-sm leading-relaxed text-ink placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
-          />
-          <div className="flex items-center gap-3">
-            <button
-              type="submit"
-              disabled={busy || !(title.trim() || body.trim())}
-              className="border border-line bg-[var(--ac-bg)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
-            >
-              {busy ? "SAVING…" : "SAVE NOTE"}
-            </button>
-            <p className="font-mono text-[10px] text-ink-faint">
-              → 00-Inbox/{todayIso()}-{slugify(title.trim() || "note")}.md
-            </p>
-          </div>
-        </form>
-      </div>
-    </div>
+        <input
+          ref={titleRef}
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="title"
+          aria-label="Note title"
+          className="border border-line bg-sunken px-3 py-2 text-body text-ink placeholder:text-ink-faint focus:border-lineHi"
+        />
+        <textarea
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          placeholder="markdown — [[wikilinks]] and #tags work here"
+          aria-label="Note body"
+          rows={6}
+          className="resize-none border border-line bg-sunken px-3 py-2 text-body leading-relaxed text-ink placeholder:text-ink-faint focus:border-lineHi"
+        />
+        <div className="flex items-center gap-3">
+          <Button
+            type="submit"
+            size="md"
+            variant="primary"
+            disabled={busy || !(title.trim() || body.trim())}
+          >
+            {busy ? "SAVING…" : "SAVE NOTE"}
+          </Button>
+          <p className="min-w-0 flex-1 truncate font-mono text-meta text-ink-faint">
+            → 00-Inbox/{todayIso()}-{slugify(title.trim() || "note")}.md
+          </p>
+        </div>
+      </form>
+    </Dialog>
   );
 }

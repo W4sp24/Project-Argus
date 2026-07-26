@@ -45,10 +45,10 @@ export default function UsageBlock({
   const hasData = totalTokens > 0;
 
   if (isLoading && !hasData) {
-    return <p className="text-[12.5px] text-ink-faint">loading usage…</p>;
+    return <p className="text-label text-ink-faint">loading usage…</p>;
   }
   if (!hasData) {
-    return <p className="text-[12.5px] text-ink-faint">{emptyMessage}</p>;
+    return <p className="text-label text-ink-faint">{emptyMessage}</p>;
   }
 
   const stats = (
@@ -59,7 +59,7 @@ export default function UsageBlock({
         {totalTokens.toLocaleString()}
         <span className="ml-1.5 text-xs font-normal text-ink-faint">tokens</span>
       </p>
-      <p className="mt-1 font-mono text-[11px] text-ink-muted">
+      <p className="mt-1 font-mono text-label text-ink-muted">
         in {inputTokens.toLocaleString()} · out {outputTokens.toLocaleString()} · ≈$
         {estimatedCostUsd.toFixed(2)}
       </p>
@@ -69,7 +69,7 @@ export default function UsageBlock({
           <div className="h-1 w-full bg-sunken">
             <div className="h-1 bg-[var(--ac)]" style={{ width: `${pctOfCap}%` }} />
           </div>
-          <p className="mt-1 font-mono text-[10px] text-ink-faint">{pctOfCap}% of soft cap</p>
+          <p className="mt-1 font-mono text-meta text-ink-faint">{pctOfCap}% of soft cap</p>
         </div>
       )}
     </div>
@@ -86,7 +86,7 @@ export default function UsageBlock({
   const breakdown = (
     <ul className={size === "wide" ? "space-y-1.5" : "mt-3 space-y-1 border-t border-line pt-2"}>
       {rows.map((row) => (
-        <li key={row.label} className="flex items-center justify-between font-mono text-[11px]">
+        <li key={row.label} className="flex items-center justify-between font-mono text-label">
           <span className="uppercase tracking-wide text-ink-faint">{row.label}</span>
           <span className="text-ink-muted">{row.value.toLocaleString()}</span>
         </li>

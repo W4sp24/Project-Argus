@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRef, useState, type DragEvent } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
+import Button from "@/components/ui/Button";
 import { ApiError, apiFetch, mutateJSON, useStudyCourses, useStudyExams } from "@/lib/api";
 import { selectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
@@ -180,13 +181,14 @@ export default function CoursesPanel() {
     <Panel
       label="COURSES"
       headerRight={
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          aria-expanded={showAddForm}
           onClick={() => setShowAddForm((v) => !v)}
-          className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint transition-colors hover:text-[var(--ac)]"
+          className="hover:text-[var(--ac)]"
         >
           + ADD COURSE
-        </button>
+        </Button>
       }
     >
       {showAddForm && (
@@ -198,26 +200,28 @@ export default function CoursesPanel() {
             value={addCode}
             onChange={(event) => setAddCode(event.target.value)}
             placeholder="CODE (e.g. CS301)"
-            className="w-36 border border-line bg-sunken px-2 py-1.5 font-mono text-[12px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+            aria-label="Course code"
+            className="w-36 border border-line bg-sunken px-2 py-1.5 font-mono text-label placeholder:text-ink-faint focus:border-lineHi"
           />
           <input
             value={addName}
             onChange={(event) => setAddName(event.target.value)}
             placeholder="Course name"
-            className="min-w-0 flex-1 border border-line bg-sunken px-2 py-1.5 text-[13px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+            aria-label="Course name"
+            className="min-w-0 flex-1 border border-line bg-sunken px-2 py-1.5 text-body placeholder:text-ink-faint focus:border-lineHi"
           />
-          <button
+          <Button
             type="submit"
+            size="md"
             disabled={!addCode.trim() || !addName.trim() || creating}
-            className="border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
           >
             {creating ? "ADDING…" : "ADD"}
-          </button>
+          </Button>
         </form>
       )}
 
       {visible.length === 0 && (
-        <p className="text-[13px] text-ink-faint">
+        <p className="text-body text-ink-faint">
           No courses yet — create a folder like <span className="font-mono text-xs">15-Courses/CS201/</span>{" "}
           with a <span className="font-mono text-xs">course.md</span> in your vault.
         </p>
@@ -238,10 +242,10 @@ export default function CoursesPanel() {
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-ink-faint">
+                  <p className="flex items-center gap-1.5 font-mono text-meta uppercase tracking-wide text-ink-faint">
                     {course.code}
                   </p>
-                  <p className="truncate text-[15px] font-medium text-ink-bright">{course.title}</p>
+                  <p className="truncate text-lead font-medium text-ink-bright">{course.title}</p>
                 </div>
                 <button
                   aria-label={`Remove ${course.code} from this list`}
@@ -251,7 +255,7 @@ export default function CoursesPanel() {
                   ×
                 </button>
               </div>
-              <p className="mt-1 font-mono text-[11px] text-ink-faint">
+              <p className="mt-1 font-mono text-label text-ink-faint">
                 {course.materials} material{course.materials === 1 ? "" : "s"} · {course.notes} note
                 {course.notes === 1 ? "" : "s"}
                 {dragOverCourse === course.code && <span className="ml-2 text-[var(--ac)]">— drop to upload</span>}
@@ -262,7 +266,7 @@ export default function CoursesPanel() {
                   {chips.map((chip) => (
                     <span
                       key={chip.topic}
-                      className="border border-line px-1.5 py-0.5 font-mono text-[10px] text-ink-muted"
+                      className="border border-line px-1.5 py-0.5 font-mono text-meta text-ink-muted"
                     >
                       {chip.topic}
                     </span>
@@ -287,27 +291,27 @@ export default function CoursesPanel() {
                 <button
                   onClick={() => fileInputs.current[course.code]?.click()}
                   disabled={busyAction !== null}
-                  className="border border-line px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                  className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
                 >
                   {busyAction === `upload-${course.code}` ? "UPLOADING…" : "+ FILES"}
                 </button>
                 <button
                   onClick={() => generate("guide", course.code)}
                   disabled={busyAction !== null || course.materials === 0}
-                  className="border border-line px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                  className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
                 >
                   {busyAction === `guide-${course.code}` ? "WRITING…" : "GUIDE"}
                 </button>
                 <button
                   onClick={() => generate("exam", course.code)}
                   disabled={busyAction !== null || course.materials === 0}
-                  className="border border-line px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                  className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
                 >
                   {busyAction === `exam-${course.code}` ? "GENERATING…" : "+ EXAM"}
                 </button>
                 <Link
                   href={`/study/course/${encodeURIComponent(course.code)}`}
-                  className="ml-auto font-mono text-[10px] uppercase tracking-wide text-[var(--ac)] transition-colors hover:opacity-80"
+                  className="ml-auto font-mono text-meta uppercase tracking-wide text-[var(--ac)] transition-colors hover:opacity-80"
                 >
                   HUB →
                 </Link>

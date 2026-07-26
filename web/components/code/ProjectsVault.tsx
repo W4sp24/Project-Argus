@@ -58,20 +58,20 @@ function ProjectCard({ note, content, vaultName }: { note: NoteInfo; content: st
 
   const Card = (
     <div className="flex h-full flex-col border border-line bg-panel p-4 text-left transition-colors hover:border-lineHi">
-      <p className="truncate font-mono text-[10.5px] text-ink-faint">{note.path}</p>
+      <p className="truncate font-mono text-meta text-ink-faint">{note.path}</p>
       <div className="mt-1.5 flex items-start justify-between gap-2">
-        <p className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink-bright">{note.title}</p>
-        <span className={`shrink-0 border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] ${STATUS_CLASS[status]}`}>
+        <p className="min-w-0 flex-1 truncate text-lead font-medium text-ink-bright">{note.title}</p>
+        <span className={`shrink-0 border px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.12em] ${STATUS_CLASS[status]}`}>
           {status}
         </span>
       </div>
       {parsed?.description && (
-        <p className="mt-1.5 line-clamp-2 text-[12.5px] leading-relaxed text-ink-muted">{parsed.description}</p>
+        <p className="mt-1.5 line-clamp-2 text-label leading-relaxed text-ink-muted">{parsed.description}</p>
       )}
       {parsed && parsed.tags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {parsed.tags.map((tag) => (
-            <span key={tag} className="font-mono text-[10px] text-ink-faint">
+            <span key={tag} className="font-mono text-meta text-ink-faint">
               #{tag}
             </span>
           ))}
@@ -80,7 +80,7 @@ function ProjectCard({ note, content, vaultName }: { note: NoteInfo; content: st
       <div className="mt-auto pt-3">
         {parsed && parsed.totalCount > 0 && (
           <>
-            <div className="mb-1 flex items-center justify-between font-mono text-[10px] text-ink-faint">
+            <div className="mb-1 flex items-center justify-between font-mono text-meta text-ink-faint">
               <span>
                 {parsed.doneCount}/{parsed.totalCount} tasks
               </span>
@@ -92,9 +92,9 @@ function ProjectCard({ note, content, vaultName }: { note: NoteInfo; content: st
           </>
         )}
         {parsed?.nextTask && (
-          <p className="mt-1.5 truncate font-mono text-[10.5px] text-[var(--ac)]">→ next: {parsed.nextTask}</p>
+          <p className="mt-1.5 truncate font-mono text-meta text-[var(--ac)]">→ next: {parsed.nextTask}</p>
         )}
-        <p className="mt-1.5 font-mono text-[10px] text-ink-faint">✎ {formatRelativeTime(note.modified)}</p>
+        <p className="mt-1.5 font-mono text-meta text-ink-faint">✎ {formatRelativeTime(note.modified)}</p>
       </div>
     </div>
   );
@@ -125,7 +125,7 @@ export default function ProjectsVault() {
   return (
     <Panel
       label="PROJECTS.VAULT"
-      headerRight={<span className="font-mono text-[10px] uppercase tracking-wide text-ok">OBSIDIAN MCP: WIRED</span>}
+      headerRight={<span className="font-mono text-meta uppercase tracking-wide text-ok">OBSIDIAN MCP: WIRED</span>}
     >
       {!notes ? (
         <p className="text-sm text-ink-faint">Loading…</p>
@@ -142,7 +142,7 @@ export default function ProjectsVault() {
             ))}
           </div>
           {projectNotes.length > MAX_PROJECTS && (
-            <p className="mt-3 font-mono text-[10px] text-ink-faint">
+            <p className="mt-3 font-mono text-meta text-ink-faint">
               showing {MAX_PROJECTS} of {projectNotes.length} in {folder}/
             </p>
           )}

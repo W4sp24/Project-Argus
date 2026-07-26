@@ -2,6 +2,8 @@
 
 import useSWR from "swr";
 import Panel from "@/components/Panel";
+import Button from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/useConfirm";
 import { fetcher, mutateJSON, useActivity } from "@/lib/api";
 
 const KIND_BADGE: Record<string, string> = {
@@ -22,9 +24,16 @@ function relative(when: string): string {
 export default function ActivityFeed() {
   const { data: events, mutate } = useActivity();
   const { data: vault } = useSWR<{ name: string }>("/api/vault", fetcher);
+  const { confirm, confirmDialog } = useConfirm();
 
   async function removeNote(path: string) {
-    if (!window.confirm(`Delete ${path}? A git snapshot makes this undoable.`)) return;
+    const answer = await confirm({
+      label: "Delete note",
+      message: `Delete ${path}?`,
+      detail: "A git snapshot makes this undoable.",
+      confirmLabel: "Delete",
+    });
+    if (answer === null) return;
     try {
       await mutateJSON(`/api/note?path=${encodeURIComponent(path)}`, undefined, "DELETE");
     } catch {
@@ -39,8 +48,8 @@ export default function ActivityFeed() {
       {events && events.length === 0 && <p className="text-sm text-ink-muted">All quiet.</p>}
       <ul className="divide-y divide-line">
         {(events ?? []).map((event, i) => (
-          <li key={i} className="flex items-baseline gap-2 py-2 text-[13px]">
-            <span className={`shrink-0 font-mono text-[9.5px] uppercase ${KIND_BADGE[event.kind] ?? "text-ink-faint"}`}>
+          <li key={i} className="flex items-baseline gap-2 py-2 text-body">
+            <span className={`shrink-0 font-mono text-micro uppercase ${KIND_BADGE[event.kind] ?? "text-ink-faint"}`}>
               {event.kind}
             </span>
             {event.path && vault ? (
@@ -54,18 +63,20 @@ export default function ActivityFeed() {
               <span className="min-w-0 flex-1 truncate text-ink-muted">{event.title}</span>
             )}
             {event.kind === "note" && event.path?.startsWith("00-Inbox/") && (
-              <button
+              <Button
+                variant="ghost"
                 aria-label={`Delete ${event.path}`}
                 onClick={() => removeNote(event.path!)}
-                className="shrink-0 font-mono text-[10px] text-ink-faint hover:text-danger"
+                className="shrink-0 hover:text-danger"
               >
                 ×
-              </button>
+              </Button>
             )}
-            <span className="shrink-0 font-mono text-[10px] text-ink-faint">{relative(event.when)}</span>
+            <span className="shrink-0 font-mono text-meta text-ink-faint">{relative(event.when)}</span>
           </li>
         ))}
       </ul>
+      {confirmDialog}
     </Panel>
   );
 }

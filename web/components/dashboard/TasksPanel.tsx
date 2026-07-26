@@ -5,6 +5,8 @@ import { useRef, useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
+import Button from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/useConfirm";
 import { apiFetch, fetcher, mutateJSON } from "@/lib/api";
 import { parseQuickAdd } from "@/lib/taskQuickAdd";
 
@@ -60,7 +62,7 @@ function DueBadge({ task, today }: { task: AgendaTask; today: string }) {
   const isToday = date === today;
   return (
     <span
-      className={`shrink-0 font-mono text-[10px] ${overdue ? "text-danger" : isToday ? "text-[var(--ac)]" : "text-ink-faint"}`}
+      className={`shrink-0 font-mono text-meta ${overdue ? "text-danger" : isToday ? "text-[var(--ac)]" : "text-ink-faint"}`}
     >
       {date}
     </span>
@@ -86,6 +88,7 @@ export default function TasksPanel() {
   // never mock.
   const doneSession = useRef<Map<string, AgendaTask>>(new Map());
   const [, forceRender] = useState(0);
+  const { confirm, confirmDialog } = useConfirm();
 
   const today = localToday();
 
@@ -151,7 +154,13 @@ export default function TasksPanel() {
   }
 
   async function remove(task: AgendaTask) {
-    if (!window.confirm(`Delete "${task.text}"? A git snapshot makes this undoable.`)) return;
+    const answer = await confirm({
+      label: "Delete task",
+      message: `Delete "${task.text}"?`,
+      detail: "A git snapshot makes this undoable.",
+      confirmLabel: "Delete",
+    });
+    if (answer === null) return;
     try {
       await withRawLine(task, async (raw) => {
         await mutateJSON("/api/tasks/line/delete", { path: task.path, line: task.line, old_line: raw });
@@ -201,11 +210,11 @@ export default function TasksPanel() {
       label="TASKS.DUE"
       headerRight={
         agenda?.configured.todoist ? (
-          <span className="font-mono text-[10px] uppercase tracking-wide text-ok">TODOIST: WIRED</span>
+          <span className="font-mono text-meta uppercase tracking-wide text-ok">TODOIST: WIRED</span>
         ) : (
           <Link
             href="/system"
-            className="font-mono text-[10px] uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]"
+            className="font-mono text-meta uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]"
           >
             TODOIST: NOT CONNECTED →
           </Link>
@@ -218,18 +227,19 @@ export default function TasksPanel() {
           value={quickAdd}
           onChange={(event) => setQuickAdd(event.target.value)}
           placeholder="review PR p1 #argus tomorrow"
-          className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-ink-faint focus:outline-none"
+          aria-label="Add a task"
+          className="min-w-0 flex-1 bg-transparent text-body placeholder:text-ink-faint focus:outline-none"
         />
       </form>
 
       {groups.map((group) => (
         <div key={group.label} className="mb-4 last:mb-0">
           <div className="mb-1.5 flex items-center gap-2 border-b border-line pb-1">
-            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-ink-faint">{group.label}</p>
-            <span className="font-mono text-[9px] text-ink-faint">({group.items.length})</span>
+            <p className="font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">{group.label}</p>
+            <span className="font-mono text-micro text-ink-faint">({group.items.length})</span>
           </div>
           {group.items.length === 0 ? (
-            <p className="py-1 text-[12px] text-ink-faint">nothing here</p>
+            <p className="py-1 text-label text-ink-faint">nothing here</p>
           ) : (
             <ul>
               {group.items.map((task, i) => {
@@ -243,7 +253,7 @@ export default function TasksPanel() {
                       aria-label={task.done ? "Mark not done" : "Mark done"}
                       disabled={!editable}
                       onClick={() => toggle(task, key)}
-                      className={`flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full border-2 text-[10px] leading-none transition-colors disabled:opacity-40 ${
+                      className={`flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full border-2 text-meta leading-none transition-colors disabled:opacity-40 ${
                         task.done
                           ? "border-ok bg-ok text-void"
                           : (prio?.colorClass ?? "border-line") + " hover:border-lineHi"
@@ -264,42 +274,47 @@ export default function TasksPanel() {
                           value={draft}
                           onChange={(event) => setDraft(event.target.value)}
                           onBlur={() => setEditing(null)}
-                          className="min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1 text-[13.5px] focus:outline-none"
+                          className="min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1 text-body focus:outline-none"
                         />
                       </form>
                     ) : (
                       <span
-                        className={`min-w-0 flex-1 truncate text-[13.5px] ${task.done ? "text-ink-faint line-through" : "text-ink"}`}
+                        className={`min-w-0 flex-1 truncate text-body ${task.done ? "text-ink-faint line-through" : "text-ink"}`}
                       >
                         {task.text}
                       </span>
                     )}
                     {prio && editing !== key && (
-                      <span className={`shrink-0 font-mono text-[9px] ${prio.colorClass}`}>{prio.label}</span>
+                      <span className={`shrink-0 font-mono text-micro ${prio.colorClass}`}>{prio.label}</span>
                     )}
                     {tag && editing !== key && (
-                      <span className="shrink-0 font-mono text-[10px] text-ink-faint">#{tag}</span>
+                      <span className="shrink-0 font-mono text-meta text-ink-faint">#{tag}</span>
                     )}
                     {editing !== key && <DueBadge task={task} today={today} />}
                     {editable && editing !== key && (
-                      <span className="hidden shrink-0 items-center gap-2 group-hover:flex">
-                        <button
+                      // Revealed on hover, but also on keyboard focus and
+                      // always present in the tab order — as `hidden` these
+                      // were unreachable without a mouse.
+                      <span className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                        <Button
+                          variant="ghost"
                           aria-label="Edit task"
                           onClick={() => {
                             setEditing(key);
                             setDraft(task.text);
                           }}
-                          className="font-mono text-[10px] text-ink-faint hover:text-[var(--ac)]"
+                          className="normal-case hover:text-[var(--ac)]"
                         >
                           edit
-                        </button>
-                        <button
+                        </Button>
+                        <Button
+                          variant="ghost"
                           aria-label="Delete task"
                           onClick={() => remove(task)}
-                          className="font-mono text-xs text-ink-faint hover:text-danger"
+                          className="hover:text-danger"
                         >
                           ×
-                        </button>
+                        </Button>
                       </span>
                     )}
                   </li>
@@ -309,6 +324,7 @@ export default function TasksPanel() {
           )}
         </div>
       ))}
+      {confirmDialog}
     </Panel>
   );
 }

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
+import Button from "@/components/ui/Button";
 import { ApiError, apiFetch, mutateJSON } from "@/lib/api";
 import { useTypewriter } from "@/lib/useTypewriter";
 
@@ -103,7 +104,10 @@ export default function IngestPanel({ target }: IngestPanelProps) {
 
   return (
     <Panel label="INGEST">
-      <div
+      {/* A <button>, not a clickable <div>: the dropzone was mouse-only, with
+          no role, no tabindex and no key handler. */}
+      <button
+        type="button"
         onDragOver={(event) => {
           event.preventDefault();
           setDragOver(true);
@@ -115,28 +119,30 @@ export default function IngestPanel({ target }: IngestPanelProps) {
           pickFile(event.dataTransfer.files?.[0]);
         }}
         onClick={() => inputRef.current?.click()}
-        className={`cursor-pointer border border-dashed px-4 py-6 text-center transition-[border-color,background-color] ${
+        className={`w-full cursor-pointer border border-dashed px-4 py-6 text-center transition-[border-color,background-color] ${
           dragOver ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
         }`}
       >
-        <p className="font-mono text-[11px] text-ink-muted">
+        <span className="block font-mono text-label text-ink-muted">
           drop a file, or click to choose ({ACCEPT.replaceAll(",", " ")})
-        </p>
-        <input
-          ref={inputRef}
-          type="file"
-          accept={ACCEPT}
-          className="hidden"
-          onChange={(event) => pickFile(event.target.files?.[0])}
-        />
-      </div>
+        </span>
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPT}
+        aria-hidden
+        tabIndex={-1}
+        className="hidden"
+        onChange={(event) => pickFile(event.target.files?.[0])}
+      />
       {status && (
-        <p className="mt-2 font-mono text-[11px] text-ink-muted" aria-live="polite">
+        <p className="mt-2 font-mono text-label text-ink-muted" aria-live="polite">
           {output}
           {busy && !typingDone && <span className="animate-blink text-[var(--ac)]">▊</span>}
         </p>
       )}
-      <p className="mt-2 font-mono text-[10px] text-ink-faint">
+      <p className="mt-2 font-mono text-meta text-ink-faint">
         files are indexed locally — nothing leaves your machine
       </p>
 
@@ -145,34 +151,39 @@ export default function IngestPanel({ target }: IngestPanelProps) {
           value={capture}
           onChange={(event) => setCapture(event.target.value)}
           placeholder="e.g. email prof about thesis"
-          className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-[13px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+          aria-label="Capture a task or note"
+          className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi"
         />
-        <button
-          type="submit"
-          disabled={!capture.trim()}
-          className="shrink-0 border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
-        >
+        <Button type="submit" size="md" disabled={!capture.trim()} className="shrink-0">
           Save
-        </button>
+        </Button>
       </form>
-      {captureStatus && <p className="mt-2 font-mono text-[11px] text-[var(--ac)]">{captureStatus}</p>}
+      {captureStatus && <p className="mt-2 font-mono text-label text-[var(--ac)]">{captureStatus}</p>}
 
       <div className="mt-4 border-t border-line pt-4">
-        <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">email.capture</p>
+        {/* A real <label>, not a paragraph that happens to sit above the box. */}
+        <label
+          htmlFor="ingest-email"
+          className="mb-2 block font-mono text-meta uppercase tracking-[0.16em] text-ink-faint"
+        >
+          email.capture
+        </label>
         <textarea
+          id="ingest-email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           placeholder="paste an email…"
           rows={3}
-          className="w-full resize-none border border-line bg-sunken px-3 py-2 text-[13px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+          className="w-full resize-none border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi"
         />
-        <button
+        <Button
+          size="md"
           onClick={extractEmail}
           disabled={!email.trim() || emailBusy}
-          className="mt-2 border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+          className="mt-2"
         >
           {emailBusy ? "EXTRACTING…" : "EXTRACT →"}
-        </button>
+        </Button>
       </div>
     </Panel>
   );

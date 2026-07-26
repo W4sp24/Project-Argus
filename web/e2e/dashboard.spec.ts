@@ -57,10 +57,15 @@ test("task delete removes the line, snapshot first", async ({ page }) => {
   // renders on the dashboard. Use the dedicated always-due-today seed line
   // instead so the row is actually visible to delete.
   await page.goto("/dashboard");
-  page.on("dialog", (dialog) => dialog.accept());
   const row = page.locator("li", { hasText: "E2E delete me" });
   await row.hover();
   await row.getByRole("button", { name: "Delete task" }).click();
+
+  // Confirmation is an in-app dialog now, not window.confirm — the old
+  // `page.on("dialog", …)` handler has nothing left to accept.
+  const confirmDialog = page.getByRole("dialog", { name: "Delete task" });
+  await expect(confirmDialog).toBeVisible();
+  await confirmDialog.getByRole("button", { name: "Delete" }).click();
 
   const file = path.join(vault, "20-Projects", "e2e.md");
   await expect.poll(() => fs.readFileSync(file, "utf-8")).not.toContain("E2E delete me");

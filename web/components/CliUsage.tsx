@@ -31,7 +31,7 @@ export default function CliUsage({ size = "default" }: { size?: "default" | "lar
       label="CLAUDE CODE"
       className={size === "large" ? "min-h-[280px]" : undefined}
       headerRight={
-        <div className="flex border border-line font-mono text-[9px] uppercase tracking-[0.14em]">
+        <div className="flex border border-line font-mono text-micro uppercase tracking-[0.14em]">
           {VIEWS.map((option) => (
             <button
               key={option}

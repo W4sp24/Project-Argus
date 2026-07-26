@@ -24,7 +24,7 @@ function BriefingBody({ markdown }: { markdown: string }) {
       ),
     );
   return (
-    <div className="space-y-1.5 text-[13.5px] leading-relaxed text-ink-muted">
+    <div className="space-y-1.5 text-body leading-relaxed text-ink-muted">
       {markdown.split("\n").map((line, i) => {
         const trimmed = line.trim();
         if (!trimmed) return null;
@@ -78,7 +78,7 @@ export default function BriefingCard() {
       {briefing ? (
         <>
           {!collapsed && <BriefingBody markdown={briefing.markdown} />}
-          <p className="mt-3 font-mono text-[10px] text-ink-faint">
+          <p className="mt-3 font-mono text-meta text-ink-faint">
             written to {briefing.path} ·{" "}
             <button onClick={toggleCollapsed} className="text-[var(--ac)] underline-offset-2 hover:underline">
               {collapsed ? "expand" : "collapse"}
@@ -95,13 +95,13 @@ export default function BriefingCard() {
         </>
       ) : briefingMissing ? (
         <div className="flex flex-wrap items-center gap-3">
-          <p className="text-[13px] text-ink-muted">
+          <p className="text-body text-ink-muted">
             No briefing yet today — Argus writes one into your daily note at 07:00, or on demand.
           </p>
           <button
             onClick={generateBriefing}
             disabled={generating}
-            className="shrink-0 border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+            className="shrink-0 border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
           >
             {generating ? "Composing…" : "Generate now"}
           </button>

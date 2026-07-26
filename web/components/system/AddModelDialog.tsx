@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useToast } from "@/components/Toast";
+import Button from "@/components/ui/Button";
+import Dialog from "@/components/ui/Dialog";
+import Field, { FIELD_CONTROL } from "@/components/ui/Field";
 import {
   addModel,
   testModel,
@@ -83,10 +86,7 @@ const HOSTED_PRESETS: { label: string; endpoint: string }[] = [
   { label: "DeepInfra", endpoint: "https://api.deepinfra.com/v1/openai" },
 ];
 
-const INPUT =
-  "w-full border border-line bg-sunken px-2.5 py-1.5 text-[12.5px] text-ink placeholder:text-ink-faint focus:border-lineHi focus:outline-none";
-const BUTTON =
-  "shrink-0 border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40";
+const LEGEND = "mb-2 font-mono text-meta uppercase tracking-[0.14em] text-ink-faint";
 
 export default function AddModelDialog({
   onClose,
@@ -104,28 +104,15 @@ export default function AddModelDialog({
   const [result, setResult] = useState<TestModelResult | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const provider = PROVIDERS[choice];
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const restoreRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    restoreRef.current = document.activeElement as HTMLElement | null;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    const restore = restoreRef.current;
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      restore?.focus?.();
-    };
-  }, [onClose]);
 
   // Any edit invalidates a previous green light — otherwise someone could test
   // one configuration and save a different one.
   function invalidate() {
     setResult(null);
+    setSaveError(null);
   }
 
   function pickProvider(index: number) {
@@ -148,6 +135,7 @@ export default function AddModelDialog({
   async function runTest() {
     if (!canTest || testing) return;
     setTesting(true);
+    setSaveError(null);
     try {
       const outcome = await testModel({
         provider: provider.id,
@@ -178,6 +166,7 @@ export default function AddModelDialog({
   async function save() {
     if (!canSave || saving) return;
     setSaving(true);
+    setSaveError(null);
     try {
       await addModel({
         name: name.trim(),
@@ -190,33 +179,35 @@ export default function AddModelDialog({
       onAdded();
       onClose();
     } catch (error) {
-      show(`model :: ${error instanceof Error ? error.message : "could not add that model"}`);
+      // Inline rather than a toast: the dialog stays open on failure, and a
+      // 3.2s line in the opposite corner was the only thing saying why.
+      setSaveError(error instanceof Error ? error.message : "could not add that model");
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 overflow-y-auto bg-[rgba(3,2,8,0.72)]"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
+    <Dialog
+      label="Add a model"
+      onClose={onClose}
+      align="center"
+      className="w-[38.75rem] max-w-[calc(100vw-2rem)] p-5"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Add a model"
-        className="animate-palette mx-auto my-[8vh] w-[620px] max-w-[calc(100vw-2rem)] border border-lineHi bg-panel p-5"
-      >
-        <p className="eyebrow mb-3">▍ADD.MODEL</p>
+      <p className="eyebrow mb-3">▍ADD.MODEL</p>
 
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          // Enter does whatever the next step is: test while the connection is
+          // unproven, save once it is.
+          if (canSave) void save();
+          else if (canTest && !testing && provider.id !== "anthropic") void runTest();
+        }}
+      >
         {/* 1 — provider */}
         <fieldset className="mb-4">
-          <legend className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-            1 · where should it run?
-          </legend>
+          <legend className={LEGEND}>1 · where should it run?</legend>
           <div className="grid gap-2 sm:grid-cols-2">
             {PROVIDERS.map((option, index) => {
               const active = index === choice;
@@ -226,30 +217,26 @@ export default function AddModelDialog({
                   type="button"
                   aria-pressed={active}
                   onClick={() => pickProvider(index)}
-                  className={`border p-2.5 text-left transition-colors ${
+                  className={`border p-3 text-left transition-colors ${
                     active
                       ? "border-[var(--ac)] bg-[var(--ac-bg)]"
                       : "border-line hover:border-lineHi"
                   }`}
                 >
                   <span className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">
+                    <span className="min-w-0 flex-1 truncate text-body text-ink">
                       {option.title}
                     </span>
                     <span
-                      className={`shrink-0 border px-1 py-px font-mono text-[8px] uppercase tracking-[0.14em] ${
+                      className={`shrink-0 border px-1.5 py-px font-mono text-micro uppercase tracking-[0.14em] ${
                         option.local ? "border-ok text-ok" : "border-line text-ink-faint"
                       }`}
                     >
                       {option.local ? "LOCAL" : "HOSTED"}
                     </span>
                   </span>
-                  <span className="mt-1 block text-[11px] leading-relaxed text-ink-muted">
-                    {option.blurb}
-                  </span>
-                  <span className="mt-1 block text-[10.5px] leading-relaxed text-ink-faint">
-                    {option.privacy}
-                  </span>
+                  <span className="mt-1 block text-label text-ink-muted">{option.blurb}</span>
+                  <span className="mt-1 block text-meta text-ink-faint">{option.privacy}</span>
                 </button>
               );
             })}
@@ -257,83 +244,81 @@ export default function AddModelDialog({
         </fieldset>
 
         {/* 2 — connection */}
-        <fieldset className="mb-4 flex flex-col gap-2">
-          <legend className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-            2 · connection
-          </legend>
+        <fieldset className="mb-4 flex flex-col gap-3">
+          <legend className={LEGEND}>2 · connection</legend>
 
           {provider.needsEndpoint && (
             <>
               {!provider.local && (
                 <div className="flex flex-wrap gap-1.5">
                   {HOSTED_PRESETS.map((preset) => (
-                    <button
+                    <Button
                       key={preset.label}
-                      type="button"
+                      variant="quiet"
+                      className="normal-case tracking-normal"
                       onClick={() => {
                         setEndpoint(preset.endpoint);
                         invalidate();
                       }}
-                      className="border border-line px-1.5 py-0.5 font-mono text-[10px] text-ink-faint transition-colors hover:border-lineHi hover:text-ink"
                     >
                       {preset.label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               )}
-              <label className="flex flex-col gap-1">
-                <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-                  server address
-                </span>
-                <input
-                  value={endpoint}
-                  onChange={(event) => {
-                    setEndpoint(event.target.value);
-                    invalidate();
-                  }}
-                  placeholder="http://127.0.0.1:11434/v1"
-                  className={INPUT}
-                />
-              </label>
+              <Field label="server address">
+                {(props) => (
+                  <input
+                    {...props}
+                    value={endpoint}
+                    onChange={(event) => {
+                      setEndpoint(event.target.value);
+                      invalidate();
+                    }}
+                    placeholder="http://127.0.0.1:11434/v1"
+                    className={FIELD_CONTROL}
+                  />
+                )}
+              </Field>
             </>
           )}
 
           {provider.needsKey && (
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-                api key
-              </span>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(event) => {
-                  setApiKey(event.target.value);
-                  invalidate();
-                }}
-                placeholder="pasted from your provider's dashboard"
-                className={INPUT}
-              />
-              <span className="text-[10.5px] text-ink-faint">
-                Stored in your operating system&apos;s keyring, never in a file.
-              </span>
-            </label>
+            <Field
+              label="api key"
+              hint="Stored in your operating system's keyring, never in a file."
+            >
+              {(props) => (
+                <input
+                  {...props}
+                  type="password"
+                  value={apiKey}
+                  onChange={(event) => {
+                    setApiKey(event.target.value);
+                    invalidate();
+                  }}
+                  placeholder="pasted from your provider's dashboard"
+                  className={FIELD_CONTROL}
+                />
+              )}
+            </Field>
           )}
 
           {provider.id === "anthropic" && (
-            <p className="text-[11.5px] leading-relaxed text-ink-muted">
+            <p className="text-label leading-relaxed text-ink-muted">
               Uses the Claude Code CLI you already signed in to. Nothing to configure here — enter
               the Claude model name below, for example <code>claude-sonnet-5</code>.
             </p>
           )}
 
           {provider.id !== "anthropic" && (
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={runTest} disabled={!canTest || testing} className={BUTTON}>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="md" onClick={runTest} disabled={!canTest || testing}>
                 {testing ? "TESTING…" : "TEST CONNECTION"}
-              </button>
+              </Button>
               {result && (
                 <p
-                  className={`min-w-0 flex-1 text-[11.5px] leading-relaxed ${
+                  className={`min-w-0 flex-1 text-label leading-relaxed ${
                     result.ok ? "text-ok" : "text-danger"
                   }`}
                   role="status"
@@ -350,82 +335,101 @@ export default function AddModelDialog({
 
         {/* 3 — model */}
         <fieldset className="mb-4 flex flex-col gap-2">
-          <legend className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-            3 · which model?
-          </legend>
-          {result && result.available_models.length > 0 ? (
-            <select
-              value={modelId}
-              onChange={(event) => {
-                setModelId(event.target.value);
-                invalidate();
-              }}
-              aria-label="Model"
-              className={INPUT}
-            >
-              <option value="">choose a model…</option>
-              {result.available_models.map((available) => (
-                <option key={available} value={available}>
-                  {available}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              value={modelId}
-              onChange={(event) => {
-                setModelId(event.target.value);
-                invalidate();
-              }}
-              placeholder={
-                provider.id === "anthropic" ? "claude-sonnet-5" : "test the connection to list models"
-              }
-              aria-label="Model"
-              className={INPUT}
-            />
-          )}
+          <legend className={LEGEND}>3 · which model?</legend>
+          {/* The numbered legends are the visible step headers, so these labels
+              are hidden — they exist so each control still has a real
+              accessible name rather than a placeholder standing in for one. */}
+          <Field label="Model" visuallyHiddenLabel>
+            {(props) =>
+              result && result.available_models.length > 0 ? (
+                <select
+                  {...props}
+                  value={modelId}
+                  onChange={(event) => {
+                    setModelId(event.target.value);
+                    invalidate();
+                  }}
+                  className={FIELD_CONTROL}
+                >
+                  <option value="">choose a model…</option>
+                  {result.available_models.map((available) => (
+                    <option key={available} value={available}>
+                      {available}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  {...props}
+                  value={modelId}
+                  onChange={(event) => {
+                    setModelId(event.target.value);
+                    invalidate();
+                  }}
+                  placeholder={
+                    provider.id === "anthropic"
+                      ? "claude-sonnet-5"
+                      : "test the connection to list models"
+                  }
+                  className={FIELD_CONTROL}
+                />
+              )
+            }
+          </Field>
           {result?.ok && !result.tool_calling && modelId && (
-            <p className="text-[11px] text-ink-faint">
+            <p className="text-label text-ink-faint">
               Run the test again after choosing a model — Argus checks that it can use your notes.
             </p>
           )}
         </fieldset>
 
         {/* 4 — name */}
-        <fieldset className="mb-4 flex flex-col gap-1">
-          <legend className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-            4 · name it
-          </legend>
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="what you'll see in the model menu, e.g. groq-llama"
-            aria-label="Display name"
-            className={INPUT}
-          />
+        <fieldset className="mb-4">
+          <legend className={LEGEND}>4 · name it</legend>
+          <Field label="Display name" visuallyHiddenLabel>
+            {(props) => (
+              <input
+                {...props}
+                value={name}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  setSaveError(null);
+                }}
+                placeholder="what you'll see in the model menu, e.g. groq-llama"
+                className={FIELD_CONTROL}
+              />
+            )}
+          </Field>
         </fieldset>
 
-        <div className="flex items-center gap-2 border-t border-line pt-3">
-          <button type="button" onClick={onClose} className={BUTTON}>
+        {saveError && (
+          <p role="alert" className="mb-3 border border-danger px-3 py-2 text-label text-danger">
+            {saveError}
+          </p>
+        )}
+
+        <div className="flex items-center gap-2 border-t border-line pt-4">
+          <Button size="md" onClick={onClose}>
             CANCEL
-          </button>
-          <button
-            type="button"
-            onClick={save}
+          </Button>
+          <Button
+            type="submit"
+            size="md"
+            variant="primary"
             disabled={!canSave || saving}
-            className={`${BUTTON} ml-auto`}
+            className="ml-auto"
           >
             {saving ? "SAVING…" : "SAVE MODEL"}
-          </button>
+          </Button>
         </div>
         {!canSave && (
-          <p className="mt-2 text-right text-[10.5px] text-ink-faint">
+          <p className="mt-2 text-right text-meta text-ink-faint">
             {provider.id === "anthropic"
               ? "Enter a model name and a display name."
               : "Pass the connection test, then name it."}
           </p>
         )}
-      </div>
-    </div>
+      </form>
+    </Dialog>
   );
 }

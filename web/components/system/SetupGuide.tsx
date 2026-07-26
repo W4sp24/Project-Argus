@@ -77,21 +77,21 @@ export default function SetupGuide() {
               className="flex flex-wrap items-center gap-2.5 border-b border-line pb-2 last:border-b-0 last:pb-0"
             >
               <span
-                className={`shrink-0 font-mono text-[9px] uppercase tracking-[0.1em] ${
+                className={`shrink-0 font-mono text-micro uppercase tracking-[0.1em] ${
                   ok ? "text-ok" : "text-ink-faint"
                 }`}
               >
                 {text}
               </span>
-              <span className="min-w-0 flex-1 text-[13px] text-ink-muted">{step.label}</span>
-              <code className="shrink-0 border border-line bg-sunken px-2 py-0.5 font-mono text-[11px] text-ink">
+              <span className="min-w-0 flex-1 text-body text-ink-muted">{step.label}</span>
+              <code className="shrink-0 border border-line bg-sunken px-2 py-0.5 font-mono text-label text-ink">
                 {step.command}
               </code>
             </li>
           );
         })}
       </ul>
-      <p className="mt-3 font-mono text-[10px] text-ink-faint">
+      <p className="mt-3 font-mono text-meta text-ink-faint">
         completion states derive from `POST /api/doctor` where a matching check exists
       </p>
     </Panel>

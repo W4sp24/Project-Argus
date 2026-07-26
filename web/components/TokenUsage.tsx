@@ -38,7 +38,7 @@ export default function TokenUsage() {
     <Panel
       label="ARGUS.USAGE"
       headerRight={
-        <div className="flex border border-line font-mono text-[9px] uppercase tracking-[0.14em]">
+        <div className="flex border border-line font-mono text-micro uppercase tracking-[0.14em]">
           {VIEWS.map((option) => (
             <button
               key={option}

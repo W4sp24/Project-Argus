@@ -70,16 +70,16 @@ export default function Integrations() {
       <ul className="space-y-2.5">
         {rows.map((row) => (
           <li key={row.name} className="flex flex-wrap items-center gap-2.5 border-b border-line pb-2.5 last:border-b-0 last:pb-0">
-            <span className={`shrink-0 border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] ${STATUS_CLASS[row.status]}`}>
+            <span className={`shrink-0 border px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] ${STATUS_CLASS[row.status]}`}>
               {row.status}
             </span>
-            <span className="shrink-0 font-mono text-[12.5px] text-ink">{row.name}</span>
-            <span className="min-w-0 flex-1 text-[11.5px] text-ink-muted">{row.detail}</span>
+            <span className="shrink-0 font-mono text-label text-ink">{row.name}</span>
+            <span className="min-w-0 flex-1 text-label text-ink-muted">{row.detail}</span>
             {row.status === "NOT CONNECTED" && row.connectCommand && (
               <button
                 type="button"
                 onClick={() => show(`connect :: ${row.connectCommand}`)}
-                className="shrink-0 border border-line px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint transition-colors hover:border-lineHi hover:text-ink"
+                className="shrink-0 border border-line px-1.5 py-0.5 font-mono text-meta uppercase tracking-[0.1em] text-ink-faint transition-colors hover:border-lineHi hover:text-ink"
               >
                 {row.connectCommand}
               </button>

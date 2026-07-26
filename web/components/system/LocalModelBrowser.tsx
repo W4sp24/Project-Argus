@@ -77,32 +77,32 @@ export default function LocalModelBrowser() {
           return (
             <li key={entry.name} className="border border-line p-2.5">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+                <span className="min-w-0 flex-1 truncate text-body text-ink">
                   {entry.label}
-                  <span className="ml-1.5 font-mono text-[10.5px] text-ink-faint">
+                  <span className="ml-1.5 font-mono text-meta text-ink-faint">
                     {entry.name}
                   </span>
                 </span>
 
                 <span
-                  className={`shrink-0 border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] ${style.className}`}
+                  className={`shrink-0 border px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] ${style.className}`}
                   title={entry.reason}
                 >
                   {style.label}
                 </span>
 
                 {isRecommended && (
-                  <span className="shrink-0 border border-[var(--ac)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-[var(--ac)]">
+                  <span className="shrink-0 border border-[var(--ac)] px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] text-[var(--ac)]">
                     BEST FIT
                   </span>
                 )}
 
-                <span className="shrink-0 font-mono text-[10.5px] text-ink-faint">
+                <span className="shrink-0 font-mono text-meta text-ink-faint">
                   {entry.size_gb}GB · {entry.parameters}
                 </span>
 
                 {entry.installed ? (
-                  <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-ok">
+                  <span className="shrink-0 font-mono text-meta uppercase tracking-[0.1em] text-ok">
                     ✓ added
                   </span>
                 ) : (
@@ -115,17 +115,17 @@ export default function LocalModelBrowser() {
                         ? entry.reason
                         : `Download ${entry.label} through Ollama`
                     }
-                    className="shrink-0 border border-line px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+                    className="shrink-0 border border-line px-2 py-0.5 font-mono text-meta uppercase tracking-[0.1em] text-ink transition-colors hover:border-lineHi disabled:opacity-40"
                   >
                     {installing === entry.name ? "DOWNLOADING…" : "DOWNLOAD"}
                   </button>
                 )}
               </div>
 
-              <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-muted">{entry.summary}</p>
-              <p className="mt-0.5 text-[10.5px] leading-relaxed text-ink-faint">{entry.reason}</p>
+              <p className="mt-1.5 text-label leading-relaxed text-ink-muted">{entry.summary}</p>
+              <p className="mt-0.5 text-meta leading-relaxed text-ink-faint">{entry.reason}</p>
               {status && (
-                <p className="mt-1 font-mono text-[10.5px] text-[var(--ac)]" role="status">
+                <p className="mt-1 font-mono text-meta text-[var(--ac)]" role="status">
                   {status}
                 </p>
               )}
@@ -133,12 +133,12 @@ export default function LocalModelBrowser() {
           );
         })}
         {isLoading && !data && (
-          <li className="font-mono text-[11px] text-ink-faint">checking your hardware…</li>
+          <li className="font-mono text-label text-ink-faint">checking your hardware…</li>
         )}
       </ul>
 
       {data && (
-        <p className="mt-3 border-t border-line pt-2 text-[10.5px] leading-relaxed text-ink-faint">
+        <p className="mt-3 border-t border-line pt-2 text-meta leading-relaxed text-ink-faint">
           Downloads go through Ollama at {data.hardware.ollama_url}, which stores them in{" "}
           <code>{data.hardware.ollama_models_dir}</code>. To keep them elsewhere, set Ollama&apos;s{" "}
           <code>OLLAMA_MODELS</code> folder before downloading.
@@ -149,16 +149,16 @@ export default function LocalModelBrowser() {
 }
 
 function HardwareLine({ hardware, loading }: { hardware?: HardwareInfo; loading: boolean }) {
-  if (loading) return <p className="font-mono text-[11px] text-ink-faint">detecting…</p>;
+  if (loading) return <p className="font-mono text-label text-ink-faint">detecting…</p>;
   if (!hardware) {
     return (
-      <p className="font-mono text-[11px] text-ink-faint">
+      <p className="font-mono text-label text-ink-faint">
         could not read this machine&apos;s specs — backend offline?
       </p>
     );
   }
   return (
-    <p className="font-mono text-[11px] text-ink-muted">
+    <p className="font-mono text-label text-ink-muted">
       this pc ::{" "}
       <span className="text-ink">{hardware.ram_gb ? `${hardware.ram_gb}GB RAM` : "RAM unknown"}</span>
       {" · "}

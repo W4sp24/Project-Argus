@@ -83,8 +83,31 @@ test("model registry rows show the local/hosted privacy badge", async ({ page })
 test("study tab carries the same model selector as chat", async ({ page }) => {
   await page.goto("/study");
   // Study generation is a model call too — the selector would be misleading
-  // if it governed only chat.
-  await expect(page.getByRole("button", { name: /^Model: / })).toBeVisible();
+  // if it governed only chat. Scoped to the page body: the top bar now carries
+  // the same trigger on every route, so an unscoped locator matches both.
+  await expect(page.locator("main").getByRole("button", { name: /^Model: / })).toBeVisible();
+});
+
+test("the engine picker groups models by whether they leave this machine", async ({ page }) => {
+  await page.goto("/dashboard");
+  // getByRole("banner") is the top bar specifically — pages have their own
+  // <header> elements, but only a top-level one maps to the banner role.
+  const trigger = page.getByRole("banner").getByRole("button", { name: /^Model: / });
+  await trigger.click();
+
+  const dialog = page.getByRole("dialog", { name: "Select engine" });
+  await expect(dialog).toBeVisible();
+
+  // The grouping *is* the privacy statement, so it has to be real: the
+  // built-in Claude entries are network calls and must not be filed under
+  // "on this computer".
+  await expect(dialog.getByText("Sent to a provider")).toBeVisible();
+  await expect(dialog.getByRole("radio", { name: /claude-sonnet-5/ })).toBeVisible();
+
+  // Escape closes it and hands focus back to whatever opened it.
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
 });
 
 test("email capture posts and lands a proposal in the review queue", async ({ page }) => {

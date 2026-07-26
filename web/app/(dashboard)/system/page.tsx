@@ -1,6 +1,7 @@
 import CliUsage from "@/components/CliUsage";
 import ModeHeader from "@/components/ModeHeader";
 import TokenUsage from "@/components/TokenUsage";
+import DisplayPanel from "@/components/system/DisplayPanel";
 import DoctorPanel from "@/components/system/DoctorPanel";
 import Integrations from "@/components/system/Integrations";
 import LocalModelBrowser from "@/components/system/LocalModelBrowser";
@@ -21,13 +22,14 @@ export default function SystemPage() {
 
         <CliUsage size="large" />
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid gap-4 lg:grid-cols-shell">
           <div className="flex min-w-0 flex-col gap-4">
             <Integrations />
             <ModelsPanel />
             <LocalModelBrowser />
           </div>
           <div className="flex min-w-0 flex-col gap-4">
+            <DisplayPanel />
             <TokenUsage />
           </div>
         </div>

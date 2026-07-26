@@ -288,20 +288,23 @@ export default function CommandPalette() {
           }}
           placeholder={searchMode ? "search the vault…" : "type a command…"}
           aria-label={searchMode ? "Search vault" : "Filter commands"}
-          className="w-full border-b border-line bg-sunken px-4 py-3 font-mono text-[13px] text-ink placeholder:text-ink-faint focus:outline-none"
+          // No `focus:outline-none` here: Tailwind emits it at specificity
+          // (0,2,0), which outranks the bare `:focus-visible` rule in
+          // globals.css — this input had no visible focus ring at all.
+          className="w-full border-b border-line bg-sunken px-4 py-3 font-mono text-body text-ink placeholder:text-ink-faint"
         />
         {searchMode ? (
           <ul className="max-h-[50vh] overflow-y-auto py-1">
             {searching && (
-              <li className="px-4 py-3 font-mono text-[11px] text-ink-faint">searching…</li>
+              <li className="px-4 py-3 font-mono text-label text-ink-faint">searching…</li>
             )}
             {!searching && query.trim() === "" && (
-              <li className="px-4 py-3 font-mono text-[11px] text-ink-faint">
+              <li className="px-4 py-3 font-mono text-label text-ink-faint">
                 type to search — esc to go back
               </li>
             )}
             {!searching && query.trim() !== "" && searchResults.length === 0 && (
-              <li className="px-4 py-3 font-mono text-[11px] text-ink-faint">no matches</li>
+              <li className="px-4 py-3 font-mono text-label text-ink-faint">no matches</li>
             )}
             {!searching &&
               searchResults.map((result, i) => (
@@ -316,14 +319,14 @@ export default function CommandPalette() {
                     }`}
                   >
                     <span className="flex w-full items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+                      <span className="min-w-0 flex-1 truncate text-body text-ink">
                         {result.title || result.source_path}
                       </span>
-                      <span className="shrink-0 font-mono text-[10px] text-ink-faint">
+                      <span className="shrink-0 font-mono text-meta text-ink-faint">
                         {result.source_path}
                       </span>
                     </span>
-                    <span className="line-clamp-2 text-[11px] text-ink-faint">
+                    <span className="line-clamp-2 text-label text-ink-faint">
                       {result.snippet}
                     </span>
                   </button>
@@ -333,7 +336,7 @@ export default function CommandPalette() {
         ) : (
           <ul className="max-h-[50vh] overflow-y-auto py-1">
             {filtered.length === 0 && (
-              <li className="px-4 py-3 font-mono text-[11px] text-ink-faint">no matches</li>
+              <li className="px-4 py-3 font-mono text-label text-ink-faint">no matches</li>
             )}
             {filtered.map((action, i) => (
               <li key={`${action.kind}-${action.label}`}>
@@ -346,18 +349,18 @@ export default function CommandPalette() {
                     i === active ? "bg-[var(--ac-bg)]" : ""
                   }`}
                 >
-                  <span className="w-14 shrink-0 font-mono text-[9.5px] uppercase tracking-[0.14em] text-[var(--ac)]">
+                  <span className="w-14 shrink-0 font-mono text-micro uppercase tracking-[0.14em] text-[var(--ac)]">
                     {action.kind}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+                  <span className="min-w-0 flex-1 truncate text-body text-ink">
                     {action.label}
                   </span>
                   {action.preview && (
-                    <span className="border border-[#3d2f66] px-1 py-px font-mono text-[8px] uppercase tracking-[0.16em] text-[#8b7bc0]">
+                    <span className="border border-[#3d2f66] px-1 py-px font-mono text-micro uppercase tracking-[0.16em] text-[#8b7bc0]">
                       PREVIEW
                     </span>
                   )}
-                  <span className="shrink-0 font-mono text-[10px] text-ink-faint">
+                  <span className="shrink-0 font-mono text-meta text-ink-faint">
                     {action.hint}
                   </span>
                 </button>

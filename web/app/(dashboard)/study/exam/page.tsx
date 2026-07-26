@@ -10,7 +10,7 @@ export default function PracticeExamPage() {
     <>
       <StudyStatusLine title="Practice exam" />
       <StudyTabs />
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid gap-4 lg:grid-cols-shell">
         <div className="min-w-0">
           <ExamWorkspace />
         </div>

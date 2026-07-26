@@ -19,7 +19,7 @@ export default function DevJournalPanel() {
     <Panel
       label="DEV.JOURNAL"
       headerRight={
-        <Link href="/journal" className="font-mono text-[10px] uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]">
+        <Link href="/journal" className="font-mono text-meta uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]">
           open →
         </Link>
       }
@@ -31,19 +31,19 @@ export default function DevJournalPanel() {
       ) : (
         <ul className="divide-y divide-line">
           {rows.map((session) => (
-            <li key={session.path} className="flex items-center justify-between gap-3 py-1.5 font-mono text-[11.5px]">
+            <li key={session.path} className="flex items-center justify-between gap-3 py-1.5 font-mono text-label">
               <span className="shrink-0 text-ink-faint">{session.date}</span>
               <span className="min-w-0 flex-1 truncate text-ink">{session.project}</span>
               {session.branch && <span className="hidden shrink-0 text-ink-faint sm:inline">{session.branch}</span>}
               <span className="shrink-0 text-ink-faint">{session.files}f</span>
-              <span className={`shrink-0 text-[9.5px] uppercase ${session.has_narrative ? "text-[var(--ac)]" : "text-ink-faint"}`}>
+              <span className={`shrink-0 text-micro uppercase ${session.has_narrative ? "text-[var(--ac)]" : "text-ink-faint"}`}>
                 {session.has_narrative ? "narrative" : "stub"}
               </span>
             </li>
           ))}
         </ul>
       )}
-      {rows[0] && <p className="mt-2 font-mono text-[10px] text-ink-faint">last session {formatRelativeTime(rows[0].date)}</p>}
+      {rows[0] && <p className="mt-2 font-mono text-meta text-ink-faint">last session {formatRelativeTime(rows[0].date)}</p>}
     </Panel>
   );
 }

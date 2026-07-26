@@ -20,7 +20,7 @@ export default function InsightsChart() {
     <Panel
       label="INSIGHTS.14D"
       headerRight={
-        <Link href="/insights" className="font-mono text-[10px] uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]">
+        <Link href="/insights" className="font-mono text-meta uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]">
           open →
         </Link>
       }
@@ -29,7 +29,7 @@ export default function InsightsChart() {
         <p className="text-sm text-ink-faint">No completion data yet.</p>
       ) : (
         <>
-          <p className="font-mono text-[11px] text-ink-muted">{total} tasks completed · last 14 days</p>
+          <p className="font-mono text-label text-ink-muted">{total} tasks completed · last 14 days</p>
           <div className="mt-2">
             <MiniLineChart
               values={last14.map((day) => day.completed)}

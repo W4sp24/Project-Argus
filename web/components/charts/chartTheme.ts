@@ -4,12 +4,16 @@
 export const SERIES = { violet: "#a78bfa", cyan: "#22d3ee", rose: "#fb7185" };
 export const SURFACE = "#0c0916"; // panel
 
-export const AXIS_TICK = { fill: "#5a4f82", fontSize: 10, fontFamily: "var(--font-mono)" }; // ink-faint
+// Recharts renders ticks as SVG <text>, so these sizes sit outside both the
+// Tailwind scale and the root rem scaling. They are set here to match `meta`
+// (12px) rather than the old 10px, and moved off ink-faint — axis labels are
+// the thing you read a chart against, not chrome to be dimmed.
+export const AXIS_TICK = { fill: "#9d8fc7", fontSize: 12, fontFamily: "var(--font-mono)" }; // ink-muted
 
 export const TOOLTIP_STYLE = {
   background: "#0c0916", // panel
   border: "1px solid #2c2250", // lineHi
   borderRadius: 0, // square terminal panels — no rounded corners anywhere (§1)
-  fontSize: 12,
+  fontSize: 13,
   color: "#ece7fb", // ink-bright
 };

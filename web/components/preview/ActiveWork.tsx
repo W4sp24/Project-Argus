@@ -34,12 +34,12 @@ export default function ActiveWork() {
       <ul className="divide-y divide-line">
         {MOCK_PRS.map((pr) => (
           <li key={pr.id} className="flex items-center gap-3 py-2">
-            <span className="shrink-0 font-mono text-[11px] text-ink-faint">{pr.id}</span>
-            <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{pr.title}</span>
-            <span className={`shrink-0 border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] ${STATUS_CLASS[pr.status]}`}>
+            <span className="shrink-0 font-mono text-label text-ink-faint">{pr.id}</span>
+            <span className="min-w-0 flex-1 truncate text-body text-ink">{pr.title}</span>
+            <span className={`shrink-0 border px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] ${STATUS_CLASS[pr.status]}`}>
               {pr.status}
             </span>
-            <span className="shrink-0 font-mono text-[10px] text-ink-faint">{pr.age}</span>
+            <span className="shrink-0 font-mono text-meta text-ink-faint">{pr.age}</span>
           </li>
         ))}
       </ul>
