@@ -265,6 +265,13 @@ export interface UsageReport {
   estimated_cost_usd: number;
   series: UsagePoint[];
   features: FeatureUsage[];
+  /**
+   * Models that ran but have no published rate in Argus's table — a local
+   * Ollama model, or a hosted provider whose prices Argus does not track.
+   * They contribute nothing to `estimated_cost_usd`, so the figure is an
+   * honest partial rather than a local model billed at Claude rates.
+   */
+  unpriced_models?: string[];
 }
 
 /** ARGUS.USAGE (§14) — GET /api/usage?range=session|week|all. */
@@ -320,18 +327,164 @@ export function useDoctor() {
   return useSWR<DoctorCheck[]>("/api/doctor", () => mutateJSON<DoctorCheck[]>("/api/doctor", undefined));
 }
 
+/**
+ * A registry provider (§7).
+ * - `anthropic` — Claude through the Claude Code CLI, on your subscription.
+ * - `anthropic-api` — Claude through an API key. No Claude Code needed.
+ * - `openai-compat` — anything speaking the OpenAI chat API: Ollama on this
+ *   PC, or a hosted provider like Groq/Together/Fireworks/OpenRouter.
+ */
+export type ModelProvider = "anthropic" | "anthropic-api" | "openai-compat";
+
 export interface ModelInfo {
   name: string;
   provider: string;
   endpoint?: string | null;
   key_ref?: string | null;
+  model_id?: string | null;
   default: boolean;
   builtin: boolean;
+  /** Runs entirely on this machine — drives the LOCAL/HOSTED badge. */
+  local: boolean;
+  /** A key is stored for this model. The key itself is never returned (I4). */
+  has_key: boolean;
 }
 
 /** Model registry (§7/§12) — GET /api/models. Built-ins first, then local. */
 export function useModels() {
   return useSWR<ModelInfo[]>("/api/models", fetcher);
+}
+
+export interface AddModelBody {
+  name: string;
+  provider?: ModelProvider;
+  endpoint?: string;
+  api_key?: string;
+  model_id?: string;
+  verify?: boolean;
+}
+
+/** Register a model. The backend probes tool calling before it saves. */
+export function addModel(body: AddModelBody) {
+  return mutateJSON<ModelInfo>("/api/models", body);
+}
+
+/** Make a model the one used when nothing else is chosen. */
+export function setDefaultModel(name: string) {
+  return mutateJSON<ModelInfo>("/api/models/default", { name });
+}
+
+export interface TestModelBody {
+  provider: ModelProvider;
+  endpoint?: string;
+  api_key?: string;
+  model_id?: string;
+  name?: string;
+}
+
+export interface TestModelResult {
+  ok: boolean;
+  detail: string;
+  tool_calling: boolean;
+  latency_ms: number;
+  available_models: string[];
+}
+
+/**
+ * Check a configuration before saving it — the Test button. Nothing is
+ * persisted, and a key sent here is used for the one call and discarded.
+ */
+export function testModel(body: TestModelBody) {
+  return mutateJSON<TestModelResult>("/api/models/test", body);
+}
+
+/** How well a catalog model suits the detected machine. */
+export type FitVerdict = "fits" | "slow" | "insufficient" | "unknown";
+
+export interface CatalogEntry {
+  name: string;
+  label: string;
+  parameters: string;
+  size_gb: number;
+  summary: string;
+  tool_calling: boolean;
+  min_ram_gb: number;
+  min_vram_gb: number;
+  verdict: FitVerdict;
+  reason: string;
+  installed: boolean;
+}
+
+export interface HardwareInfo {
+  /** `null` means Argus could not detect it — never "zero". */
+  ram_gb: number | null;
+  vram_gb: number | null;
+  gpu_name: string | null;
+  platform: string;
+  ollama_url: string;
+  ollama_models_dir: string;
+}
+
+export interface CatalogResponse {
+  hardware: HardwareInfo;
+  recommended: string | null;
+  models: CatalogEntry[];
+}
+
+/** Curated tool-calling local models, scored against this machine. */
+export function useModelCatalog() {
+  return useSWR<CatalogResponse>("/api/models/catalog", fetcher);
+}
+
+export interface InstallEvent {
+  type: "progress" | "done" | "error";
+  status?: string;
+  completed?: number;
+  total?: number;
+  detail?: string;
+  name?: string;
+}
+
+/**
+ * Download a model through Ollama, streaming NDJSON progress.
+ *
+ * A download runs for minutes, so the response body is read incrementally
+ * rather than awaited whole — `onEvent` fires per line as it arrives.
+ */
+export async function installModel(
+  name: string,
+  onEvent: (event: InstallEvent) => void,
+): Promise<void> {
+  const response = await apiFetch("/api/models/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, body, body.detail ?? `Request failed: ${response.status}`);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("this browser cannot stream the download progress");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // A chunk can split mid-line, so the tail is held back until its newline.
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onEvent(JSON.parse(line) as InstallEvent);
+      } catch {
+        // A partial or malformed line is not worth aborting a download over.
+      }
+    }
+  }
 }
 
 // --- Flashcards (real FSRS spaced repetition) --------------------------

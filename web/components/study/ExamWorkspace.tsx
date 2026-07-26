@@ -4,6 +4,7 @@ import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import { apiFetch, fetcher, useStudyCourses, useStudyExams } from "@/lib/api";
+import { selectedModel } from "@/lib/models";
 
 interface QuizQuestion {
   q: string;
@@ -57,7 +58,8 @@ export default function ExamWorkspace() {
     const response = await apiFetch("/api/study/exam", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ course: genCourse, n: 10 }),
+      // Same model selection chat uses (§7); omitted means the registry default.
+      body: JSON.stringify({ course: genCourse, n: 10, model: selectedModel() }),
     });
     const payload = await response.json();
     setGenerating(false);

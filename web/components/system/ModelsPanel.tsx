@@ -3,84 +3,78 @@
 import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
-import { ApiError, mutateJSON, useModels } from "@/lib/api";
-import { FLAGS } from "@/lib/flags";
+import AddModelDialog from "@/components/system/AddModelDialog";
+import { ApiError, mutateJSON, setDefaultModel, useModels, type ModelInfo } from "@/lib/api";
 
 /**
- * MODELS (§7, §12) — wired to the real registry: `GET /api/models` (built-ins
- * + user-added local models), `POST /api/models {name, endpoint}` (201; 409 on
- * a duplicate name, 422 on an invalid name/endpoint — surfaced as a toast),
- * `DELETE /api/models/{name}` (built-ins are undeletable server-side, so the
- * remove button is only rendered for non-builtin rows). Lives outside
- * `components/preview/` now that it fetches (§8 grep guard). The PREVIEW tag
- * still reflects `flags.localModels: "preview"` — registration is real, but
- * routing a chat call to a registered local endpoint is still stubbed
- * server-side.
+ * MODELS (§7, §12) — the registry, wired to `GET /api/models`,
+ * `DELETE /api/models/{name}` and `POST /api/models/default`. Adding a model
+ * goes through {@link AddModelDialog}, which tests the connection before it
+ * saves; this panel is the list plus the two per-row actions.
+ *
+ * The LOCAL/HOSTED badge reads the backend's `local` flag rather than
+ * inferring from `builtin`: what matters to a user is whether their notes stay
+ * on this machine, and a hosted open-weight endpoint is just as much a network
+ * hop as Claude is.
  */
 export default function ModelsPanel() {
   const { data: models, isLoading, mutate } = useModels();
   const { show } = useToast();
-  const [name, setName] = useState("");
-  const [endpoint, setEndpoint] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function addModel(event: React.FormEvent) {
-    event.preventDefault();
-    const trimmedName = name.trim();
-    const trimmedEndpoint = endpoint.trim();
-    if (!trimmedName || !trimmedEndpoint || busy) return;
-    setBusy(true);
-    try {
-      await mutateJSON("/api/models", { name: trimmedName, endpoint: trimmedEndpoint });
-      setName("");
-      setEndpoint("");
-      show(`model :: ${trimmedName} registered`);
-      mutate();
-    } catch (error) {
-      show(`model :: ${error instanceof ApiError ? error.message : "add failed — backend offline?"}`);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const [adding, setAdding] = useState(false);
+  const [busyName, setBusyName] = useState<string | null>(null);
 
   async function removeModel(target: string) {
+    setBusyName(target);
     try {
       await mutateJSON(`/api/models/${encodeURIComponent(target)}`, undefined, "DELETE");
       show(`model :: ${target} removed`);
       mutate();
     } catch (error) {
-      show(`model :: ${error instanceof ApiError ? error.message : "remove failed — backend offline?"}`);
+      show(
+        `model :: ${error instanceof ApiError ? error.message : "remove failed — backend offline?"}`,
+      );
+    } finally {
+      setBusyName(null);
+    }
+  }
+
+  async function makeDefault(target: string) {
+    setBusyName(target);
+    try {
+      await setDefaultModel(target);
+      show(`model :: ${target} is now the default`);
+      mutate();
+    } catch (error) {
+      show(
+        `model :: ${error instanceof ApiError ? error.message : "could not set the default"}`,
+      );
+    } finally {
+      setBusyName(null);
     }
   }
 
   return (
-    <Panel label="MODELS" preview={FLAGS.localModels === "preview"}>
+    <Panel
+      label="MODELS"
+      headerRight={
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="border border-line px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+        >
+          + ADD MODEL
+        </button>
+      }
+    >
       <ul className="space-y-1.5">
         {(models ?? []).map((model) => (
-          <li key={model.name} className="group flex items-center gap-2.5 py-1">
-            <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">{model.name}</span>
-            <span className="border border-line px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-ink-faint">
-              {model.builtin ? "API" : "LOCAL"}
-            </span>
-            {model.default && (
-              <span className="border border-[var(--ac)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-[var(--ac)]">
-                DEFAULT
-              </span>
-            )}
-            {model.endpoint && (
-              <span className="truncate font-mono text-[10.5px] text-ink-faint">{model.endpoint}</span>
-            )}
-            {!model.builtin && (
-              <button
-                type="button"
-                aria-label={`Remove ${model.name}`}
-                onClick={() => removeModel(model.name)}
-                className="hidden shrink-0 font-mono text-xs text-ink-faint hover:text-danger group-hover:inline"
-              >
-                ×
-              </button>
-            )}
-          </li>
+          <ModelRow
+            key={model.name}
+            model={model}
+            busy={busyName === model.name}
+            onRemove={() => removeModel(model.name)}
+            onMakeDefault={() => makeDefault(model.name)}
+          />
         ))}
         {isLoading && !models && <li className="font-mono text-[11px] text-ink-faint">loading…</li>}
         {!isLoading && models && models.length === 0 && (
@@ -88,27 +82,86 @@ export default function ModelsPanel() {
         )}
       </ul>
 
-      <form onSubmit={addModel} className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="model name (e.g. llama3.1)"
-          className="min-w-0 flex-1 border border-line bg-sunken px-2.5 py-1.5 text-[12.5px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
-        />
-        <input
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          placeholder="http://localhost:11434/v1"
-          className="min-w-0 flex-1 border border-line bg-sunken px-2.5 py-1.5 text-[12.5px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
-        />
-        <button
-          type="submit"
-          disabled={!name.trim() || !endpoint.trim() || busy}
-          className="shrink-0 border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
-        >
-          {busy ? "ADDING…" : "+ ADD MODEL"}
-        </button>
-      </form>
+      <p className="mt-3 border-t border-line pt-2 text-[10.5px] leading-relaxed text-ink-faint">
+        <span className="text-ok">LOCAL</span> models run on this computer and your notes never
+        leave it. <span className="text-ink-muted">HOSTED</span> models send note excerpts to that
+        provider.
+      </p>
+
+      {adding && <AddModelDialog onClose={() => setAdding(false)} onAdded={() => mutate()} />}
     </Panel>
+  );
+}
+
+function ModelRow({
+  model,
+  busy,
+  onRemove,
+  onMakeDefault,
+}: {
+  model: ModelInfo;
+  busy: boolean;
+  onRemove: () => void;
+  onMakeDefault: () => void;
+}) {
+  return (
+    <li className="group flex flex-wrap items-center gap-2.5 py-1">
+      <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">{model.name}</span>
+
+      <span
+        className={`shrink-0 border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] ${
+          model.local ? "border-ok text-ok" : "border-line text-ink-faint"
+        }`}
+        title={
+          model.local
+            ? "Runs on this computer — your notes never leave it"
+            : "Note excerpts are sent to this provider"
+        }
+      >
+        {model.local ? "LOCAL" : "HOSTED"}
+      </span>
+
+      {model.has_key && (
+        <span
+          className="shrink-0 border border-line px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-ink-faint"
+          title="An API key is saved in your OS keyring for this model"
+        >
+          KEY
+        </span>
+      )}
+
+      {model.default ? (
+        <span className="shrink-0 border border-[var(--ac)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-[var(--ac)]">
+          DEFAULT
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onMakeDefault}
+          disabled={busy}
+          className="hidden shrink-0 border border-line px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-ink-faint transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40 group-hover:inline-block"
+        >
+          MAKE DEFAULT
+        </button>
+      )}
+
+      {model.endpoint && (
+        <span className="max-w-[180px] truncate font-mono text-[10.5px] text-ink-faint">
+          {model.endpoint}
+        </span>
+      )}
+
+      {!model.builtin && (
+        <button
+          type="button"
+          aria-label={`Remove ${model.name}`}
+          onClick={onRemove}
+          disabled={busy}
+          className="hidden shrink-0 font-mono text-xs text-ink-faint hover:text-danger disabled:opacity-40 group-hover:inline"
+        >
+          ×
+        </button>
+      )}
+    </li>
   );
 }

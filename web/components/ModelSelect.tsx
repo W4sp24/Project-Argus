@@ -22,7 +22,9 @@ export default function ModelSelect() {
   const models: ModelEntry[] = data
     ? data.map((model) => ({
         name: model.name,
-        kind: model.builtin ? "api" : "local",
+        // `local` from the backend, not `builtin`: a hosted open-weight
+        // endpoint is a network hop too, and the badge is about privacy.
+        kind: model.local ? "local" : "api",
         endpoint: model.endpoint ?? undefined,
       }))
     : BUILTIN_MODELS;
@@ -79,8 +81,17 @@ export default function ModelSelect() {
                 }`}
               >
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                <span className="border border-line px-1 py-px text-[8px] uppercase tracking-[0.14em] text-ink-faint">
-                  {entry.kind === "local" ? "LOCAL" : "API"}
+                <span
+                  title={
+                    entry.kind === "local"
+                      ? "Runs on this computer — your notes never leave it"
+                      : "Note excerpts are sent to this provider"
+                  }
+                  className={`border px-1 py-px text-[8px] uppercase tracking-[0.14em] ${
+                    entry.kind === "local" ? "border-ok text-ok" : "border-line text-ink-faint"
+                  }`}
+                >
+                  {entry.kind === "local" ? "LOCAL" : "HOSTED"}
                 </span>
                 {active && <span aria-hidden>·</span>}
               </button>
@@ -91,7 +102,7 @@ export default function ModelSelect() {
             onClick={() => setOpen(false)}
             className="block w-full px-3 py-2 text-left font-mono text-[11px] text-ink-faint transition-colors hover:bg-[var(--ac-bg)] hover:text-ink-muted"
           >
-            + add local model
+            + add a model
           </Link>
         </div>
       )}

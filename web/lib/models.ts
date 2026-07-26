@@ -16,6 +16,12 @@ import { useSyncExternalStore } from "react";
  */
 export interface ModelEntry {
   name: string;
+  /**
+   * `local` means the model runs on this machine and notes never leave it;
+   * `api` means excerpts go to a provider. Derived from the backend's `local`
+   * flag, not from `builtin` — a hosted open-weight endpoint is every bit as
+   * much a network hop as Claude is.
+   */
   kind: "api" | "local";
   endpoint?: string;
 }

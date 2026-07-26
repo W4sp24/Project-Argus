@@ -5,6 +5,7 @@ import { useRef, useState, type DragEvent } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import { ApiError, apiFetch, mutateJSON, useStudyCourses, useStudyExams } from "@/lib/api";
+import { selectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md"];
@@ -121,10 +122,13 @@ export default function CoursesPanel() {
   async function generate(kind: "guide" | "exam", course: string) {
     setBusyAction(`${kind}-${course}`);
     show(`generating ${kind} for ${course} — this can take a few minutes…`);
+    // Study generation honours the same model selection chat uses (§7); the
+    // backend falls back to the registry default when this is omitted.
+    const model = selectedModel();
     const response = await apiFetch(`/api/study/${kind}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(kind === "guide" ? { course } : { course, n: 10 }),
+      body: JSON.stringify(kind === "guide" ? { course, model } : { course, n: 10, model }),
     });
     const payload = await response.json();
     if (!response.ok) {
