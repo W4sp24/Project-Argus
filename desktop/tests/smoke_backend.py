@@ -131,13 +131,19 @@ def _handshake(proc: subprocess.Popen) -> int | None:
     return None
 
 
-def _get(port: int, path: str, timeout: int = 60) -> tuple[int, str]:
+def _get(port: int, path: str, timeout: int = 60, limit: int = 400) -> tuple[int, str]:
+    """GET a path. ``limit`` caps the body read — raise it when parsing JSON.
+
+    The 400-byte default keeps failure output readable for checks that only
+    look at the status code. A truncated body is not valid JSON, so any check
+    that parses one must pass a limit large enough for the whole payload.
+    """
     url = f"http://127.0.0.1:{port}{path}"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            return response.status, response.read(400).decode("utf-8", "replace")
+            return response.status, response.read(limit).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(400).decode("utf-8", "replace")
+        return exc.code, exc.read(limit).decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001
         return 0, repr(exc)
 
@@ -250,6 +256,30 @@ def main() -> int:
 
         status, _ = _get(port, "/api/usage/cli?range=today")
         result.check("GET /api/usage/cli", status == 200, f"HTTP {status}")
+
+        # The model registry, and behind it the hardware probe. Worth its own
+        # check because backend/agent/hardware.py reaches for ctypes
+        # (GlobalMemoryStatusEx) and subprocess (nvidia-smi) -- exactly the
+        # kinds of runtime resolution that freezing breaks silently. A probe
+        # that returns None here would degrade the whole local-model picker to
+        # "unknown" in the packaged app while still answering 200.
+        status, body = _get(port, "/api/models/catalog", limit=20_000)
+        result.check("GET /api/models/catalog", status == 200, f"HTTP {status}")
+        if status == 200:
+            try:
+                payload = json.loads(body)
+            except (json.JSONDecodeError, TypeError):
+                payload = {}
+            models = payload.get("models") or []
+            result.check("  catalog:models listed", len(models) > 0, f"{len(models)} entries")
+            ram = (payload.get("hardware") or {}).get("ram_gb")
+            result.check("  catalog:RAM detected", bool(ram), f"{ram} GB")
+            verdicts = {entry.get("verdict") for entry in models}
+            result.check(
+                "  catalog:fit verdicts scored",
+                bool(verdicts) and verdicts != {"unknown"},
+                ", ".join(sorted(v for v in verdicts if v)),
+            )
 
         if not args.skip_heavy:
             # Forces chromadb + sentence-transformers + torch to actually load.
