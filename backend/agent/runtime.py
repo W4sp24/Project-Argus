@@ -10,6 +10,8 @@ any OpenAI-compatible endpoint including local Ollama. See
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import AsyncIterator
 from datetime import date
 from pathlib import Path
@@ -33,6 +35,10 @@ PROMPT_PATH = Path(__file__).parent / "prompts" / "chat.md"
 MAX_NOTE_CHARS = 20_000
 MAX_TURNS = 8
 DISALLOWED_TOOLS = ("Bash", "Write", "Edit")  # read-only agent (P1)
+# Upper bound on waiting for the background index warm before searching anyway.
+# Generous: a cold embedding-model load is ~20s, and proceeding early means a
+# failed search rather than a slow one.
+WARM_TIMEOUT_SECONDS = 90.0
 
 
 def _tool_text(payload: Any) -> dict[str, Any]:
@@ -41,17 +47,40 @@ def _tool_text(payload: Any) -> dict[str, Any]:
 
 
 def build_vault_tools(
-    settings: Settings, index: VaultIndex, model_label: str = MODEL
+    settings: Settings,
+    index: VaultIndex,
+    model_label: str = MODEL,
+    ready: threading.Event | None = None,
 ) -> list[ToolSpec]:
     """The read-only tool belt shared by chat, and re-exposed over MCP.
 
     ``model_label`` only labels the audit rows (§ ``/api/audit`` reports which
     model read which paths), so it follows whichever model actually ran.
+
+    ``ready``, when given, is set once :meth:`ChatAgent.warm` has finished
+    loading the embedding model on its background thread. ``search_vault``
+    waits on it, because using the chroma client from the event loop while that
+    load is still in flight fails with a bare
+    ``'RustBindingsAPI' object has no attribute 'bindings'``.
+
+    This only became reachable when non-Claude providers arrived: warming
+    starts when the chat socket connects, and the Claude Code CLI's spin-up was
+    always slow enough to hide it. A local Ollama model answers immediately and
+    loses the race, so the first question after opening chat would come back
+    with no citations at all. ``None`` means nothing is warming (the MCP server
+    and tests), so nothing waits.
     """
+
+    async def _await_index() -> None:
+        if ready is not None and not ready.is_set():
+            # to_thread, not Event.wait directly: blocking the event loop here
+            # would also stall the deltas already streaming to the browser.
+            await asyncio.to_thread(ready.wait, WARM_TIMEOUT_SECONDS)
 
     async def search_vault(args: dict[str, Any]) -> dict[str, Any]:
         from backend.rag.retrieve import retrieve
 
+        await _await_index()
         hits = retrieve(
             index,
             str(args["query"]),
@@ -152,6 +181,9 @@ class ChatAgent:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._index = VaultIndex(settings.db_path.parent / "chroma")
+        # Set when warming finishes, so vault searches can wait rather than
+        # race the still-initializing chroma client. See build_vault_tools.
+        self._ready = threading.Event()
 
     def warm(self) -> None:
         """Load the embedding model + chroma now, off the chat hot path.
@@ -161,9 +193,14 @@ class ChatAgent:
         """
         import contextlib
 
-        # Warming is best-effort; real errors surface on actual queries.
-        with contextlib.suppress(Exception):
-            self._index.query("warmup", n_results=1)
+        try:
+            # Warming is best-effort; real errors surface on actual queries.
+            with contextlib.suppress(Exception):
+                self._index.query("warmup", n_results=1)
+        finally:
+            # Always release waiters, including when warming failed — a search
+            # that then fails on its own is far better than one that hangs.
+            self._ready.set()
 
     def _resolve_model(self, model: str | None) -> str:
         """Map a registry model name (§7) onto the id that will actually run.
@@ -191,7 +228,9 @@ class ChatAgent:
             disallowed_tools=DISALLOWED_TOOLS,
             fallback_model=MODEL,
         )
-        tools = build_vault_tools(self._settings, self._index, model_label=resolved_model)
+        tools = build_vault_tools(
+            self._settings, self._index, model_label=resolved_model, ready=self._ready
+        )
 
         async for event in adapter.run(
             system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
