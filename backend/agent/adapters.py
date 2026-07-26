@@ -361,8 +361,14 @@ def adapter_for_entry(
     *,
     tool_namespace: str = "argus",
     disallowed_tools: Sequence[str] = ("Bash", "Write", "Edit"),
+    api_key: str | None = None,
 ) -> AgentAdapter:
-    """Build the adapter one registry entry describes."""
+    """Build the adapter one registry entry describes.
+
+    ``api_key`` overrides the keyring lookup. That is what lets the registration
+    flow test a key the user has just typed but not yet saved — the key stays in
+    memory for that one call and is stored only once the model is known to work.
+    """
     from backend.agent.credentials import get_key
 
     name = str(entry["name"])
@@ -370,6 +376,7 @@ def adapter_for_entry(
     # Hosted entries often label a model differently from the id the provider
     # expects ("groq-llama" serving "llama-3.3-70b-versatile").
     model_id = str(entry.get("model_id") or name)
+    resolved_key = api_key or get_key(entry.get("key_ref"))
 
     if provider == PROVIDER_CLAUDE_CLI:
         return ClaudeSDKAdapter(
@@ -381,13 +388,14 @@ def adapter_for_entry(
     if provider == PROVIDER_ANTHROPIC_API:
         from backend.agent.anthropic_api import DEFAULT_ENDPOINT, AnthropicAPIAdapter
 
-        api_key = get_key(entry.get("key_ref"))
-        if not api_key:
+        if not resolved_key:
             raise AgentError(
                 f"no API key stored for {name!r} — re-add it under /system to store one"
             )
         return AnthropicAPIAdapter(
-            model=model_id, api_key=api_key, endpoint=str(entry.get("endpoint") or DEFAULT_ENDPOINT)
+            model=model_id,
+            api_key=resolved_key,
+            endpoint=str(entry.get("endpoint") or DEFAULT_ENDPOINT),
         )
 
     if provider == PROVIDER_OPENAI_COMPAT:
@@ -396,9 +404,7 @@ def adapter_for_entry(
         endpoint = entry.get("endpoint")
         if not endpoint:
             raise AgentError(f"model {name!r} has no endpoint — re-add it under /system")
-        return OpenAICompatAdapter(
-            model=model_id, endpoint=str(endpoint), api_key=get_key(entry.get("key_ref"))
-        )
+        return OpenAICompatAdapter(model=model_id, endpoint=str(endpoint), api_key=resolved_key)
 
     raise AgentError(
         f"model {name!r} uses unknown provider {provider!r} "

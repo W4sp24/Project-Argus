@@ -104,6 +104,37 @@ def _check_keyring() -> Check:
         return Check(name="keyring", status="WARN", detail=f"keyring unusable: {exc}")
 
 
+def _check_ollama() -> Check:
+    """Is a local model server reachable?
+
+    WARN, never FAIL: Ollama is one of several ways to run Argus (hosted APIs
+    and Claude Code are the others), so its absence is a missing option, not a
+    broken install — same reasoning as the gcal/todoist connector checks.
+    """
+    import asyncio
+
+    from backend.agent.hardware import ollama_available, ollama_base_url, ollama_reachable
+
+    url = ollama_base_url()
+    try:
+        running = asyncio.run(ollama_reachable())
+    except Exception as exc:  # noqa: BLE001 - a failed probe is not a failed install
+        return Check(name="ollama", status="WARN", detail=f"could not probe {url}: {exc}")
+    if running:
+        return Check(name="ollama", status="OK", detail=f"local models available at {url}")
+    if ollama_available():
+        return Check(
+            name="ollama",
+            status="WARN",
+            detail=f"installed but not running — start Ollama to use local models ({url})",
+        )
+    return Check(
+        name="ollama",
+        status="WARN",
+        detail="not installed — optional, only needed to run models on this PC",
+    )
+
+
 def _check_connector(name: str) -> Check:
     try:
         if name == "gcal":
@@ -134,6 +165,7 @@ def run_checks(settings: Settings) -> list[Check]:
         if vault_ok
         else Check(name="chroma", status="WARN", detail="skipped — vault missing"),
         _check_keyring(),
+        _check_ollama(),
         _check_connector("gcal"),
         _check_connector("todoist"),
     ]

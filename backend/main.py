@@ -33,9 +33,9 @@ DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 # the vault is readable through these routes.
 ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.environ.get(
-        "ARGUS_ALLOWED_ORIGINS", ",".join(DEFAULT_ALLOWED_ORIGINS)
-    ).split(",")
+    for origin in os.environ.get("ARGUS_ALLOWED_ORIGINS", ",".join(DEFAULT_ALLOWED_ORIGINS)).split(
+        ","
+    )
     if origin.strip()
 ]
 
@@ -74,13 +74,16 @@ def create_app(
     planner: Callable | None = None,
     briefing_composer: Callable | None = None,
     scheduler_factory: Callable | None = None,
+    model_prober: Callable | None = None,
+    model_puller: Callable | None = None,
 ) -> FastAPI:
     """Build the FastAPI app around the given (or default) settings.
 
-    ``chat_runner``, ``generator``, ``index_factory``, ``planner``, and
-    ``briefing_composer`` are injectable so tests run with fakes instead of
-    the agent SDK / embedding model. ``scheduler_factory`` is only passed by
-    the module-level app below — test apps never start background threads.
+    ``chat_runner``, ``generator``, ``index_factory``, ``planner``,
+    ``briefing_composer``, ``model_prober`` and ``model_puller`` are injectable
+    so tests run with fakes instead of the agent SDK / embedding model / a live
+    provider. ``scheduler_factory`` is only passed by the module-level app
+    below — test apps never start background threads.
     """
     from contextlib import asynccontextmanager
 
@@ -187,7 +190,7 @@ def create_app(
 
     from backend.system_api import build_system_router
 
-    app.include_router(build_system_router(resolved))
+    app.include_router(build_system_router(resolved, model_prober, model_puller))
 
     from backend.tasks.api import build_tasks_router
 
@@ -207,9 +210,7 @@ def create_app(
 
     from backend.search_api import build_search_router
 
-    app.include_router(
-        build_search_router(resolved, index_factory or _default_index_factory)
-    )
+    app.include_router(build_search_router(resolved, index_factory or _default_index_factory))
 
     def _default_planner():
         from backend.agent.planner import run_planner
