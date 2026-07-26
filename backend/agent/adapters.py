@@ -346,3 +346,167 @@ def entry_is_local(entry: dict[str, Any]) -> bool:
     if entry.get("provider") in HOSTED_PROVIDERS:
         return False
     return is_local_endpoint(entry.get("endpoint"))
+
+
+# --- resolution -------------------------------------------------------------
+
+
+def find_entry(models: Sequence[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    """The registry entry called ``name``, or None."""
+    return next((entry for entry in models if entry.get("name") == name), None)
+
+
+def adapter_for_entry(
+    entry: dict[str, Any],
+    *,
+    tool_namespace: str = "argus",
+    disallowed_tools: Sequence[str] = ("Bash", "Write", "Edit"),
+) -> AgentAdapter:
+    """Build the adapter one registry entry describes."""
+    from backend.agent.credentials import get_key
+
+    name = str(entry["name"])
+    provider = str(entry.get("provider") or PROVIDER_CLAUDE_CLI)
+    # Hosted entries often label a model differently from the id the provider
+    # expects ("groq-llama" serving "llama-3.3-70b-versatile").
+    model_id = str(entry.get("model_id") or name)
+
+    if provider == PROVIDER_CLAUDE_CLI:
+        return ClaudeSDKAdapter(
+            model=name,
+            tool_namespace=tool_namespace,
+            disallowed_tools=tuple(disallowed_tools),
+        )
+
+    if provider == PROVIDER_ANTHROPIC_API:
+        from backend.agent.anthropic_api import DEFAULT_ENDPOINT, AnthropicAPIAdapter
+
+        api_key = get_key(entry.get("key_ref"))
+        if not api_key:
+            raise AgentError(
+                f"no API key stored for {name!r} — re-add it under /system to store one"
+            )
+        return AnthropicAPIAdapter(
+            model=model_id, api_key=api_key, endpoint=str(entry.get("endpoint") or DEFAULT_ENDPOINT)
+        )
+
+    if provider == PROVIDER_OPENAI_COMPAT:
+        from backend.agent.openai_compat import OpenAICompatAdapter
+
+        endpoint = entry.get("endpoint")
+        if not endpoint:
+            raise AgentError(f"model {name!r} has no endpoint — re-add it under /system")
+        return OpenAICompatAdapter(
+            model=model_id, endpoint=str(endpoint), api_key=get_key(entry.get("key_ref"))
+        )
+
+    raise AgentError(
+        f"model {name!r} uses unknown provider {provider!r} "
+        f"(expected one of {', '.join(KNOWN_PROVIDERS)})"
+    )
+
+
+def resolve_adapter(
+    settings: Any,
+    model: str | None = None,
+    *,
+    tool_namespace: str = "argus",
+    disallowed_tools: Sequence[str] = ("Bash", "Write", "Edit"),
+    fallback_model: str | None = None,
+) -> AgentAdapter:
+    """The adapter for a registry model name.
+
+    ``model=None`` keeps each call site's historical behavior: it runs
+    ``fallback_model`` (the module's long-standing ``MODEL`` constant) on the
+    Claude Code path, so nothing changes for callers that never opt in. Passing
+    a name routes through the registry, whatever provider backs it.
+    """
+    if not model:
+        if fallback_model:
+            return ClaudeSDKAdapter(
+                model=fallback_model,
+                tool_namespace=tool_namespace,
+                disallowed_tools=tuple(disallowed_tools),
+            )
+        model = settings.default_model
+
+    entry = find_entry(settings.models, model)
+    if entry is None:
+        raise RuntimeError(f"unknown model {model!r} — register it under /system first")
+    return adapter_for_entry(
+        entry, tool_namespace=tool_namespace, disallowed_tools=disallowed_tools
+    )
+
+
+# --- capability probe -------------------------------------------------------
+
+PROBE_TOOL_NAME = "argus_probe"
+PROBE_PROMPT = (
+    "Verify your tool access. Call the argus_probe tool exactly once with "
+    'answer set to "ready". Do not reply with prose.'
+)
+PROBE_SYSTEM = "You are verifying tool access. Use the provided tool; do not answer in text."
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """Outcome of a live tool-calling check against one model."""
+
+    ok: bool
+    detail: str
+    tool_calling: bool = False
+    latency_ms: int = 0
+
+
+async def probe_tool_calling(adapter: AgentAdapter) -> ProbeResult:
+    """Ask a model to make one real tool call.
+
+    Argus has no no-tools fallback on any provider, because chat's citation
+    invariant (I6) and the planner's suggest-then-approve invariant (I1) are
+    both enforced *through* tools — a model that cannot call them would look
+    like it was working while quietly violating both. So registration gates on
+    this: one throwaway call, and a model that will not use the tool is
+    rejected with a reason the user can read.
+    """
+    import time
+
+    called: list[str] = []
+
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+        called.append(str(args.get("answer", "")))
+        return text_result("ok")
+
+    spec = ToolSpec(
+        name=PROBE_TOOL_NAME,
+        description="Confirm tool access. Call this with answer='ready'.",
+        parameters=json_schema({"answer": {"type": "string"}}),
+        handler=handler,
+    )
+
+    started = time.monotonic()
+    try:
+        async for _event in adapter.run(
+            system_prompt=PROBE_SYSTEM, user_message=PROBE_PROMPT, tools=[spec], max_turns=2
+        ):
+            pass
+    except Exception as exc:  # noqa: BLE001 - every failure becomes a readable verdict
+        return ProbeResult(
+            ok=False, detail=str(exc), latency_ms=int((time.monotonic() - started) * 1000)
+        )
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if not called:
+        return ProbeResult(
+            ok=False,
+            detail=(
+                "the model answered but never called the test tool — Argus needs "
+                "tool calling for vault citations and planner proposals"
+            ),
+            latency_ms=latency_ms,
+        )
+    return ProbeResult(
+        ok=True,
+        detail="reachable, and tool calling works",
+        tool_calling=True,
+        latency_ms=latency_ms,
+    )

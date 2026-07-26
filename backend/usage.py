@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from backend.config import FALLBACK_RATE, MODEL_RATES
+from backend.config import MODEL_RATES, ZERO_RATE
 
 SESSION_ID = uuid.uuid4().hex  # one per backend process boot
 
@@ -59,7 +59,11 @@ class UsageReport(BaseModel):
     per-week for ``all``. ``total_tokens`` sums input + output + cache-creation
     + cache-read, matching Anthropic's own per-call accounting.
     ``estimated_cost_usd`` uses the static per-model rate table in
-    :mod:`backend.config` — an estimate, not a bill.
+    :mod:`backend.config` — an estimate, not a bill. Models absent from that
+    table (a local Ollama model, or a hosted provider whose prices Argus does
+    not track) contribute **zero** and are named in ``unpriced_models``, so the
+    figure is never inflated by pricing someone's free local model at Claude
+    rates.
     """
 
     range: Range
@@ -72,6 +76,7 @@ class UsageReport(BaseModel):
     estimated_cost_usd: float
     series: list[UsagePoint]
     features: list[FeatureUsage]
+    unpriced_models: list[str] = []
 
 
 def record_usage(
@@ -139,12 +144,25 @@ def record_result_usage(
 
 
 def _cost(rows: list[sqlite3.Row]) -> float:
+    """Estimated spend. Unknown models cost zero — see :func:`_unpriced`."""
     total = 0.0
     for row in rows:
-        rate = MODEL_RATES.get(row["model"], FALLBACK_RATE)
+        rate = MODEL_RATES.get(row["model"], ZERO_RATE)
         total += row["input_tokens"] * rate["input"] / 1_000_000
         total += row["output_tokens"] * rate["output"] / 1_000_000
     return round(total, 4)
+
+
+def _unpriced(rows: list[sqlite3.Row]) -> list[str]:
+    """Models that ran but have no published rate in Argus's table.
+
+    Named rather than guessed at: a local model really is free, and a hosted
+    open-weight provider's rate is the user's to know, so the dashboard says
+    which models the estimate excludes instead of inventing a number.
+    """
+    return sorted(
+        {row["model"] for row in rows if row["model"] and row["model"] not in MODEL_RATES}
+    )
 
 
 def _row_total(row: sqlite3.Row) -> int:
@@ -241,4 +259,5 @@ def usage_report(
             )
             for feature, totals in sorted(by_feature.items())
         ],
+        unpriced_models=_unpriced(rows),
     )

@@ -123,7 +123,7 @@ def test_usage_endpoint(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     settings = Settings(_vault_path=vault)
-    record_usage(settings.db_path, "chat", 1000, 400, model="claude-haiku")
+    record_usage(settings.db_path, "chat", 1000, 400, model="claude-haiku-4-5-20251001")
 
     client = TestClient(create_app(settings))
     payload = client.get("/api/usage", params={"range": "session"}).json()
@@ -131,6 +131,28 @@ def test_usage_endpoint(tmp_path: Path) -> None:
     assert payload["range"] == "session"
     assert payload["features"][0]["feature"] == "chat"
     assert payload["estimated_cost_usd"] > 0
+    assert payload["unpriced_models"] == [], "a model with a published rate is priced"
     assert len(payload["series"]) == 1
 
     assert client.get("/api/usage", params={"range": "nope"}).status_code == 422
+
+
+def test_models_without_a_published_rate_cost_zero_and_are_named(tmp_path: Path) -> None:
+    """A free local model must not be billed at Claude rates.
+
+    Argus's own calls can now run on Ollama or on a hosted open-weight provider
+    whose prices it does not track, so an unknown model contributes nothing to
+    the estimate and is named instead — an honest gap beats an invented number.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    settings = Settings(_vault_path=vault)
+    record_usage(settings.db_path, "chat", 500_000, 200_000, model="llama3.1")
+    record_usage(settings.db_path, "chat", 1_000_000, 0, model="claude-sonnet-5")
+
+    client = TestClient(create_app(settings))
+    payload = client.get("/api/usage", params={"range": "session"}).json()
+
+    # Only the sonnet row is priced: 1M input at $3/M.
+    assert payload["estimated_cost_usd"] == pytest.approx(3.0)
+    assert payload["unpriced_models"] == ["llama3.1"]

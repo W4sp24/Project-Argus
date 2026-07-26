@@ -20,9 +20,12 @@ DEFAULT_ENV_FILE = Path(os.environ.get("ARGUS_ENV_FILE", ".env"))
 DEFAULT_BACKEND_PORT = 8000
 
 # --- Model registry (redesign §7) -------------------------------------------
-# Built-in models use the existing agent auth (subscription login, I5) — no
-# API keys here (I4). User-added local models are OpenAI-compatible endpoints
+# Built-in models use the Claude Code CLI's subscription auth (I5) — no API
+# keys here (I4). User-added models are either OpenAI-compatible endpoints
+# (local Ollama or a hosted open-weight provider) or the Anthropic API, all
 # persisted in ``.argus/models.json`` (the argus config/db dir, not the vault).
+# Any API key lives in the OS keyring and is referenced by ``key_ref`` only —
+# see :mod:`backend.agent.credentials`.
 
 DEFAULT_MODELS: tuple[dict, ...] = (
     {"name": "claude-sonnet-5", "provider": "anthropic", "default": True},
@@ -38,6 +41,14 @@ MODEL_RATES: dict[str, dict[str, float]] = {
 }
 FALLBACK_RATE = MODEL_RATES["claude-opus-4-8"]  # today's agent model (runtime.py)
 
+# Argus's own calls can now run on a free local model or on a hosted provider
+# whose prices Argus does not know, so :mod:`backend.usage` prices unknown
+# models at zero and names them instead of guessing. Billing a local Llama at
+# Opus rates would be actively misleading; "unpriced" is honest.
+# ``FALLBACK_RATE`` still applies in :mod:`backend.cli_usage`, where every
+# model genuinely is an Anthropic one.
+ZERO_RATE = {"input": 0.0, "output": 0.0}
+
 
 def load_user_models(models_file: Path) -> list[dict]:
     """User-registered local models from ``models.json`` ([] when absent/corrupt)."""
@@ -52,6 +63,26 @@ def save_user_models(models_file: Path, models: list[dict]) -> None:
     """Persist user-registered models next to the sqlite db (never the vault)."""
     models_file.parent.mkdir(parents=True, exist_ok=True)
     models_file.write_text(json.dumps(models, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def load_model_prefs(prefs_file: Path) -> dict:
+    """Model preferences (currently just ``default``) — {} when absent/corrupt."""
+    try:
+        payload = json.loads(prefs_file.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_model_prefs(prefs_file: Path, prefs: dict) -> None:
+    """Persist model preferences beside ``models.json``.
+
+    A separate file, deliberately: ``models.json`` is a bare JSON array whose
+    shape predates this feature, and keeping the chosen default out of it means
+    no migration and no risk to registries written by older versions.
+    """
+    prefs_file.parent.mkdir(parents=True, exist_ok=True)
+    prefs_file.write_text(json.dumps(prefs, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 class ConfigError(RuntimeError):
@@ -113,8 +144,12 @@ class Settings:
         return self.db_path.parent / "models.json"
 
     @property
-    def models(self) -> list[dict]:
-        """Full model registry: built-ins first, then user-added local models."""
+    def model_prefs_file(self) -> Path:
+        """Where the chosen default model persists, beside ``models.json``."""
+        return self.db_path.parent / "model-prefs.json"
+
+    def _registry(self) -> list[dict]:
+        """Built-ins first, then user-added models, before the default is applied."""
         registry = [dict(entry) for entry in DEFAULT_MODELS]
         known = {entry["name"] for entry in registry}
         for entry in load_user_models(self.models_file):
@@ -125,7 +160,44 @@ class Settings:
                         "provider": str(entry.get("provider", "openai-compat")),
                         "endpoint": entry.get("endpoint"),
                         "key_ref": entry.get("key_ref"),
+                        # The provider-side id, when it differs from the display
+                        # name (a "groq-llama" entry serving "llama-3.3-70b").
+                        "model_id": entry.get("model_id"),
                         "default": False,
                     }
                 )
         return registry
+
+    def _resolve_default(self, registry: list[dict]) -> str:
+        """The effective default: the user's pick, else the built-in flag.
+
+        A stale pick (a model since deleted) falls back rather than dangling —
+        otherwise removing your default would silently break every feature that
+        runs without an explicit model.
+        """
+        chosen = load_model_prefs(self.model_prefs_file).get("default")
+        names = {entry["name"] for entry in registry}
+        if isinstance(chosen, str) and chosen in names:
+            return chosen
+        for entry in DEFAULT_MODELS:
+            if entry.get("default") and entry["name"] in names:
+                return str(entry["name"])
+        return str(registry[0]["name"]) if registry else str(DEFAULT_MODELS[0]["name"])
+
+    @property
+    def models(self) -> list[dict]:
+        """Full model registry: built-ins first, then user-added models.
+
+        Exactly one entry carries ``default: True`` — the user's choice when
+        they have made one, otherwise the built-in default.
+        """
+        registry = self._registry()
+        default = self._resolve_default(registry)
+        for entry in registry:
+            entry["default"] = entry["name"] == default
+        return registry
+
+    @property
+    def default_model(self) -> str:
+        """Name of the model used when a caller does not name one."""
+        return self._resolve_default(self._registry())
