@@ -3,6 +3,7 @@ import ModeHeader from "@/components/ModeHeader";
 import TokenUsage from "@/components/TokenUsage";
 import DoctorPanel from "@/components/system/DoctorPanel";
 import Integrations from "@/components/system/Integrations";
+import LocalModelBrowser from "@/components/system/LocalModelBrowser";
 import McpServers from "@/components/system/McpServers";
 import ModelsPanel from "@/components/system/ModelsPanel";
 import SetupGuide from "@/components/system/SetupGuide";
@@ -24,6 +25,7 @@ export default function SystemPage() {
           <div className="flex min-w-0 flex-col gap-4">
             <Integrations />
             <ModelsPanel />
+            <LocalModelBrowser />
           </div>
           <div className="flex min-w-0 flex-col gap-4">
             <TokenUsage />
