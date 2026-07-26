@@ -14,4 +14,5 @@ export const FLAGS = {
   // it for real via POST /api/note/create (backend/writer.py create_note).
   courseCreate: "enabled",
   courseHub: "preview", // /study/course/[code] — NotebookLM-style workspace, chat + studio are mock
+  quickLinks: "enabled", // GET/POST/PUT/DELETE /api/quick-links are wired
 } as const;

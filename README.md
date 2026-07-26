@@ -25,8 +25,10 @@ Next.js dashboard  ←→  FastAPI backend  ←→  Obsidian vault (markdown, si
 - **Dashboard** (home) — Layout-A command center: morning briefing (collapsible),
   stat tiles (due/overdue/done/streak/focus hours), an interactive agenda you can
   check off / edit / delete inline, a GitHub-style productivity heatmap (tasks +
-  notes + study + captures, 52 weeks), quick capture, a recent-activity feed, and
-  a docked mini chat — all on one screen, every widget interactive.
+  notes + study + captures, 52 weeks), quick capture, a recent-activity feed, a
+  Quick Links panel for saving and one-click opening of frequently-used sites (opens
+  in your system browser; https-only), and a docked mini chat — all on one screen,
+  every widget interactive.
 - **Chat** grounded in your vault — every answer carries citations that deep-link
   back into Obsidian; "that's not in your notes" instead of hallucinations. One
   shared conversation whether you use the dashboard dock or the full **Chat** tab.

@@ -339,6 +339,54 @@ function registerIpc() {
     return true;
   });
 
+  ipcMain.handle("icon:pick", async () => {
+    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+      title: "Choose an icon image",
+      properties: ["openFile"],
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "svg"] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+
+    const filePath = result.filePaths[0];
+    const maxBytes = 2 * 1024 * 1024;
+    let buffer;
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > maxBytes) {
+        return { ok: false, error: "Image is too large (max 2 MB)." };
+      }
+      buffer = fs.readFileSync(filePath);
+    } catch {
+      return { ok: false, error: "Could not read the file." };
+    }
+
+    let mime = null;
+    if (buffer.length >= 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+      mime = "image/png";
+    } else if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+      mime = "image/jpeg";
+    } else if (buffer.length >= 4 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+      mime = "image/gif";
+    } else if (
+      buffer.length >= 12 &&
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+    ) {
+      mime = "image/webp";
+    } else {
+      const head = buffer.slice(0, 1000).toString("utf8").replace(/^﻿/, "").trimStart();
+      if (/^<\?xml/i.test(head) || /<svg/i.test(head)) {
+        mime = "image/svg+xml";
+      }
+    }
+
+    if (!mime) {
+      return { ok: false, error: "That file is not a supported image." };
+    }
+
+    return { ok: true, name: path.basename(filePath), dataUrl: `data:${mime};base64,${buffer.toString("base64")}` };
+  });
+
   ipcMain.handle("vault:pick", async () => {
     const result = await dialog.showOpenDialog(onboardingWindow ?? undefined, {
       title: "Choose your Obsidian vault",
