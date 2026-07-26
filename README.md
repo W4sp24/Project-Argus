@@ -17,8 +17,16 @@ delete Argus tomorrow and your second brain stays.
 Next.js dashboard  ←→  FastAPI backend  ←→  Obsidian vault (markdown, single source of truth)
                           │
                           ├─ RAG index (local embeddings — your notes never leave your machine for indexing)
-                          └─ Claude agent (suggest-then-approve: nothing is written without your click)
+                          └─ agent (suggest-then-approve: nothing is written without your click)
+                               └─ your choice of model: local Ollama · a hosted API · Claude
 ```
+
+**No Claude Code required.** Chat, the day planner and study generation run on
+whichever model you register: a model on your own PC via
+[Ollama](https://ollama.com), any hosted OpenAI-compatible provider (Groq,
+Together, Fireworks, OpenRouter…), the Anthropic API on a key, or Claude Code
+on your existing subscription. Every model is badged **LOCAL** or **HOSTED**
+in the UI, so whether your notes leave the machine is always visible.
 
 ## Features
 
@@ -54,8 +62,18 @@ Next.js dashboard  ←→  FastAPI backend  ←→  Obsidian vault (markdown, si
 - **Insights** — task completion trend, overdue chart, calendar load vs focus time,
   study streak, practice-exam scores per course, the productivity heatmap (full-width),
   plus your coding-session activity.
+- **Models** — pick any backend per model on **System**: a guided setup flow
+  (provider → credentials → *test connection* → save) that never saves an
+  untested configuration, plus a hardware-aware browser of local models that
+  labels each one **FITS** / **SLOW** / **TOO BIG** against your actual RAM and
+  GPU and installs it in one click. Every model must pass a live tool-calling
+  check before it's registered, so citations and planner proposals work the
+  same on every provider.
 - **Audit** — `/api/audit` lists exactly which vault files each agent prompt read
   (paths only, never content).
+
+> **Not a developer?** [`docs/SETUP.md`](docs/SETUP.md) is a step-by-step
+> install guide that assumes no programming knowledge.
 
 ## Quickstart
 
@@ -104,6 +122,49 @@ argus connect todoist <token>   # Todoist personal API token
 Both connectors are optional — everything else works without them, and `argus doctor`
 reports them as `WARN` (not `FAIL`) until you connect them.
 
+### Choosing a model
+
+Open **System → MODELS → + ADD MODEL** and pick a provider. The flow tests the
+connection — reachable, key accepted, tool calling works — and lists the models
+the endpoint actually serves before it lets you save.
+
+| Provider | What you need | Notes |
+|---|---|---|
+| **Ollama on this PC** | [Ollama](https://ollama.com/download) running | Free, offline, notes never leave the machine. The **LOCAL.MODELS** panel recommends one that fits your hardware and installs it in a click. |
+| **Hosted API** | a key from Groq / Together / Fireworks / OpenRouter / DeepInfra | Fast on any machine — the reason Argus works on a thin laptop, since local inference needs *more* horsepower, not less. |
+| **Anthropic API key** | a key from [console.anthropic.com](https://console.anthropic.com/settings/keys) | Claude without installing Claude Code. |
+| **Claude Code** | the CLI installed and signed in | Uses your existing subscription (invariant I5). |
+
+API keys go to the OS keyring; `.argus/models.json` stores only a reference
+(invariant I4). `argus doctor` reports Ollama's status as `WARN` (not `FAIL`)
+when it's absent — it's one option, not a requirement.
+
+Registration requires a live tool-calling check to pass. There is no
+no-tools fallback on any provider: chat's citations and the planner's
+suggest-then-approve flow are both enforced *through* tools, so a model that
+can't call them would look like it was working while quietly breaking both.
+
+### Connect your coding agent
+
+`argus mcp-server` exposes your vault's **read-only** tools (`search_vault`,
+`read_note`, `list_tasks`) over MCP, so your own terminal agent can use your
+notes from any project directory:
+
+```bash
+# Claude Code
+claude mcp add argus -s user -- argus mcp-server
+
+# Codex CLI / Gemini CLI — add to their MCP config:
+#   { "mcpServers": { "argus": { "command": "argus", "args": ["mcp-server"] } } }
+```
+
+The planner's `propose_*` tools are deliberately **not** exposed: an external
+agent has none of the in-app planner's context, and anything it queued would
+land in your Review queue looking identical to a well-informed suggestion.
+
+This needs the source install — the packaged desktop app doesn't put `argus`
+on your PATH.
+
 ## Project layout
 
 ```
@@ -114,7 +175,7 @@ tests/          pytest suite
 docs/           specs, build state, decision log, phase plans
 ```
 
-## Claude Code dev loop (optional)
+## Coding-agent dev loop (optional)
 
 The `claude-integration/` folder journals your Claude Code sessions into the vault's
 `90-Meta/` zone and surfaces them on the dashboard's **Journal** page:
@@ -124,15 +185,21 @@ powershell -ExecutionPolicy Bypass -File claude-integration\setup.ps1 -VaultPath
 ```
 
 That installs two session hooks (objective stubs, written even with Obsidian closed)
-and a `/log-session` command (narrative writeups on demand). For vault access from
-Claude via MCP, install Obsidian's **Local REST API** community plugin and register
-its key: `claude mcp add obsidian -s user -e OBSIDIAN_API_KEY=<key> -e OBSIDIAN_HOST=127.0.0.1 -e OBSIDIAN_PORT=27124 -- uvx mcp-obsidian`.
+and a `/log-session` command (narrative writeups on demand). Codex CLI hook support
+is planned on a follow-up branch. For vault access from your agent, prefer
+[`argus mcp-server`](#connect-your-coding-agent) above; Obsidian's **Local REST API**
+plugin is an alternative:
+`claude mcp add obsidian -s user -e OBSIDIAN_API_KEY=<key> -e OBSIDIAN_HOST=127.0.0.1 -e OBSIDIAN_PORT=27124 -- uvx mcp-obsidian`.
 
 ## Privacy
 
 - Indexing, embeddings, and storage are fully local.
 - `99-Private/` and any note tagged `#no-ai` are never indexed and never sent to any model.
 - Secrets live in the OS keyring — never in the repo or the vault.
+- With a **LOCAL** model nothing leaves the machine at all. With a **HOSTED**
+  one, only the excerpts relevant to a question are sent — never the whole
+  vault. The badge is on every model row and in the model picker, so the
+  trade-off is opt-in and visible rather than silent.
 
 ## Development
 

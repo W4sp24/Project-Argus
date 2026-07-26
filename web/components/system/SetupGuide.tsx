@@ -26,6 +26,12 @@ const STEPS: Step[] = [
     check: "chroma",
     state: "OPTIONAL",
   },
+  {
+    label: "run models on this pc (optional)",
+    command: "install ollama, then LOCAL.MODELS below",
+    check: "ollama",
+    state: "OPTIONAL",
+  },
   { label: "google calendar (optional)", command: "argus connect gcal", check: "gcal", state: "OPTIONAL" },
   {
     label: "todoist (optional)",
