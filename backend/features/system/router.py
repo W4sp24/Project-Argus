@@ -20,9 +20,11 @@ from fastapi import APIRouter
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.features.integrations.router import build_integrations_router
 from backend.features.system.doctor import Check, run_checks
 from backend.features.system.models import Prober, Puller, build_models_router
-from backend.telemetry import claude_cli
+from backend.telemetry import claude_cli, scan
+from backend.telemetry.agents import registry as agent_registry
 from backend.telemetry.audit import AuditEntry, recent
 from backend.telemetry.usage import Range, UsageReport, usage_report
 
@@ -55,9 +57,24 @@ def build_system_router(
 
     @router.get("/usage/cli", response_model=claude_cli.CliUsageReport)
     def usage_cli(range: claude_cli.CliRange = "today") -> claude_cli.CliUsageReport:  # noqa: A002
+        """Claude Code only. Kept for the desktop smoke test and older clients;
+        ``/usage/agents`` is the one the UI reads."""
         conn = db()
         try:
             return claude_cli.cli_usage_report(conn, range, root=claude_cli.DEFAULT_CLAUDE_HOME)
+        finally:
+            conn.close()
+
+    @router.get("/usage/agents", response_model=agent_registry.AgentsUsageReport)
+    def usage_agents(range: scan.CliRange = "today") -> agent_registry.AgentsUsageReport:  # noqa: A002
+        """Every local coding agent Argus can read, installed or not.
+
+        Undetected agents are reported with zeroes and an install hint rather
+        than omitted — a tab that disappears reads as a bug.
+        """
+        conn = db()
+        try:
+            return agent_registry.agents_report(conn, range)
         finally:
             conn.close()
 
@@ -70,4 +87,5 @@ def build_system_router(
             conn.close()
 
     router.include_router(build_models_router(settings, prober, puller))
+    router.include_router(build_integrations_router(settings))
     return router

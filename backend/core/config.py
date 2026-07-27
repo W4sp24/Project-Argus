@@ -84,6 +84,22 @@ class Settings:
         """Where the chosen default model persists, beside ``models.json``."""
         return self.db_path.parent / "model-prefs.json"
 
+    @property
+    def mcp_servers_file(self) -> Path:
+        """Where registered external MCP servers persist, beside ``models.json``."""
+        return self.db_path.parent / "mcp-servers.json"
+
+    @property
+    def gcal_credentials_file(self) -> Path:
+        """Where the Google OAuth *client* file lands when uploaded in-app.
+
+        Not a secret token — the client JSON identifies the app, and the token
+        it yields goes to the keyring (I4). It lives in the config dir rather
+        than the repo root so a packaged desktop install has somewhere real to
+        put it; see :func:`backend.connectors.gcal.connect`.
+        """
+        return self.db_path.parent / "gcal-credentials.json"
+
     def _registry(self) -> list[dict]:
         """Built-ins first, then user-added models, before the default is applied."""
         registry = [dict(entry) for entry in DEFAULT_MODELS]

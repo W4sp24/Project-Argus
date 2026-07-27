@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * The one overlay implementation. Before this, six surfaces each re-implemented
@@ -11,6 +12,16 @@ import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react"
  * What every dialog gets for free: a focus trap, initial focus inside the
  * dialog, Escape, focus restored to whatever opened it, and a body scroll lock
  * (which nothing had).
+ *
+ * **Portalled to `document.body`, and it has to be.** This used to render in
+ * place, on the reasoning that `fixed` already lifts it out of the flow. It
+ * does not, inside a `Panel`: `animate-rise` ends on `transform: none`, whose
+ * *computed* value is the identity matrix, and any transform other than the
+ * literal `none` makes that element the containing block for `position: fixed`
+ * descendants. So every dialog opened from a panel — add-model from
+ * ModelsPanel, connect-integration from the hub — was being clipped to that
+ * panel's box instead of covering the viewport, which is exactly why the
+ * add-model flow did not read as a popup.
  */
 
 const FOCUSABLE = [
@@ -57,6 +68,10 @@ export default function Dialog({
   const id = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
+  // `document` does not exist during the server render, so the portal target is
+  // only available from the first client commit onwards.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   // Held in a ref so an inline `onClose={() => ...}` cannot re-run the mount
   // effect on every render — that would re-push onto the stack and yank focus
@@ -67,6 +82,9 @@ export default function Dialog({
   });
 
   useEffect(() => {
+    // Nothing to trap until the portal has actually committed its DOM.
+    if (!mounted) return;
+
     restoreRef.current = document.activeElement as HTMLElement | null;
     stack.push(id);
 
@@ -123,9 +141,11 @@ export default function Dialog({
     // `initialFocusRef` is a ref object and stable; `onClose` is read through
     // onCloseRef. Mount-once is the intent.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, mounted]);
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <div
       className="fixed inset-0 z-50 overflow-y-auto bg-[rgba(3,2,8,0.72)]"
       onMouseDown={(event) => {
@@ -144,6 +164,7 @@ export default function Dialog({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

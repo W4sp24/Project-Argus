@@ -307,9 +307,168 @@ export interface CliUsageReport {
   models: CliModelUsage[];
 }
 
-/** CLAUDE CODE — account-wide CLI usage, GET /api/usage/cli?range=today|week|all. */
+/** CLAUDE CODE only — GET /api/usage/cli. Superseded by `useAgentUsage`. */
 export function useCliUsage(range: CliUsageRange) {
   return useSWR<CliUsageReport>(`/api/usage/cli?range=${range}`, fetcher);
+}
+
+export interface AgentModelUsage {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  /** Argus has no published rate for this model — the cost is a floor, not a bill. */
+  unpriced: boolean;
+}
+
+export interface AgentUsagePoint {
+  label: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+}
+
+/** One agent's slice of the usage report — or the combined view, id `all`. */
+export interface AgentUsage {
+  id: string;
+  label: string;
+  /** Whether this agent is installed. False still carries zeroes, never an error. */
+  detected: boolean;
+  install_hint: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  /** Total for the equivalent window before this one; null for the all-time range. */
+  previous_total_tokens: number | null;
+  series: AgentUsagePoint[];
+  models: AgentModelUsage[];
+  unpriced_models: string[];
+}
+
+export interface AgentsUsageReport {
+  range: CliUsageRange;
+  /** One entry per known agent, installed or not — an absent tab reads as a bug. */
+  agents: AgentUsage[];
+  combined: AgentUsage;
+}
+
+/**
+ * AGENT.USAGE — every local coding agent Argus can read, from
+ * `GET /api/usage/agents?range=today|week|all`. Replaces `useCliUsage`, which
+ * only ever saw Claude Code.
+ */
+export function useAgentUsage(range: CliUsageRange) {
+  return useSWR<AgentsUsageReport>(`/api/usage/agents?range=${range}`, fetcher);
+}
+
+/** `needs-credentials`: a prerequisite file is missing, not just the consent. */
+export type ConnectorStatus = "wired" | "not-connected" | "needs-credentials";
+
+export interface ConnectorInfo {
+  id: string;
+  name: string;
+  status: ConnectorStatus;
+  detail: string;
+  can_connect: boolean;
+}
+
+export interface McpServerInfo {
+  name: string;
+  transport: "stdio" | "http";
+  command?: string | null;
+  args: string[];
+  url?: string | null;
+  /** Tool names captured when the server last passed a test. */
+  tools: string[];
+  /** A bearer token is stored for this server. The token itself never leaves the keyring (I4). */
+  has_key: boolean;
+}
+
+export interface IntegrationsResponse {
+  connectors: ConnectorInfo[];
+  mcp_servers: McpServerInfo[];
+  /** False until registered MCP tools are callable from Argus chat. */
+  mcp_tools_in_chat: boolean;
+}
+
+/** INTEGRATIONS (§12) — GET /api/integrations. */
+export function useIntegrations() {
+  return useSWR<IntegrationsResponse>("/api/integrations", fetcher);
+}
+
+export interface ConnectResult {
+  ok: boolean;
+  detail: string;
+}
+
+/** Verify a Todoist token against the API, then store it in the OS keyring. */
+export function connectTodoist(token: string) {
+  return mutateJSON<ConnectResult>("/api/integrations/todoist/connect", { token });
+}
+
+/** Save the Google OAuth *client* JSON so the consent flow has something to run. */
+export function uploadGcalCredentials(credentials_json: string) {
+  return mutateJSON<ConnectResult>("/api/integrations/gcal/credentials", { credentials_json });
+}
+
+/** Run the browser consent flow. Resolves once the redirect completes. */
+export function connectGcal() {
+  return mutateJSON<ConnectResult>("/api/integrations/gcal/connect", undefined);
+}
+
+/** Forget a connector's stored credential. */
+export function disconnectIntegration(id: string) {
+  return mutateJSON<ConnectResult>(`/api/integrations/${id}`, undefined, "DELETE");
+}
+
+export interface McpServerBody {
+  name: string;
+  transport?: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
+  token?: string;
+  verify?: boolean;
+}
+
+export interface McpProbeResult {
+  ok: boolean;
+  detail: string;
+  latency_ms: number;
+  tools: string[];
+}
+
+/** Handshake with an MCP server and list its tools. Saves nothing. */
+export function testMcpServer(body: McpServerBody) {
+  return mutateJSON<McpProbeResult>("/api/integrations/mcp/test", body);
+}
+
+/** Register an MCP server. The backend verifies the handshake before it saves. */
+export function addMcpServer(body: McpServerBody) {
+  return mutateJSON<McpServerInfo>("/api/integrations/mcp", body);
+}
+
+export function deleteMcpServer(name: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/integrations/mcp/${encodeURIComponent(name)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+/** Copy-paste config exposing *Argus* to your coding agents (the other direction). */
+export function useMcpSnippets() {
+  return useSWR<Record<string, string>>("/api/integrations/mcp/snippets", fetcher);
 }
 
 export interface DoctorCheck {

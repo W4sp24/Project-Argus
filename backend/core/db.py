@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS token_usage (
 
 CREATE TABLE IF NOT EXISTS cli_usage_files (
     path       TEXT PRIMARY KEY,
+    agent      TEXT NOT NULL DEFAULT 'claude-code',
     mtime_ns   INTEGER NOT NULL,
     size       INTEGER NOT NULL,
     scanned_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -82,6 +83,7 @@ CREATE TABLE IF NOT EXISTS cli_usage_files (
 CREATE TABLE IF NOT EXISTS cli_usage (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     file_path     TEXT NOT NULL,
+    agent         TEXT NOT NULL DEFAULT 'claude-code',
     ts            TEXT NOT NULL,
     model         TEXT NOT NULL,
     input_tokens  INTEGER NOT NULL DEFAULT 0,
@@ -90,6 +92,10 @@ CREATE TABLE IF NOT EXISTS cli_usage (
     cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cli_usage_file_path ON cli_usage(file_path);
+-- The (agent, ts) index cannot live here: on a database created before the
+-- agent column existed, CREATE TABLE IF NOT EXISTS is a no-op and this script
+-- runs before the migration below, so indexing a column that is not there yet
+-- fails the whole open. It is created in init_schema after the ALTER.
 
 CREATE TABLE IF NOT EXISTS flashcard_decks (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,4 +163,17 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if "icon_kind" not in ql_columns:  # migration for pre-custom-icon DBs (glyph-only)
         conn.execute("ALTER TABLE quick_links ADD COLUMN icon_kind TEXT")
         conn.execute("ALTER TABLE quick_links ADD COLUMN icon_value TEXT")
+    # Multi-agent usage: one table now serves Claude Code, Codex, and whatever
+    # comes next. Everything recorded before this column existed came from
+    # Claude Code, which is exactly what the default backfills.
+    cli_columns = {row["name"] for row in conn.execute("PRAGMA table_info(cli_usage)")}
+    if "agent" not in cli_columns:
+        conn.execute("ALTER TABLE cli_usage ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude-code'")
+    scan_columns = {row["name"] for row in conn.execute("PRAGMA table_info(cli_usage_files)")}
+    if "agent" not in scan_columns:
+        conn.execute(
+            "ALTER TABLE cli_usage_files ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude-code'"
+        )
+    # Safe only now that the column is guaranteed to exist — see SCHEMA.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cli_usage_agent ON cli_usage(agent, ts)")
     conn.commit()

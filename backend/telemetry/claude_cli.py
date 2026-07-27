@@ -32,8 +32,12 @@ from typing import Literal
 from pydantic import BaseModel
 
 from backend.core.model_registry import FALLBACK_RATE, MODEL_RATES
+from backend.telemetry import scan
 
 DEFAULT_CLAUDE_HOME = Path.home() / ".claude" / "projects"
+
+#: Value stored in ``cli_usage.agent`` for every row this module ingests.
+AGENT_ID = "claude-code"
 
 CliRange = Literal["today", "week", "all"]
 
@@ -136,49 +140,12 @@ def sync_cli_usage(conn: sqlite3.Connection, root: Path = DEFAULT_CLAUDE_HOME) -
     Files whose ``(mtime_ns, size)`` match the stored high-water mark in
     ``cli_usage_files`` are skipped entirely. Returns the count of newly
     ingested rows. Never raises — a missing/corrupt ``root`` yields 0.
+
+    The incremental machinery is shared with every other agent source, so this
+    is now a thin binding of "the Claude Code transcripts under ``root``" to
+    :func:`backend.telemetry.scan.sync_rows`.
     """
-    known = {
-        row["path"]: (row["mtime_ns"], row["size"])
-        for row in conn.execute("SELECT path, mtime_ns, size FROM cli_usage_files")
-    }
-    inserted = 0
-    for file_path in scan_projects(root):
-        try:
-            stat = file_path.stat()
-        except OSError:
-            continue
-        key = str(file_path)
-        stamp = (stat.st_mtime_ns, stat.st_size)
-        if known.get(key) == stamp:
-            continue  # unchanged — skip entirely
-        conn.execute("DELETE FROM cli_usage WHERE file_path = ?", (key,))
-        rows = list(parse_transcript(file_path))
-        conn.executemany(
-            "INSERT INTO cli_usage (file_path, ts, model, input_tokens, output_tokens,"
-            " cache_creation_input_tokens, cache_read_input_tokens)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    key,
-                    r["ts"],
-                    r["model"],
-                    r["input_tokens"],
-                    r["output_tokens"],
-                    r["cache_creation_input_tokens"],
-                    r["cache_read_input_tokens"],
-                )
-                for r in rows
-            ],
-        )
-        inserted += len(rows)
-        conn.execute(
-            "INSERT INTO cli_usage_files (path, mtime_ns, size) VALUES (?, ?, ?)"
-            " ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns, size=excluded.size,"
-            " scanned_at=datetime('now')",
-            (key, stat.st_mtime_ns, stat.st_size),
-        )
-    conn.commit()
-    return inserted
+    return scan.sync_rows(conn, AGENT_ID, scan_projects(root), parse_transcript)
 
 
 def _cost(rows: list[sqlite3.Row]) -> float:
@@ -191,39 +158,28 @@ def _cost(rows: list[sqlite3.Row]) -> float:
 
 
 def _row_total(row: sqlite3.Row) -> int:
-    return (
-        row["input_tokens"]
-        + row["output_tokens"]
-        + row["cache_creation_input_tokens"]
-        + row["cache_read_input_tokens"]
-    )
+    return scan.row_total(row)
 
 
 def _series(rows: list[sqlite3.Row], range_: CliRange) -> list[CliUsagePoint]:
-    buckets: dict[str, int] = {}
-    for row in rows:
-        key = row["ts"][:10] if range_ != "all" else f"{row['ts'][:4]}-w{row['week']}"
-        buckets[key] = buckets.get(key, 0) + _row_total(row)
-    return [CliUsagePoint(label=label, total_tokens=total) for label, total in sorted(buckets.items())]
+    return [
+        CliUsagePoint(label=point.label, total_tokens=point.total_tokens)
+        for point in scan.series(rows, range_)
+    ]
 
 
 def cli_usage_report(
     conn: sqlite3.Connection, range_: CliRange, root: Path = DEFAULT_CLAUDE_HOME
 ) -> CliUsageReport:
-    """Sync then aggregate the ``cli_usage`` table for one range."""
+    """Sync then aggregate the ``cli_usage`` table for one range.
+
+    Claude Code only — the table is shared with every other agent source now,
+    so this filters to its own rows. The multi-agent view lives at
+    :func:`backend.telemetry.agents.registry.agents_report`.
+    """
     sync_cli_usage(conn, root)
 
-    where = ""
-    if range_ == "today":
-        where = "WHERE ts >= datetime('now', 'start of day')"
-    elif range_ == "week":
-        where = "WHERE ts >= datetime('now', '-6 days', 'start of day')"
-    rows = conn.execute(
-        "SELECT ts, model, input_tokens, output_tokens, cache_creation_input_tokens,"
-        " cache_read_input_tokens, strftime('%W', ts) AS week"
-        f" FROM cli_usage {where} ORDER BY ts",
-        (),
-    ).fetchall()
+    rows = scan.fetch_rows(conn, range_, AGENT_ID)
 
     total_in = sum(row["input_tokens"] for row in rows)
     total_out = sum(row["output_tokens"] for row in rows)

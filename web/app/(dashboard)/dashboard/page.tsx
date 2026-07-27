@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import CliUsage from "@/components/CliUsage";
+import AgentUsage from "@/components/AgentUsage";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
 import ActivityFeed from "@/components/dashboard/ActivityFeed";
@@ -63,7 +63,7 @@ export default function DashboardPage() {
             <BriefingCard />
             <QuickLinks />
             <TokenUsage />
-            <CliUsage />
+            <AgentUsage />
             <ActivityFeed />
             <InsightsChart />
           </div>

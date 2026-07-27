@@ -34,6 +34,16 @@ def connect(token: str) -> None:
     keyring.set_password(KEYRING_SERVICE, KEYRING_USER, token.strip())
 
 
+def disconnect() -> None:
+    """Forget the stored token. Best-effort — already-absent is success."""
+    try:
+        import keyring
+
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
+    except Exception:  # noqa: BLE001 - already gone, or the keyring is unusable
+        pass
+
+
 def list_tasks(api=None) -> list[TaskItem]:
     """Open Todoist tasks mapped to Argus's task shape; [] when unconfigured."""
     if api is None:
