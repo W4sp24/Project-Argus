@@ -175,6 +175,30 @@ tests/          pytest suite
 docs/           specs, build state, decision log, phase plans
 ```
 
+Inside `backend/`, the three root modules wire everything together and the
+packages below them are layered:
+
+```
+main.py       app factory — mounts one router per feature, defines /health
+cli.py        the `argus` console script
+scheduler.py  the 07:00 briefing and nightly task-cache jobs
+
+core/         settings, model registry, sqlite, nothing feature-specific
+vault/        the single write path (I1), its readers, and the privacy policy
+telemetry/    token usage and the prompt audit trail
+agent/        provider adapters, chat runtime, planner, MCP server
+rag/          extract -> chunk -> embed/store -> retrieve
+connectors/   Google Calendar, Todoist
+
+features/     one package per feature: briefing, insights, flashcards,
+              quick_links, review, study, tasks, system, notes, journal,
+              search, ingest, chat — each a router.py plus its own modules
+```
+
+The dependency rule is one-way: a feature may import any package above it,
+nothing above may import a feature, and no feature imports another. Only the
+three root modules know about features at all.
+
 ## Coding-agent dev loop (optional)
 
 The `claude-integration/` folder journals your Claude Code sessions into the vault's
