@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import backend
 from backend.vault import writer
 from backend.vault.writer import (
     WriterConflict,
@@ -17,7 +18,10 @@ from backend.vault.writer import (
     guard_user_path,
 )
 
-BACKEND = Path(__file__).resolve().parent.parent / "backend"
+# Resolved through the package itself, not by walking up from __file__: this
+# test has moved once already, and a stale relative path makes the I1 proof
+# below glob nothing and pass vacuously.
+BACKEND = Path(backend.__file__).resolve().parent
 
 
 def _git(vault: Path, *args: str) -> str:
