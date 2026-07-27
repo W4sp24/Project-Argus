@@ -61,8 +61,12 @@ dev = [
 [project.scripts]
 argus = "backend.cli:main"
 
-[tool.setuptools]
-packages = ["backend"]
+# `packages = ["backend"]` would list only the top-level package: every
+# subpackage (backend.agent, backend.rag, backend.core, backend.features, ...)
+# would be missing from a built wheel. Editable installs and PyInstaller's
+# collect_submodules("backend") both hid that, so it went unnoticed.
+[tool.setuptools.packages.find]
+include = ["backend*"]
 
 [tool.ruff]
 line-length = 100
