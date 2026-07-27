@@ -24,7 +24,7 @@ import json
 from typing import Any
 
 from backend.agent.adapters import ToolSpec, flatten_tool_result
-from backend.config import Settings
+from backend.core.config import Settings
 
 SERVER_NAME = "argus"
 

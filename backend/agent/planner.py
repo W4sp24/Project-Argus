@@ -20,11 +20,11 @@ from backend.agent.adapters import (
     resolve_adapter,
     text_result,
 )
-from backend.audit import log_prompt_conn
-from backend.config import Settings
-from backend.db import connect, init_schema
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
 from backend.suggestions import dismissal_feedback
 from backend.tasks.parser import bucketed_tasks, refresh_cache
+from backend.telemetry.audit import log_prompt_conn
 
 MODEL = "claude-opus-4-8"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "planner.md"
@@ -187,7 +187,7 @@ async def run_planner(settings: Settings, instruction: str, model: str | None = 
     ``model`` names a registry entry (§7); omitting it keeps the historical
     Claude Code path, so existing callers are unaffected.
     """
-    from backend.usage import record_result_usage
+    from backend.telemetry.usage import record_result_usage
 
     conn = connect(settings.db_path)
     init_schema(conn)

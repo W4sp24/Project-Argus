@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.config import Settings
-from backend.db import connect, init_schema
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
 from backend.flashcards import due_cards, generate_deck, grade_card, parse_qa_pairs
 from backend.main import create_app
 

@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from backend.activity import recent_activity
-from backend.config import Settings
-from backend.db import connect, init_schema
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
 
 
 @pytest.fixture()

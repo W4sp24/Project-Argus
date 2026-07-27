@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.db import connect, init_schema
+from backend.core.db import connect, init_schema
 from backend.suggestions import dismiss, dismissal_feedback, get, insert_suggestion, pending
-from backend.writer import WriterError, apply_suggestion
+from backend.vault.writer import WriterError, apply_suggestion
 
 
 def _git_log(vault: Path) -> str:

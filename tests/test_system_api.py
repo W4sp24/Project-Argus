@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.agent.adapters import ProbeResult
-from backend.config import Settings
+from backend.core.config import Settings
 from backend.main import create_app
 
 
@@ -370,7 +370,7 @@ def test_chat_agent_model_resolution(vault: Path) -> None:
     removes, so the test now pins the routing that took its place.
     """
     from backend.agent.runtime import MODEL, ChatAgent
-    from backend.config import save_user_models
+    from backend.core.model_registry import save_user_models
 
     settings = Settings(_vault_path=vault)
     agent = ChatAgent(settings)
@@ -407,7 +407,7 @@ def test_chat_agent_builds_the_right_adapter_per_provider(vault: Path) -> None:
     from backend.agent.anthropic_api import AnthropicAPIAdapter
     from backend.agent.credentials import KEYRING_SERVICE
     from backend.agent.openai_compat import OpenAICompatAdapter
-    from backend.config import save_user_models
+    from backend.core.model_registry import save_user_models
 
     settings = Settings(_vault_path=vault)
     save_user_models(
@@ -446,7 +446,7 @@ def test_chat_agent_builds_the_right_adapter_per_provider(vault: Path) -> None:
 
 def test_anthropic_api_model_without_a_stored_key_fails_readably(vault: Path) -> None:
     from backend.agent.adapters import AgentError, resolve_adapter
-    from backend.config import save_user_models
+    from backend.core.model_registry import save_user_models
 
     settings = Settings(_vault_path=vault)
     save_user_models(

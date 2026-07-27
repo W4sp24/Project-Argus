@@ -191,7 +191,7 @@ async def generate_practice_exam(
     if not corpus:
         raise StudyError(f"no indexed material for course {course} — upload to materials/ first")
 
-    from backend.audit import log_prompt_conn
+    from backend.telemetry.audit import log_prompt_conn
 
     log_prompt_conn(
         conn,

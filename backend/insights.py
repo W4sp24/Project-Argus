@@ -16,10 +16,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from backend.config import Settings
 from backend.connectors import gcal
-from backend.rag.paths import EXCLUDED_TOP_DIRS
+from backend.core.config import Settings
 from backend.tasks.parser import refresh_cache
+from backend.vault.paths import EXCLUDED_TOP_DIRS
 
 DONE_DATE_RE = re.compile(r"✅\s*(\d{4}-\d{2}-\d{2})")
 TREND_DAYS = 14

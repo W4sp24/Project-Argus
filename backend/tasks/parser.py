@@ -15,7 +15,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from backend.rag.paths import EXCLUDED_TOP_DIRS
+from backend.vault.paths import EXCLUDED_TOP_DIRS
 
 CHECKBOX_RE = re.compile(r"^\s*[-*]\s+\[( |x|X)\]\s+(.*)$")
 DUE_RE = re.compile(r"(?:📅|🗓)\s*(\d{4}-\d{2}-\d{2})|\[due:\s*(\d{4}-\d{2}-\d{2})\]")

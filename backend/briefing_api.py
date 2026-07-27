@@ -8,12 +8,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.activity import ActivityEvent, recent_activity
-from backend.audit import AuditEntry, recent
 from backend.briefing import Composer, compose_briefing
-from backend.config import Settings
-from backend.db import connect, init_schema
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
 from backend.insights import HeatmapResponse, InsightsSummary, heatmap_summary, insights_summary
-from backend.writer import BRIEFING_HEADING, write_briefing
+from backend.telemetry.audit import AuditEntry, recent
+from backend.vault.writer import BRIEFING_HEADING, write_briefing
 
 
 class BriefingResponse(BaseModel):

@@ -4,10 +4,10 @@ Claude Code persists every session as a JSONL transcript under
 ``~/.claude/projects/<project-dir>/<session-uuid>.jsonl``. Every ``"assistant"``
 line carries a ``message.usage`` object (input/output/cache tokens) and
 ``message.model`` — this is the only local source of real, account-wide Claude
-token consumption, distinct from :mod:`backend.usage` (which only sees tokens
+token consumption, distinct from :mod:`backend.telemetry.usage` (which only sees tokens
 spent by Argus's own chat/planner/study-generate calls).
 
-Parsing is best-effort throughout (like :mod:`backend.usage`): a missing
+Parsing is best-effort throughout (like :mod:`backend.telemetry.usage`): a missing
 ``~/.claude`` directory, a malformed line, or an unreadable file must never
 raise — it just yields nothing for that file. Background subagent transcripts
 (nested ``<session>/subagents/agent-*.jsonl`` files) are intentionally excluded
@@ -31,7 +31,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from backend.config import FALLBACK_RATE, MODEL_RATES
+from backend.core.model_registry import FALLBACK_RATE, MODEL_RATES
 
 DEFAULT_CLAUDE_HOME = Path.home() / ".claude" / "projects"
 
@@ -63,7 +63,7 @@ class CliUsageReport(BaseModel):
 
     ``today`` = current calendar day, ``week`` = rolling 7 days (day-bucketed
     series), ``all`` = full local history (week-bucketed series) — distinct
-    from :class:`backend.usage.Range`, since CLI transcripts have no
+    from :class:`backend.telemetry.usage.Range`, since CLI transcripts have no
     "backend process boot" concept to map a ``session`` range onto.
     """
 

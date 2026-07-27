@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.config import Settings
+from backend.core.config import Settings
 from backend.main import create_app
 
 STUB = """---

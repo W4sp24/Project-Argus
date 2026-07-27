@@ -7,7 +7,7 @@ import pytest
 
 from backend.rag.chunk import chunk_blocks
 from backend.rag.extract import Block, extract_blocks
-from backend.rag.paths import is_indexable
+from backend.vault.paths import is_indexable
 
 MINIMAL_PDF = b"""%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj

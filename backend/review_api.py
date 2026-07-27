@@ -9,10 +9,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend import suggestions as queue
-from backend.config import Settings
-from backend.db import connect, init_schema
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
 from backend.suggestions import Suggestion
-from backend.writer import WriterError, apply_suggestion
+from backend.vault.writer import WriterError, apply_suggestion
 
 PlannerRunner = Callable[[Settings, str], Awaitable[int]]
 

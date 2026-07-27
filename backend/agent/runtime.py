@@ -25,10 +25,10 @@ from backend.agent.adapters import (
     resolve_adapter,
     text_result,
 )
-from backend.audit import log_prompt
-from backend.config import Settings
+from backend.core.config import Settings
 from backend.rag.index import VaultIndex
-from backend.rag.paths import is_indexable
+from backend.telemetry.audit import log_prompt
+from backend.vault.paths import is_indexable
 
 MODEL = "claude-opus-4-8"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "chat.md"
@@ -123,7 +123,7 @@ def build_vault_tools(
         return _tool_text(file_path.read_text(encoding="utf-8", errors="ignore")[:MAX_NOTE_CHARS])
 
     async def list_tasks(_args: dict[str, Any]) -> dict[str, Any]:
-        from backend.db import connect, init_schema
+        from backend.core.db import connect, init_schema
         from backend.tasks.parser import bucketed_tasks, refresh_cache
 
         conn = connect(settings.db_path)
@@ -218,7 +218,7 @@ class ChatAgent:
 
     async def stream_chat(self, message: str, model: str | None = None) -> AsyncIterator[str]:
         """Yield text deltas for one user message, on whichever backend is chosen."""
-        from backend.usage import record_result_usage
+        from backend.telemetry.usage import record_result_usage
 
         resolved_model = self._resolve_model(model)
         adapter = resolve_adapter(

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.db import connect, init_schema
+from backend.core.db import connect, init_schema
 from backend.quick_links import (
     QuickLinksError,
     create_link,

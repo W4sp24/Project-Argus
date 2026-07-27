@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from backend.config import Settings
+from backend.core.config import Settings
 
 SNIPPET_CHARS = 500
 

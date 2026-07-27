@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.db import connect, init_schema
+from backend.core.db import connect, init_schema
 from backend.study.grader import grade_attempt
 from backend.study.practice_exam import build_exam, render_exam_md, render_key_md
 from backend.study.syllabus import parse_syllabus

@@ -25,7 +25,7 @@ class AuditEntry(BaseModel):
 def log_prompt(db_path: Path, entry_point: str, model: str, paths: list[str]) -> None:
     """Record one prompt's vault-path list. Swallows all errors."""
     try:
-        from backend.db import connect, init_schema
+        from backend.core.db import connect, init_schema
 
         conn = connect(db_path)
         try:

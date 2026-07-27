@@ -6,9 +6,9 @@ import sqlite3
 
 from pydantic import BaseModel
 
-from backend.config import Settings
-from backend.notes import list_notes
-from backend.rag.paths import EXCLUDED_TOP_DIRS
+from backend.core.config import Settings
+from backend.vault.notes import list_notes
+from backend.vault.paths import EXCLUDED_TOP_DIRS
 
 
 class ActivityEvent(BaseModel):

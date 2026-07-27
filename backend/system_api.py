@@ -6,7 +6,7 @@ sibling ``/usage/cli`` endpoint aggregates account-wide Claude Code CLI usage
 parsed from local ``~/.claude/projects/**/*.jsonl`` transcripts — a distinct
 data source, intentionally not combined into one grand total.
 
-The model registry serves built-ins from :mod:`backend.config` plus user-added
+The model registry serves built-ins from :mod:`backend.core.model_registry` plus user-added
 models persisted in ``.argus/models.json`` — never the vault, and never an API
 key (I4): keys live in the OS keyring and only ``has_key: bool`` is ever
 returned. Registering a non-Claude model runs a live tool-calling probe first,
@@ -27,7 +27,6 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend import cli_usage
 from backend.agent import model_catalog
 from backend.agent.adapters import (
     KNOWN_PROVIDERS,
@@ -42,16 +41,17 @@ from backend.agent.adapters import (
 )
 from backend.agent.credentials import CredentialError, delete_key, has_key, key_ref_for, store_key
 from backend.agent.hardware import HardwareProfile, detect, ollama_base_url, ollama_models_dir
-from backend.config import (
-    Settings,
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
+from backend.core.model_registry import (
     load_model_prefs,
     load_user_models,
     save_model_prefs,
     save_user_models,
 )
-from backend.db import connect, init_schema
 from backend.doctor import Check, run_checks
-from backend.usage import Range, UsageReport, usage_report
+from backend.telemetry import claude_cli
+from backend.telemetry.usage import Range, UsageReport, usage_report
 
 MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
@@ -237,11 +237,11 @@ def build_system_router(
         finally:
             conn.close()
 
-    @router.get("/usage/cli", response_model=cli_usage.CliUsageReport)
-    def usage_cli(range: cli_usage.CliRange = "today") -> cli_usage.CliUsageReport:  # noqa: A002
+    @router.get("/usage/cli", response_model=claude_cli.CliUsageReport)
+    def usage_cli(range: claude_cli.CliRange = "today") -> claude_cli.CliUsageReport:  # noqa: A002
         conn = db()
         try:
-            return cli_usage.cli_usage_report(conn, range, root=cli_usage.DEFAULT_CLAUDE_HOME)
+            return claude_cli.cli_usage_report(conn, range, root=claude_cli.DEFAULT_CLAUDE_HOME)
         finally:
             conn.close()
 

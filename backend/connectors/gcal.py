@@ -84,7 +84,7 @@ def _service():
 
 
 def insert_event(title: str, start: str, end: str, service=None) -> None:
-    """Insert one Argus block. Only ``backend.writer`` may call this (I1)."""
+    """Insert one Argus block. Only ``backend.vault.writer`` may call this (I1)."""
     service = service or _service()
     if service is None:
         raise RuntimeError("Google Calendar is not connected — run `argus connect gcal`")

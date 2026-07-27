@@ -1,6 +1,6 @@
 """Ingestion endpoints (redesign §11): file upload + manual email capture.
 
-Files land in the vault through :mod:`backend.writer` (snapshot-first, I1)
+Files land in the vault through :mod:`backend.vault.writer` (snapshot-first, I1)
 and are then indexed with the existing extract → chunk → embed pipeline.
 Email capture is manual by design — text is pasted or an ``.eml`` dropped;
 there is deliberately NO IMAP/Gmail sync here. Extractions become proposals
@@ -19,9 +19,9 @@ from fastapi import APIRouter, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from backend import suggestions as queue
-from backend.config import Settings
-from backend.db import connect, init_schema
-from backend.writer import (
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
+from backend.vault.writer import (
     INGEST_FILES_DIR,
     WriterError,
     WriterForbidden,

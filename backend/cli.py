@@ -18,7 +18,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from backend.config import DEFAULT_ENV_FILE, parse_env_file
+from backend.core.config import DEFAULT_ENV_FILE, parse_env_file
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "vault-template"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -203,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command in ("reindex", "watch"):
-        from backend.config import Settings
+        from backend.core.config import Settings
         from backend.rag.index import VaultIndex
 
         settings = Settings.load(args.env_file)
@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "doctor":
-        from backend.config import ConfigError, Settings
+        from backend.core.config import ConfigError, Settings
         from backend.doctor import run_checks
 
         settings = Settings.load(args.env_file)
@@ -261,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         import asyncio
 
         from backend.agent.mcp_server import serve_stdio
-        from backend.config import ConfigError, Settings
+        from backend.core.config import ConfigError, Settings
 
         settings = Settings.load(args.env_file)
         try:

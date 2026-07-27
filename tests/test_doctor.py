@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from backend.cli import main
-from backend.config import Settings
+from backend.core.config import Settings
 from backend.doctor import run_checks
 
 

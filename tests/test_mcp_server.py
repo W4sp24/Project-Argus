@@ -20,7 +20,7 @@ from backend.agent.mcp_server import (
     build_server,
     client_config_snippets,
 )
-from backend.config import Settings
+from backend.core.config import Settings
 
 
 @pytest.fixture()

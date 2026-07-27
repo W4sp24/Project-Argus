@@ -22,7 +22,7 @@ Three rules hold on every adapter:
   :mod:`backend.agent.mcp_server`).
 * **Usage logging is uniform.** Adapters emit :class:`UsageReported`, whose
   ``.usage`` mapping is exactly the shape
-  :func:`backend.usage.record_result_usage` already duck-types on.
+  :func:`backend.telemetry.usage.record_result_usage` already duck-types on.
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ class ToolUsed:
 class UsageReported:
     """Token accounting for one run.
 
-    :func:`backend.usage.record_result_usage` duck-types on a ``.usage``
+    :func:`backend.telemetry.usage.record_result_usage` duck-types on a ``.usage``
     attribute that is either a dict or has a ``__dict__``, so this class drops
     straight into every existing call site with no changes there.
     """

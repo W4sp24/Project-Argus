@@ -35,11 +35,11 @@ async def agent_generate(
     ``model`` there is nothing to look up, which is why it stays optional and
     every existing call site keeps working unchanged.
     """
-    from backend.usage import record_result_usage
+    from backend.telemetry.usage import record_result_usage
 
     resolved_settings = settings
     if model and resolved_settings is None:
-        from backend.config import Settings
+        from backend.core.config import Settings
 
         resolved_settings = Settings.load()
 

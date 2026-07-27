@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.config import Settings
 from backend.connectors.gcal import CalendarEvent
+from backend.core.config import Settings
 from backend.main import create_app
 from backend.tasks.parser import TaskItem
 
@@ -87,7 +87,7 @@ def test_capture_goes_through_writer_only(
     response = client.post("/api/capture", json={"text": "capture through writer"})
 
     assert response.status_code == 200
-    assert calls == ["capture through writer"], "capture must route through backend.writer"
+    assert calls == ["capture through writer"], "capture must route through backend.vault.writer"
     captured = vault / response.json()["path"]
     assert "capture through writer" in captured.read_text(encoding="utf-8")
 

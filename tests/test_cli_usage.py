@@ -6,16 +6,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import cli_usage
-from backend.cli_usage import (
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
+from backend.main import create_app
+from backend.telemetry import claude_cli
+from backend.telemetry.claude_cli import (
     cli_usage_report,
     parse_transcript,
     scan_projects,
     sync_cli_usage,
 )
-from backend.config import Settings
-from backend.db import connect, init_schema
-from backend.main import create_app
 
 
 def _assistant_line(ts: str, model: str, in_tok: int, out_tok: int, **extra_usage) -> str:
@@ -176,7 +176,7 @@ def test_usage_cli_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         _assistant_line("2026-07-15T09:00:00.000Z", "claude-sonnet-5", 100, 40) + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(cli_usage, "DEFAULT_CLAUDE_HOME", fake_root)
+    monkeypatch.setattr(claude_cli, "DEFAULT_CLAUDE_HOME", fake_root)
 
     vault = tmp_path / "vault"
     vault.mkdir()

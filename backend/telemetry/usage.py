@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from backend.config import MODEL_RATES, ZERO_RATE
+from backend.core.model_registry import MODEL_RATES, ZERO_RATE
 
 SESSION_ID = uuid.uuid4().hex  # one per backend process boot
 
@@ -59,7 +59,7 @@ class UsageReport(BaseModel):
     per-week for ``all``. ``total_tokens`` sums input + output + cache-creation
     + cache-read, matching Anthropic's own per-call accounting.
     ``estimated_cost_usd`` uses the static per-model rate table in
-    :mod:`backend.config` — an estimate, not a bill. Models absent from that
+    :mod:`backend.core.model_registry` — an estimate, not a bill. Models absent from that
     table (a local Ollama model, or a hosted provider whose prices Argus does
     not track) contribute **zero** and are named in ``unpriced_models``, so the
     figure is never inflated by pricing someone's free local model at Claude
@@ -91,10 +91,10 @@ def record_usage(
     """Insert one usage row. Swallows every error (fire-and-forget)."""
     try:
         if db_path is None:  # call sites without Settings (generate/composer)
-            from backend.config import Settings
+            from backend.core.config import Settings
 
             db_path = Settings.load().db_path
-        from backend.db import connect, init_schema
+        from backend.core.db import connect, init_schema
 
         conn = connect(db_path)
         try:

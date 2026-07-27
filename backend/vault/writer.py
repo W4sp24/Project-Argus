@@ -19,8 +19,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from backend import suggestions as suggestion_queue
-from backend.rag.paths import EXCLUDED_TOP_DIRS
 from backend.suggestions import Suggestion
+from backend.vault.paths import EXCLUDED_TOP_DIRS
 
 INBOX_DIR = "00-Inbox"
 DAILY_DIR = "10-Daily"

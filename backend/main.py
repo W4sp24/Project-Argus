@@ -14,8 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from backend.config import ConfigError, Settings
-from backend.journal import (
+from backend.core.config import ConfigError, Settings
+from backend.vault.journal import (
     JournalNote,
     JournalPathError,
     JournalProject,
@@ -24,7 +24,7 @@ from backend.journal import (
     list_sessions,
     read_note,
 )
-from backend.notes import NoteInfo, list_notes
+from backend.vault.notes import NoteInfo, list_notes
 
 DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
@@ -270,7 +270,7 @@ def create_app(
 
 def _production_scheduler(settings: Settings):
     from backend.briefing import agent_composer
-    from backend.scheduler import build_scheduler
+    from backend.core.scheduler import build_scheduler
 
     return build_scheduler(settings, composer=agent_composer)
 

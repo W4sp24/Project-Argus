@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.db import connect, init_schema
+from backend.core.db import connect, init_schema
 from backend.tasks.parser import bucketed_tasks, parse_task_line, refresh_cache
 
 TODAY = date(2026, 7, 12)

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from backend.agent.runtime import ChatAgent, build_vault_tools
-from backend.config import Settings
+from backend.core.config import Settings
 
 
 class FakeIndex:

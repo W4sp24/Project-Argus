@@ -10,7 +10,7 @@ import uuid
 
 from pydantic import BaseModel
 
-from backend.config import Settings
+from backend.core.config import Settings
 
 REQUIRED_TABLES = {
     "suggestions",
@@ -53,7 +53,7 @@ def _check_vault(settings: Settings) -> list[Check]:
 
 def _check_database(settings: Settings) -> Check:
     try:
-        from backend.db import connect, init_schema
+        from backend.core.db import connect, init_schema
 
         conn = connect(settings.db_path)
         try:

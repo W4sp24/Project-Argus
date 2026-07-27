@@ -1,16 +1,11 @@
-"""Tests for backend.config settings loading and the model registry."""
+"""Tests for backend.core.config settings loading and the model registry."""
 
 from pathlib import Path
 
 import pytest
 
-from backend.config import (
-    DEFAULT_MODELS,
-    ConfigError,
-    Settings,
-    save_model_prefs,
-    save_user_models,
-)
+from backend.core.config import ConfigError, Settings
+from backend.core.model_registry import DEFAULT_MODELS, save_model_prefs, save_user_models
 
 
 def test_load_reads_vault_path_and_derives_db_path(tmp_path: Path) -> None:

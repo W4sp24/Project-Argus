@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.config import Settings
+from backend.core.config import Settings
 from backend.main import create_app
-from backend.writer import write_briefing
+from backend.vault.writer import write_briefing
 
 TODAY = date.today().isoformat()
 
@@ -90,7 +90,7 @@ def test_briefing_get_404_before_first_run(client: TestClient) -> None:
 
 
 def test_build_scheduler_registers_jobs_without_starting() -> None:
-    from backend.scheduler import build_scheduler
+    from backend.core.scheduler import build_scheduler
 
     scheduler = build_scheduler(Settings(_vault_path=Path("unused")))
     jobs = {job.id for job in scheduler.get_jobs()}

@@ -1,7 +1,7 @@
 """The suggestion queue: everything the agent wants to change, awaiting a click.
 
 Rows are inserted by propose_* tools (and syllabus import) and only ever
-executed by ``backend.writer.apply_suggestion`` after approval (I1).
+executed by ``backend.vault.writer.apply_suggestion`` after approval (I1).
 """
 
 from __future__ import annotations

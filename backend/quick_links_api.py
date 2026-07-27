@@ -12,8 +12,8 @@ import sqlite3
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.config import Settings
-from backend.db import connect, init_schema
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
 from backend.quick_links import (
     QuickLinksError,
     create_link,

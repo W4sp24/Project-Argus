@@ -13,8 +13,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend.config import Settings
-from backend.db import connect, init_schema
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
 from backend.study.corpus import CourseInfo, course_corpus, courses
 from backend.study.grader import AttemptResult, grade_attempt, load_exam
 from backend.study.practice_exam import (

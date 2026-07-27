@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.db import connect, init_schema
+from backend.core.db import connect, init_schema
 
 
 def test_connect_creates_parent_dirs_and_enables_wal(tmp_path: Path) -> None:

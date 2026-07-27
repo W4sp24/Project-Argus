@@ -17,9 +17,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from backend.config import Settings
 from backend.connectors import gcal
 from backend.connectors.gcal import CalendarEvent
+from backend.core.config import Settings
 from backend.tasks.parser import TaskItem, bucketed_tasks, parse_task_line, refresh_cache
 
 EXAM_RE = re.compile(r"\b(exam|quiz|midterm|final)\b", re.IGNORECASE)
@@ -155,7 +155,7 @@ def compose_briefing(
     resolved_today = today or date.today()
     data = briefing_data(settings, conn, resolved_today)
     if composer is not None:
-        from backend.audit import log_prompt_conn
+        from backend.telemetry.audit import log_prompt_conn
 
         yesterday_note = f"10-Daily/{(resolved_today - timedelta(days=1)).isoformat()}.md"
         queue_paths = [

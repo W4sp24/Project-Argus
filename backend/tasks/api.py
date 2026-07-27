@@ -8,12 +8,12 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.config import Settings
 from backend.connectors import gcal, todoist
 from backend.connectors.gcal import CalendarEvent
-from backend.db import connect, init_schema
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
 from backend.tasks.parser import TaskItem, bucket_of, bucketed_tasks, refresh_cache
-from backend.writer import WriterError, append_capture
+from backend.vault.writer import WriterError, append_capture
 
 
 class AgendaResponse(BaseModel):

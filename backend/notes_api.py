@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
-from typing import NoReturn
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend import writer
-from backend.config import Settings
-from backend.writer import (
-    WriterConflict,
-    WriterError,
-    WriterExists,
-    WriterForbidden,
-    WriterMissing,
-    guard_user_path,
-)
+from backend.core.config import Settings
+from backend.vault import writer
+from backend.vault.errors import raise_http
+from backend.vault.writer import WriterConflict, WriterError, guard_user_path
 
 
 class NoteContent(BaseModel):
@@ -49,19 +41,6 @@ class NewLine(BaseModel):
     new_line: str
 
 
-def _raise_http(exc: WriterError, current_content: str | None = None) -> NoReturn:
-    if isinstance(exc, WriterForbidden):
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    if isinstance(exc, WriterMissing):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, WriterExists):
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if isinstance(exc, WriterConflict):
-        detail: object = {"message": str(exc), "current_content": current_content}
-        raise HTTPException(status_code=409, detail=detail) from exc
-    raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
 def build_notes_router(settings: Settings) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -70,7 +49,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
         try:
             resolved = guard_user_path(settings.vault_path, path)
         except WriterError as exc:
-            _raise_http(exc)
+            raise_http(exc)
         if not resolved.is_file():
             raise HTTPException(status_code=404, detail=f"{path} does not exist")
         return NoteContent(path=path, content=resolved.read_text(encoding="utf-8"))
@@ -80,7 +59,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
         try:
             rel_path = writer.create_note(settings.vault_path, request.path, request.content)
         except WriterError as exc:
-            _raise_http(exc)
+            raise_http(exc)
         return NoteContent(path=rel_path, content=request.content)
 
     @router.put("/note", response_model=NoteContent)
@@ -93,9 +72,9 @@ def build_notes_router(settings: Settings) -> APIRouter:
             current = guard_user_path(settings.vault_path, request.path).read_text(
                 encoding="utf-8"
             )
-            _raise_http(exc, current_content=current)
+            raise_http(exc, current_content=current)
         except WriterError as exc:
-            _raise_http(exc)
+            raise_http(exc)
         return NoteContent(path=request.path, content=request.new_content)
 
     @router.delete("/note")
@@ -103,7 +82,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
         try:
             writer.delete_note(settings.vault_path, path)
         except WriterError as exc:
-            _raise_http(exc)
+            raise_http(exc)
         return {"path": path}
 
     @router.post("/tasks/toggle", response_model=NewLine)
@@ -113,7 +92,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
                 settings.vault_path, request.path, request.line, request.old_line
             )
         except WriterError as exc:
-            _raise_http(exc)
+            raise_http(exc)
         return NewLine(new_line=new_line)
 
     @router.post("/tasks/line/update", response_model=NewLine)
@@ -123,7 +102,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
                 settings.vault_path, request.path, request.line, request.old_line, request.new_line
             )
         except WriterError as exc:
-            _raise_http(exc)
+            raise_http(exc)
         return NewLine(new_line=new_line)
 
     @router.post("/tasks/line/delete")
@@ -133,7 +112,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
                 settings.vault_path, request.path, request.line, request.old_line
             )
         except WriterError as exc:
-            _raise_http(exc)
+            raise_http(exc)
         return {"ok": True}
 
     return router

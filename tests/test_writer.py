@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from backend import writer
-from backend.writer import (
+from backend.vault import writer
+from backend.vault.writer import (
     WriterConflict,
     WriterError,
     WriterExists,
