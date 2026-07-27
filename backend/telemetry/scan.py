@@ -75,12 +75,14 @@ def sync_rows(
         )
     }
     inserted = 0
+    seen: set[str] = set()
     for file_path in files:
         try:
             stat = file_path.stat()
         except OSError:
             continue
         key = str(file_path)
+        seen.add(key)
         stamp = (stat.st_mtime_ns, stat.st_size)
         if known.get(key) == stamp:
             continue  # unchanged — skip entirely
@@ -107,12 +109,43 @@ def sync_rows(
         inserted += len(rows)
         conn.execute(
             "INSERT INTO cli_usage_files (path, agent, mtime_ns, size) VALUES (?, ?, ?, ?)"
-            " ON CONFLICT(path) DO UPDATE SET agent=excluded.agent, mtime_ns=excluded.mtime_ns,"
+            " ON CONFLICT(path, agent) DO UPDATE SET mtime_ns=excluded.mtime_ns,"
             " size=excluded.size, scanned_at=datetime('now')",
             (key, agent, stat.st_mtime_ns, stat.st_size),
         )
+
+    _reap(conn, agent, known.keys() - seen, bool(seen))
     conn.commit()
     return inserted
+
+
+def _reap(
+    conn: sqlite3.Connection, agent: str, vanished: set[str] | Iterable[str], saw_any: bool
+) -> None:
+    """Drop rows for transcripts that are no longer on disk.
+
+    Agent CLIs rotate and clean up old sessions, and without this their tokens
+    are counted forever — the totals only ever go up, and a usage panel that
+    permanently over-reports is worse than none. Measured on one real machine
+    before this existed: 7 deleted transcripts holding 447M tokens, a fifth of
+    the reported figure.
+
+    Reaping is skipped entirely when the scan saw *no* files. A missing root is
+    far more often a folder that is temporarily unreachable — an unplugged
+    drive, a path typo in a custom source — than a user who deleted every log,
+    and wiping real history on that guess is not recoverable. Under-reaping is.
+    """
+    gone = list(vanished)
+    if not gone or not saw_any:
+        return
+    conn.executemany(
+        "DELETE FROM cli_usage WHERE agent = ? AND file_path = ?",
+        [(agent, path) for path in gone],
+    )
+    conn.executemany(
+        "DELETE FROM cli_usage_files WHERE agent = ? AND path = ?",
+        [(agent, path) for path in gone],
+    )
 
 
 def _window(range_: CliRange) -> str:
@@ -170,6 +203,20 @@ def previous_total(
         params,
     ).fetchone()
     return int(row["total"])
+
+
+def purge_agent(conn: sqlite3.Connection, agent: str) -> int:
+    """Delete one agent's rows and its scan state. Returns rows removed.
+
+    Called when a user-registered source is deleted. Without it the rows would
+    outlive the thing that explains them: still counted in the combined total,
+    with nothing in the selector to attribute them to, so the parts would
+    visibly fail to add up to the whole.
+    """
+    removed = conn.execute("DELETE FROM cli_usage WHERE agent = ?", (agent,)).rowcount
+    conn.execute("DELETE FROM cli_usage_files WHERE agent = ?", (agent,))
+    conn.commit()
+    return max(0, removed)
 
 
 def row_total(row: sqlite3.Row | dict) -> int:

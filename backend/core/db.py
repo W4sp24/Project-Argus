@@ -72,12 +72,18 @@ CREATE TABLE IF NOT EXISTS token_usage (
     cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0
 );
 
+-- Keyed by (path, agent), not path alone: two sources legitimately read the
+-- same file. Claude Code's foreground and subagent sources share one projects
+-- directory, and a user-registered source may point anywhere. With `path` as
+-- the sole key each scan would evict the other's high-water mark and re-ingest
+-- everything forever.
 CREATE TABLE IF NOT EXISTS cli_usage_files (
-    path       TEXT PRIMARY KEY,
+    path       TEXT NOT NULL,
     agent      TEXT NOT NULL DEFAULT 'claude-code',
     mtime_ns   INTEGER NOT NULL,
     size       INTEGER NOT NULL,
-    scanned_at TEXT NOT NULL DEFAULT (datetime('now'))
+    scanned_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (path, agent)
 );
 
 CREATE TABLE IF NOT EXISTS cli_usage (
@@ -176,4 +182,37 @@ def init_schema(conn: sqlite3.Connection) -> None:
         )
     # Safe only now that the column is guaranteed to exist — see SCHEMA.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cli_usage_agent ON cli_usage(agent, ts)")
+    _migrate_scan_key(conn)
     conn.commit()
+
+
+def _migrate_scan_key(conn: sqlite3.Connection) -> None:
+    """Re-key ``cli_usage_files`` from ``path`` to ``(path, agent)``.
+
+    SQLite cannot alter a primary key, so this is the documented rebuild:
+    create, copy, drop, rename. Guarded on the *old* shape, so it runs at most
+    once and is a no-op on a database created from the current SCHEMA.
+
+    Rows carry over as-is. Everything scanned under the single-key schema
+    belonged to one agent, so no row can collide with another on the way in.
+    """
+    keys = [row for row in conn.execute("PRAGMA table_info(cli_usage_files)") if row["pk"]]
+    if {row["name"] for row in keys} == {"path", "agent"}:
+        return  # already re-keyed
+
+    conn.executescript(
+        """
+        CREATE TABLE cli_usage_files_new (
+            path       TEXT NOT NULL,
+            agent      TEXT NOT NULL DEFAULT 'claude-code',
+            mtime_ns   INTEGER NOT NULL,
+            size       INTEGER NOT NULL,
+            scanned_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (path, agent)
+        );
+        INSERT OR REPLACE INTO cli_usage_files_new (path, agent, mtime_ns, size, scanned_at)
+            SELECT path, agent, mtime_ns, size, scanned_at FROM cli_usage_files;
+        DROP TABLE cli_usage_files;
+        ALTER TABLE cli_usage_files_new RENAME TO cli_usage_files;
+        """
+    )

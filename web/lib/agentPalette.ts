@@ -17,14 +17,28 @@
 
 export const AGENT_COLORS: Record<string, string> = {
   "claude-code": "#e8845c", // warm coral
+  "claude-subagents": "#f0b354", // amber — same family as Claude Code, clearly apart
   codex: "#5eead4", // teal
 };
 
-/** Fallback for an agent added to the backend before it is styled here. */
-export const AGENT_FALLBACK_COLOR = "#9d8fc7";
+/**
+ * Colour for an agent the user registered.
+ *
+ * Hashed from the id rather than assigned on creation, so an agent keeps its
+ * colour across machines and across a delete-and-re-add, and nothing has to be
+ * stored to make that true. Saturation and lightness are fixed at values that
+ * read on `#0c0916`; only the hue varies.
+ */
+function hashedColor(id: string): string {
+  let hash = 0;
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31 + id.charCodeAt(index)) % 360;
+  }
+  return `hsl(${hash} 62% 63%)`;
+}
 
 export function agentColor(id: string): string {
-  return AGENT_COLORS[id] ?? AGENT_FALLBACK_COLOR;
+  return AGENT_COLORS[id] ?? hashedColor(id);
 }
 
 /** The four counters, most expensive per token first. */

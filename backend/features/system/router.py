@@ -8,8 +8,10 @@ data source, intentionally not combined into one grand total.
 
 ``/audit`` came over from the briefing router: it reports which vault files
 were sent to a model, never their text (I3), which is diagnostics, not
-briefing. The model registry lives next door in
-:mod:`backend.features.system.models` and is mounted here.
+briefing. Three registries live next door and are mounted here: models
+(:mod:`backend.features.system.models`), integrations
+(:mod:`backend.features.integrations.router`), and the multi-agent usage
+report (:mod:`backend.features.system.agent_usage`).
 """
 
 from __future__ import annotations
@@ -21,10 +23,10 @@ from fastapi import APIRouter
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.integrations.router import build_integrations_router
+from backend.features.system.agent_usage import build_agent_usage_router
 from backend.features.system.doctor import Check, run_checks
 from backend.features.system.models import Prober, Puller, build_models_router
-from backend.telemetry import claude_cli, scan
-from backend.telemetry.agents import registry as agent_registry
+from backend.telemetry import claude_cli
 from backend.telemetry.audit import AuditEntry, recent
 from backend.telemetry.usage import Range, UsageReport, usage_report
 
@@ -65,19 +67,6 @@ def build_system_router(
         finally:
             conn.close()
 
-    @router.get("/usage/agents", response_model=agent_registry.AgentsUsageReport)
-    def usage_agents(range: scan.CliRange = "today") -> agent_registry.AgentsUsageReport:  # noqa: A002
-        """Every local coding agent Argus can read, installed or not.
-
-        Undetected agents are reported with zeroes and an install hint rather
-        than omitted — a tab that disappears reads as a bug.
-        """
-        conn = db()
-        try:
-            return agent_registry.agents_report(conn, range)
-        finally:
-            conn.close()
-
     @router.get("/audit", response_model=list[AuditEntry])
     def audit_log() -> list[AuditEntry]:
         conn = db()
@@ -88,4 +77,5 @@ def build_system_router(
 
     router.include_router(build_models_router(settings, prober, puller))
     router.include_router(build_integrations_router(settings))
+    router.include_router(build_agent_usage_router(settings))
     return router

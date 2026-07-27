@@ -5,7 +5,7 @@ import Panel from "@/components/Panel";
 import UsageAreaChart from "@/components/charts/UsageAreaChart";
 import TokenComposition from "@/components/usage/TokenComposition";
 import { useUsage, type UsageRange } from "@/lib/api";
-import { compactTokens } from "@/lib/agentPalette";
+import { COUNTERS, compactTokens } from "@/lib/agentPalette";
 
 const VIEWS: UsageRange[] = ["session", "week", "all"];
 const VIEW_LABEL: Record<UsageRange, string> = { session: "SESSION", week: "WEEK", all: "ALL" };
@@ -95,10 +95,15 @@ export default function TokenUsage() {
           </div>
 
           <UsageAreaChart
-            points={(data?.series ?? []).map((point) => ({
-              ...point,
-              label: chartLabel(view, point.label),
+            series={COUNTERS.map((counter) => ({
+              key: counter.key,
+              label: counter.label,
+              color: "var(--ac)",
+              opacity: counter.opacity,
+              points: (data?.series ?? []).map((point) => point[counter.key] ?? 0),
             }))}
+            labels={(data?.series ?? []).map((point) => chartLabel(view, point.label))}
+            stacked
             className="mt-4 h-28"
           />
 

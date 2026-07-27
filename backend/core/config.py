@@ -85,6 +85,11 @@ class Settings:
         return self.db_path.parent / "model-prefs.json"
 
     @property
+    def agent_sources_file(self) -> Path:
+        """Where user-registered agent usage sources persist, beside ``models.json``."""
+        return self.db_path.parent / "agent-sources.json"
+
+    @property
     def mcp_servers_file(self) -> Path:
         """Where registered external MCP servers persist, beside ``models.json``."""
         return self.db_path.parent / "mcp-servers.json"

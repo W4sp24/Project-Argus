@@ -23,7 +23,6 @@ tracking byte offsets).
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -33,6 +32,7 @@ from pydantic import BaseModel
 
 from backend.core.model_registry import FALLBACK_RATE, MODEL_RATES
 from backend.telemetry import scan
+from backend.telemetry.formats import parse_claude_jsonl
 
 DEFAULT_CLAUDE_HOME = Path.home() / ".claude" / "projects"
 
@@ -40,8 +40,6 @@ DEFAULT_CLAUDE_HOME = Path.home() / ".claude" / "projects"
 AGENT_ID = "claude-code"
 
 CliRange = Literal["today", "week", "all"]
-
-_SYNTHETIC_MODEL = "<synthetic>"
 
 
 class CliModelUsage(BaseModel):
@@ -101,37 +99,13 @@ def parse_transcript(path: Path) -> Iterator[dict]:
     Skips non-assistant lines, malformed JSON, lines missing usage/model/
     timestamp, and the synthetic ``<synthetic>`` model placeholder. Never
     raises — an unreadable file just yields nothing.
+
+    The body now lives in :mod:`backend.telemetry.agents.formats` as the
+    ``claude-jsonl`` format, so a user-registered source can reuse it against
+    some other directory. This stays as the name the tests and older callers
+    already know.
     """
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-                if obj.get("type") != "assistant":
-                    continue
-                message = obj.get("message") or {}
-                usage = message.get("usage")
-                model = message.get("model")
-                ts = obj.get("timestamp")
-                if not usage or not model or not ts or model == _SYNTHETIC_MODEL:
-                    continue
-                yield {
-                    "ts": ts,
-                    "model": model,
-                    "input_tokens": int(usage.get("input_tokens") or 0),
-                    "output_tokens": int(usage.get("output_tokens") or 0),
-                    "cache_creation_input_tokens": int(
-                        usage.get("cache_creation_input_tokens") or 0
-                    ),
-                    "cache_read_input_tokens": int(usage.get("cache_read_input_tokens") or 0),
-                }
-    except OSError:
-        return
+    return parse_claude_jsonl(path)
 
 
 def sync_cli_usage(conn: sqlite3.Connection, root: Path = DEFAULT_CLAUDE_HOME) -> int:

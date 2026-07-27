@@ -340,6 +340,8 @@ export interface AgentUsage {
   /** Whether this agent is installed. False still carries zeroes, never an error. */
   detected: boolean;
   install_hint: string;
+  /** False for user-registered sources — only those can be deleted. */
+  builtin: boolean;
   input_tokens: number;
   output_tokens: number;
   cache_creation_input_tokens: number;
@@ -367,6 +369,58 @@ export interface AgentsUsageReport {
  */
 export function useAgentUsage(range: CliUsageRange) {
   return useSWR<AgentsUsageReport>(`/api/usage/agents?range=${range}`, fetcher);
+}
+
+export interface AgentScanResult {
+  ok: boolean;
+  detail: string;
+  format: string | null;
+  format_label: string | null;
+  glob: string;
+  files: number;
+  turns: number;
+  total_tokens: number;
+  models: string[];
+  first_ts: string | null;
+  last_ts: string | null;
+  /** True when the preview read only part of the matched files. */
+  sampled: boolean;
+  sample_paths: string[];
+}
+
+/**
+ * Look at a folder and report what is really in it, saving nothing — the
+ * add-agent equivalent of `testModel`. Omitting `glob` means "work it out".
+ */
+export function scanAgentFolder(body: { path: string; glob?: string }) {
+  return mutateJSON<AgentScanResult>("/api/usage/agents/scan", body);
+}
+
+export interface CustomAgentInfo {
+  id: string;
+  label: string;
+  path: string;
+  glob: string;
+  format: string;
+}
+
+/** Register a folder as a tracked agent. The backend re-scans before saving. */
+export function addCustomAgent(body: {
+  name: string;
+  path: string;
+  glob?: string;
+  format?: string;
+}) {
+  return mutateJSON<CustomAgentInfo>("/api/usage/agents/custom", body);
+}
+
+/** Remove a custom agent and purge every usage row that belonged to it. */
+export function deleteCustomAgent(id: string) {
+  return mutateJSON<{ status: string; id: string; rows_removed: number }>(
+    `/api/usage/agents/custom/${encodeURIComponent(id)}`,
+    undefined,
+    "DELETE",
+  );
 }
 
 /** `needs-credentials`: a prerequisite file is missing, not just the consent. */

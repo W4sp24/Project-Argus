@@ -257,6 +257,29 @@ def main() -> int:
         status, _ = _get(port, "/api/usage/cli?range=today")
         result.check("GET /api/usage/cli", status == 200, f"HTTP {status}")
 
+        # Routes added after the first frozen build shipped. A stale
+        # resources/backend answers 200 on everything above and 404 here, which
+        # is exactly how the packaged app came to pair a current dashboard with
+        # a day-old backend and show an empty usage panel. Every router mounted
+        # under the system router gets a check so that mismatch fails the build
+        # instead of reaching someone's install.
+        status, body = _get(port, "/api/usage/agents?range=today", limit=20_000)
+        result.check("GET /api/usage/agents", status == 200, f"HTTP {status}")
+        if status == 200:
+            try:
+                agents = [a["id"] for a in (json.loads(body).get("agents") or [])]
+            except (json.JSONDecodeError, TypeError, KeyError):
+                agents = []
+            for name in ("claude-code", "claude-subagents", "codex"):
+                present = name in agents
+                result.check(f"  agents:{name}", present, "present" if present else "MISSING")
+
+        status, _ = _get(port, "/api/usage/agents/formats")
+        result.check("GET /api/usage/agents/formats", status == 200, f"HTTP {status}")
+
+        status, _ = _get(port, "/api/integrations")
+        result.check("GET /api/integrations", status == 200, f"HTTP {status}")
+
         # The model registry, and behind it the hardware probe. Worth its own
         # check because backend/agent/hardware.py reaches for ctypes
         # (GlobalMemoryStatusEx) and subprocess (nvidia-smi) -- exactly the

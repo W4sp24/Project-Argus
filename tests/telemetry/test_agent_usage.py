@@ -116,9 +116,10 @@ def test_agents_report_lists_every_source_even_when_absent(tmp_path: Path, conn,
     report = registry.agents_report(conn, "today")
 
     ids = [agent.id for agent in report.agents]
-    assert ids == ["claude-code", "codex"]
+    assert ids == ["claude-code", "claude-subagents", "codex"]
     assert all(not agent.detected for agent in report.agents)
     assert all(agent.install_hint for agent in report.agents)
+    assert all(agent.builtin for agent in report.agents)
     assert report.combined.total_tokens == 0
 
 
@@ -140,6 +141,38 @@ def test_agents_report_splits_and_combines(tmp_path: Path, conn, monkeypatch) ->
     assert by_id["claude-code"].estimated_cost_usd == pytest.approx(4.5, rel=1e-3)
     assert by_id["codex"].estimated_cost_usd == pytest.approx(0.45, rel=1e-3)
     assert report.combined.estimated_cost_usd == pytest.approx(4.95, rel=1e-3)
+
+
+def test_combined_view_merges_a_model_seen_under_two_agents(
+    tmp_path: Path, conn, monkeypatch
+) -> None:
+    """One row per model, not one per (agent, model) — and unique React keys."""
+    monkeypatch.setattr(claude_cli, "DEFAULT_CLAUDE_HOME", tmp_path / "no-claude")
+    monkeypatch.setattr(CodexSource, "root", lambda self: tmp_path / "no-codex")
+
+    _seed(conn, "claude-code", "claude-sonnet-5", 1_000_000, 100_000)
+    _seed(conn, "claude-subagents", "claude-sonnet-5", 500_000, 50_000)
+
+    combined = registry.agents_report(conn, "today", None).combined
+    assert [m.model for m in combined.models] == ["claude-sonnet-5"]
+    assert combined.models[0].total_tokens == 1_650_000
+    # Both slices are Anthropic-priced, so the merged cost is the sum of both.
+    assert combined.models[0].estimated_cost_usd == pytest.approx(6.75, rel=1e-3)
+    assert combined.models[0].unpriced is False
+
+
+def test_a_partially_priced_model_is_still_named_as_incomplete(
+    tmp_path: Path, conn, monkeypatch
+) -> None:
+    monkeypatch.setattr(claude_cli, "DEFAULT_CLAUDE_HOME", tmp_path / "no-claude")
+    monkeypatch.setattr(CodexSource, "root", lambda self: tmp_path / "no-codex")
+
+    _seed(conn, "claude-code", "claude-sonnet-5", 1_000_000, 100_000)
+    _seed(conn, "codex", "claude-sonnet-5", 1_000_000, 100_000)  # no Codex rate for it
+
+    combined = registry.agents_report(conn, "today", None).combined
+    assert combined.models[0].estimated_cost_usd == pytest.approx(4.5, rel=1e-3)
+    assert "claude-sonnet-5" in combined.unpriced_models, "a partial figure must say so"
 
 
 def test_unknown_codex_model_is_named_not_guessed(tmp_path: Path, conn, monkeypatch) -> None:
