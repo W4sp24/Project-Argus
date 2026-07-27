@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.insights import HEATMAP_DAYS, heatmap_summary, insights_summary
+from backend.features.insights.service import HEATMAP_DAYS, heatmap_summary, insights_summary
 from backend.main import create_app
 
 TODAY = date(2026, 7, 13)

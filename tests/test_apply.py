@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend.core.db import connect, init_schema
-from backend.suggestions import dismiss, dismissal_feedback, get, insert_suggestion, pending
+from backend.vault.suggestions import dismiss, dismissal_feedback, get, insert_suggestion, pending
 from backend.vault.writer import WriterError, apply_suggestion
 
 

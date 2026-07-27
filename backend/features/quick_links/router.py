@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.quick_links import (
+from backend.features.quick_links.store import (
     QuickLinksError,
     create_link,
     delete_link,

@@ -3,7 +3,7 @@
 Mirrors :mod:`backend.connectors.todoist` exactly: the secret lives in the OS
 keyring, and the only thing that ever reaches disk or an API response is a
 *reference* to it. ``.argus/models.json`` stores ``key_ref``; no endpoint in
-:mod:`backend.system_api` returns a key, only ``has_key: bool``.
+:mod:`backend.features.system.router` returns a key, only ``has_key: bool``.
 
 Keyring failures are surfaced, not swallowed. The frozen desktop backend has a
 documented history of keyring breaking silently under PyInstaller

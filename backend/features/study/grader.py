@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from backend.study.practice_exam import Exam, Question, StudyError
+from backend.features.study.practice_exam import Exam, Question, StudyError
 
 
 class QuestionFeedback(BaseModel):

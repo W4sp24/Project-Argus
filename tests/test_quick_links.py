@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from backend.core.db import connect, init_schema
-from backend.quick_links import (
+from backend.features.quick_links.store import (
     QuickLinksError,
     create_link,
     delete_link,

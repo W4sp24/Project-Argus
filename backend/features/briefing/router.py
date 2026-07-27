@@ -7,12 +7,9 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.activity import ActivityEvent, recent_activity
-from backend.briefing import Composer, compose_briefing
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.insights import HeatmapResponse, InsightsSummary, heatmap_summary, insights_summary
-from backend.telemetry.audit import AuditEntry, recent
+from backend.features.briefing.service import Composer, compose_briefing
 from backend.vault.writer import BRIEFING_HEADING, write_briefing
 
 
@@ -56,41 +53,5 @@ def build_briefing_router(settings: Settings, composer: Composer | None) -> APIR
         if markdown is None:
             raise HTTPException(status_code=404, detail="no briefing yet today")
         return BriefingResponse(date=today, path=f"10-Daily/{today}.md", markdown=markdown)
-
-    @router.get("/insights", response_model=InsightsSummary)
-    def insights() -> InsightsSummary:
-        conn = connect(settings.db_path)
-        init_schema(conn)
-        try:
-            return insights_summary(settings, conn)
-        finally:
-            conn.close()
-
-    @router.get("/insights/heatmap", response_model=HeatmapResponse)
-    def insights_heatmap() -> HeatmapResponse:
-        conn = connect(settings.db_path)
-        init_schema(conn)
-        try:
-            return heatmap_summary(settings, conn)
-        finally:
-            conn.close()
-
-    @router.get("/activity", response_model=list[ActivityEvent])
-    def activity() -> list[ActivityEvent]:
-        conn = connect(settings.db_path)
-        init_schema(conn)
-        try:
-            return recent_activity(settings, conn)
-        finally:
-            conn.close()
-
-    @router.get("/audit", response_model=list[AuditEntry])
-    def audit_log() -> list[AuditEntry]:
-        conn = connect(settings.db_path)
-        init_schema(conn)
-        try:
-            return recent(conn)
-        finally:
-            conn.close()
 
     return router

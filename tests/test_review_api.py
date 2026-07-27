@@ -28,7 +28,7 @@ def client(vault: Path) -> TestClient:
     async def fake_planner(settings: Settings, instruction: str) -> int:
         conn = connect(settings.db_path)
         init_schema(conn)
-        from backend.suggestions import insert_suggestion
+        from backend.vault.suggestions import insert_suggestion
 
         insert_suggestion(
             conn,
@@ -86,7 +86,7 @@ def test_planner_tools_insert_rows(tmp_path: Path) -> None:
     )
     assert "queued suggestion" in result["content"][0]["text"]
 
-    from backend.suggestions import pending
+    from backend.vault.suggestions import pending
 
     rows = pending(conn)
     assert len(rows) == 1 and rows[0].kind == "schedule"

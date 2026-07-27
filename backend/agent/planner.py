@@ -12,7 +12,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from backend import suggestions as queue
 from backend.agent.adapters import (
     ToolSpec,
     UsageReported,
@@ -22,9 +21,10 @@ from backend.agent.adapters import (
 )
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.suggestions import dismissal_feedback
-from backend.tasks.parser import bucketed_tasks, refresh_cache
 from backend.telemetry.audit import log_prompt_conn
+from backend.vault import suggestions as queue
+from backend.vault.suggestions import dismissal_feedback
+from backend.vault.tasks import bucketed_tasks, refresh_cache
 
 MODEL = "claude-opus-4-8"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "planner.md"

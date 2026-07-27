@@ -18,9 +18,9 @@ from typing import Any
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend import suggestions as queue
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.vault import suggestions as queue
 from backend.vault.writer import (
     INGEST_FILES_DIR,
     WriterError,

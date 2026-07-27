@@ -124,7 +124,7 @@ def build_vault_tools(
 
     async def list_tasks(_args: dict[str, Any]) -> dict[str, Any]:
         from backend.core.db import connect, init_schema
-        from backend.tasks.parser import bucketed_tasks, refresh_cache
+        from backend.vault.tasks import bucketed_tasks, refresh_cache
 
         conn = connect(settings.db_path)
         try:

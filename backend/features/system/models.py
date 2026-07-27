@@ -1,16 +1,13 @@
-"""SYSTEM tab endpoints (redesign §12/§14/§7): doctor, token usage, models.
+"""The model registry endpoints (redesign §7).
 
-Doctor wraps the existing read-only checks. Usage aggregates the
-``token_usage`` table (Argus's own chat/planner/study-generate calls); the
-sibling ``/usage/cli`` endpoint aggregates account-wide Claude Code CLI usage
-parsed from local ``~/.claude/projects/**/*.jsonl`` transcripts — a distinct
-data source, intentionally not combined into one grand total.
+Split out of the system router, which had grown to cover three unrelated
+subjects; this is the largest of them by far. Built-ins come from
+:mod:`backend.core.model_registry`, user-added models from ``.argus/models.json``
+— never the vault, and never an API key (I4): keys live in the OS keyring and
+only ``has_key: bool`` is ever returned.
 
-The model registry serves built-ins from :mod:`backend.core.model_registry` plus user-added
-models persisted in ``.argus/models.json`` — never the vault, and never an API
-key (I4): keys live in the OS keyring and only ``has_key: bool`` is ever
-returned. Registering a non-Claude model runs a live tool-calling probe first,
-because Argus has no no-tools fallback and a model that cannot call tools would
+Registering a non-Claude model runs a live tool-calling probe first, because
+Argus has no no-tools fallback and a model that cannot call tools would
 silently break citations (I6) and planner proposals (I1).
 """
 
@@ -19,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import sqlite3
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -42,16 +38,12 @@ from backend.agent.adapters import (
 from backend.agent.credentials import CredentialError, delete_key, has_key, key_ref_for, store_key
 from backend.agent.hardware import HardwareProfile, detect, ollama_base_url, ollama_models_dir
 from backend.core.config import Settings
-from backend.core.db import connect, init_schema
 from backend.core.model_registry import (
     load_model_prefs,
     load_user_models,
     save_model_prefs,
     save_user_models,
 )
-from backend.doctor import Check, run_checks
-from backend.telemetry import claude_cli
-from backend.telemetry.usage import Range, UsageReport, usage_report
 
 MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
@@ -205,47 +197,21 @@ async def _default_puller(name: str) -> AsyncIterator[dict[str, Any]]:
                 yield payload
 
 
-def build_system_router(
+def build_models_router(
     settings: Settings,
     prober: Prober | None = None,
     puller: Puller | None = None,
 ) -> APIRouter:
-    """All /api system routes.
+    """The /api/models routes.
+
+    No prefix of its own: the system router mounts this under its ``/api``.
 
     ``prober`` and ``puller`` are injectable for the same reason the chat
     runner and generator are: they make live network calls, and tests must not.
     """
-    router = APIRouter(prefix="/api")
+    router = APIRouter()
     probe = prober or _default_prober
     pull = puller or _default_puller
-
-    def db() -> sqlite3.Connection:
-        conn = connect(settings.db_path)
-        init_schema(conn)
-        return conn
-
-    @router.post("/doctor", response_model=list[Check])
-    def doctor() -> list[Check]:
-        """Run the existing health checks (read-only against the vault)."""
-        return run_checks(settings)
-
-    @router.get("/usage", response_model=UsageReport)
-    def usage(range: Range = "session") -> UsageReport:  # noqa: A002 - API param name
-        conn = db()
-        try:
-            return usage_report(conn, range)
-        finally:
-            conn.close()
-
-    @router.get("/usage/cli", response_model=claude_cli.CliUsageReport)
-    def usage_cli(range: claude_cli.CliRange = "today") -> claude_cli.CliUsageReport:  # noqa: A002
-        conn = db()
-        try:
-            return claude_cli.cli_usage_report(conn, range, root=claude_cli.DEFAULT_CLAUDE_HOME)
-        finally:
-            conn.close()
-
-    # --- model registry -----------------------------------------------------
 
     def _registry() -> list[ModelInfo]:
         return [

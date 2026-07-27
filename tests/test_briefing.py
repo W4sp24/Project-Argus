@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.briefing import briefing_data, compose_briefing, render_briefing
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.features.briefing.service import briefing_data, compose_briefing, render_briefing
 
 TODAY = date(2026, 7, 13)
 YESTERDAY = (TODAY - timedelta(days=1)).isoformat()

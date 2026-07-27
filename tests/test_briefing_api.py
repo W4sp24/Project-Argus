@@ -90,7 +90,7 @@ def test_briefing_get_404_before_first_run(client: TestClient) -> None:
 
 
 def test_build_scheduler_registers_jobs_without_starting() -> None:
-    from backend.core.scheduler import build_scheduler
+    from backend.scheduler import build_scheduler
 
     scheduler = build_scheduler(Settings(_vault_path=Path("unused")))
     jobs = {job.id for job in scheduler.get_jobs()}
@@ -99,7 +99,7 @@ def test_build_scheduler_registers_jobs_without_starting() -> None:
 
 
 def test_production_scheduler_composes_with_the_agent() -> None:
-    from backend.briefing import agent_composer
+    from backend.features.briefing.service import agent_composer
     from backend.main import _production_scheduler
 
     scheduler = _production_scheduler(Settings(_vault_path=Path("unused")))

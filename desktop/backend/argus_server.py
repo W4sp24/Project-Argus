@@ -100,7 +100,7 @@ def _cmd_doctor() -> int:
     machine by definition.
     """
     from backend.core.config import ConfigError, Settings
-    from backend.doctor import run_checks
+    from backend.features.system.doctor import run_checks
 
     try:
         checks = run_checks(Settings.load())

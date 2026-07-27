@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.flashcards import (
+from backend.features.flashcards.store import (
     DeckSummary,
     DueCard,
     FlashcardsError,

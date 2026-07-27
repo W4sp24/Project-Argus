@@ -7,7 +7,7 @@ import pytest
 
 from backend.cli import main
 from backend.core.config import Settings
-from backend.doctor import run_checks
+from backend.features.system.doctor import run_checks
 
 
 @pytest.fixture()

@@ -6,7 +6,7 @@ Setup: Todoist → Settings → Integrations → Developer → API token, then
 
 from __future__ import annotations
 
-from backend.tasks.parser import TaskItem
+from backend.vault.tasks import TaskItem
 
 KEYRING_SERVICE = "argus-todoist"
 KEYRING_USER = "token"

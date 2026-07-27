@@ -226,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "doctor":
         from backend.core.config import ConfigError, Settings
-        from backend.doctor import run_checks
+        from backend.features.system.doctor import run_checks
 
         settings = Settings.load(args.env_file)
         try:

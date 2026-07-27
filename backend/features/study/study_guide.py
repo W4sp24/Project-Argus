@@ -7,7 +7,12 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from backend.study.practice_exam import MAX_PROMPT_CHARS, Generator, StudyError, _strip_fences
+from backend.features.study.practice_exam import (
+    MAX_PROMPT_CHARS,
+    Generator,
+    StudyError,
+    _strip_fences,
+)
 
 
 def notes_gap_list(corpus: list[dict[str, Any]]) -> list[str]:

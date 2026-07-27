@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from backend.connectors import gcal
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
-from backend.tasks.parser import TaskItem, bucketed_tasks, parse_task_line, refresh_cache
+from backend.vault.tasks import TaskItem, bucketed_tasks, parse_task_line, refresh_cache
 
 EXAM_RE = re.compile(r"\b(exam|quiz|midterm|final)\b", re.IGNORECASE)
 MAX_WEAK_TOPICS = 5

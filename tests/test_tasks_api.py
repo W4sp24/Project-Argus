@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
 from backend.main import create_app
-from backend.tasks.parser import TaskItem
+from backend.vault.tasks import TaskItem
 
 TODAY = date.today().isoformat()
 
@@ -74,7 +74,7 @@ def test_capture_goes_through_writer_only(
     client: TestClient, vault: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[str] = []
-    import backend.tasks.api as tasks_api
+    import backend.features.tasks.router as tasks_api
 
     real = tasks_api.append_capture
 

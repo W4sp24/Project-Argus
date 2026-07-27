@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.flashcards import due_cards, generate_deck, grade_card, parse_qa_pairs
+from backend.features.flashcards.store import due_cards, generate_deck, grade_card, parse_qa_pairs
 from backend.main import create_app
 
 FLASHCARDS_MD = """\
@@ -120,7 +120,7 @@ def test_grading_again_shrinks_interval_relative_to_prior_good_grades(tmp_path: 
 
 
 def test_grade_card_nonexistent_card_raises(tmp_path: Path, conn) -> None:
-    from backend.flashcards import FlashcardsError
+    from backend.features.flashcards.store import FlashcardsError
 
     vault = _vault(tmp_path)
     deck_id = generate_deck(vault, conn, "CS201")

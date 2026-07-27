@@ -1,4 +1,10 @@
-"""Agenda, task-board, and quick-capture endpoints."""
+"""Agenda, task-board, quick-capture, and single-task-line editing.
+
+The ``/tasks/toggle`` and ``/tasks/line/*`` endpoints used to live in the notes
+router because they go through the same writer; they answer about tasks, so
+they belong here. They share the notes router's error mapping via
+:mod:`backend.vault.errors`.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +18,9 @@ from backend.connectors import gcal, todoist
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.tasks.parser import TaskItem, bucket_of, bucketed_tasks, refresh_cache
+from backend.vault import writer
+from backend.vault.errors import raise_http
+from backend.vault.tasks import TaskItem, bucket_of, bucketed_tasks, refresh_cache
 from backend.vault.writer import WriterError, append_capture
 
 
@@ -32,6 +40,20 @@ class CaptureRequest(BaseModel):
 
 class CaptureResponse(BaseModel):
     path: str
+
+
+class TaskLineRef(BaseModel):
+    path: str
+    line: int
+    old_line: str
+
+
+class TaskLineUpdate(TaskLineRef):
+    new_line: str
+
+
+class NewLine(BaseModel):
+    new_line: str
 
 
 def build_tasks_router(settings: Settings) -> APIRouter:
@@ -86,5 +108,35 @@ def build_tasks_router(settings: Settings) -> APIRouter:
             return CaptureResponse(path=append_capture(settings.vault_path, request.text))
         except WriterError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/tasks/toggle", response_model=NewLine)
+    def toggle(request: TaskLineRef) -> NewLine:
+        try:
+            new_line = writer.toggle_task_line(
+                settings.vault_path, request.path, request.line, request.old_line
+            )
+        except WriterError as exc:
+            raise_http(exc)
+        return NewLine(new_line=new_line)
+
+    @router.post("/tasks/line/update", response_model=NewLine)
+    def edit_line(request: TaskLineUpdate) -> NewLine:
+        try:
+            new_line = writer.update_task_line(
+                settings.vault_path, request.path, request.line, request.old_line, request.new_line
+            )
+        except WriterError as exc:
+            raise_http(exc)
+        return NewLine(new_line=new_line)
+
+    @router.post("/tasks/line/delete")
+    def drop_line(request: TaskLineRef) -> dict:
+        try:
+            writer.delete_task_line(
+                settings.vault_path, request.path, request.line, request.old_line
+            )
+        except WriterError as exc:
+            raise_http(exc)
+        return {"ok": True}
 
     return router

@@ -15,14 +15,14 @@ from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.study.corpus import CourseInfo, course_corpus, courses
-from backend.study.grader import AttemptResult, grade_attempt, load_exam
-from backend.study.practice_exam import (
+from backend.features.study.corpus import CourseInfo, course_corpus, courses
+from backend.features.study.grader import AttemptResult, grade_attempt, load_exam
+from backend.features.study.practice_exam import (
     Generator,
     StudyError,
     generate_practice_exam,
 )
-from backend.study.study_guide import generate_study_guide
+from backend.features.study.study_guide import generate_study_guide
 
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ -]")
 
