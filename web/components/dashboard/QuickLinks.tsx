@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ui/useConfirm";
 import IconPicker, { type IconSelection } from "@/components/quicklinks/IconPicker";
 import { createQuickLink, deleteQuickLink, updateQuickLink, useQuickLinks, type QuickLink } from "@/lib/api";
 import { FLAGS } from "@/lib/flags";
@@ -21,6 +22,7 @@ export default function QuickLinks() {
   const { data, mutate, isLoading } = useQuickLinks();
   const links = data ?? [];
   const { show } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editIcon, setEditIcon] = useState<IconSelection>(EMPTY_ICON);
@@ -71,7 +73,13 @@ export default function QuickLinks() {
   }
 
   async function remove(link: QuickLink) {
-    if (!window.confirm(`Delete "${link.label}"?`)) return;
+    const answer = await confirm({
+      label: "Delete link",
+      message: `Delete "${link.label}"?`,
+      detail: link.url,
+      confirmLabel: "Delete",
+    });
+    if (answer === null) return;
     try {
       await deleteQuickLink(link.id);
       show(`quick-links :: deleted ${link.label}`);
@@ -143,19 +151,19 @@ export default function QuickLinks() {
             onChange={(event) => setAddLabel(event.target.value)}
             placeholder="label"
             aria-label="Link label"
-            className="min-w-0 flex-[0.8] bg-transparent text-[13.5px] placeholder:text-ink-faint focus:outline-none"
+            className="min-w-0 flex-[0.8] bg-transparent text-body placeholder:text-ink-faint focus:outline-none"
           />
           <input
             value={addUrl}
             onChange={(event) => setAddUrl(event.target.value)}
             placeholder="https://…"
             aria-label="Link URL"
-            className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-ink-faint focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-ink-faint focus:outline-none"
           />
           <button
             type="submit"
             disabled={adding}
-            className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
+            className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
           >
             ADD
           </button>
@@ -164,9 +172,9 @@ export default function QuickLinks() {
       </form>
 
       {isLoading ? (
-        <p className="py-1 text-[12px] text-ink-faint">loading…</p>
+        <p className="py-1 text-label text-ink-faint">loading…</p>
       ) : links.length === 0 ? (
-        <p className="py-1 text-[12px] text-ink-faint">nothing here</p>
+        <p className="py-1 text-label text-ink-faint">nothing here</p>
       ) : (
         <ul>
           {links.map((link, index) => {
@@ -187,25 +195,25 @@ export default function QuickLinks() {
                         value={editLabel}
                         onChange={(event) => setEditLabel(event.target.value)}
                         aria-label="Link label"
-                        className="min-w-0 flex-[0.8] border border-lineHi bg-sunken px-2 py-1 text-[13.5px] focus:outline-none"
+                        className="min-w-0 flex-[0.8] border border-lineHi bg-sunken px-2 py-1 text-body focus:outline-none"
                       />
                       <input
                         value={editUrl}
                         onChange={(event) => setEditUrl(event.target.value)}
                         aria-label="Link URL"
-                        className="min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1 text-[13.5px] focus:outline-none"
+                        className="min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1 text-body focus:outline-none"
                       />
                       <button
                         type="submit"
                         disabled={savingEdit}
-                        className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--ac)] disabled:opacity-40"
+                        className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-[var(--ac)] disabled:opacity-40"
                       >
                         SAVE
                       </button>
                       <button
                         type="button"
                         onClick={cancelEdit}
-                        className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint hover:text-ink"
+                        className="shrink-0 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint hover:text-ink"
                       >
                         CANCEL
                       </button>
@@ -218,7 +226,7 @@ export default function QuickLinks() {
                       type="button"
                       onClick={() => openExternalUrl(link.url)}
                       title={link.url}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13.5px] text-ink transition-colors hover:text-ink-bright"
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left text-body text-ink transition-colors hover:text-ink-bright"
                     >
                       <span className="flex shrink-0 items-center font-mono text-ink-faint">
                         <QuickLinkIcon link={link} />
@@ -230,7 +238,7 @@ export default function QuickLinks() {
                         aria-label="Move up"
                         disabled={index === 0}
                         onClick={() => move(index, -1)}
-                        className="font-mono text-[10px] text-ink-faint hover:text-[var(--ac)] disabled:opacity-30"
+                        className="font-mono text-meta text-ink-faint hover:text-[var(--ac)] disabled:opacity-30"
                       >
                         ▲
                       </button>
@@ -238,14 +246,14 @@ export default function QuickLinks() {
                         aria-label="Move down"
                         disabled={index === links.length - 1}
                         onClick={() => move(index, 1)}
-                        className="font-mono text-[10px] text-ink-faint hover:text-[var(--ac)] disabled:opacity-30"
+                        className="font-mono text-meta text-ink-faint hover:text-[var(--ac)] disabled:opacity-30"
                       >
                         ▼
                       </button>
                       <button
                         aria-label="Edit link"
                         onClick={() => startEdit(link)}
-                        className="font-mono text-[10px] text-ink-faint hover:text-[var(--ac)]"
+                        className="font-mono text-meta text-ink-faint hover:text-[var(--ac)]"
                       >
                         edit
                       </button>
@@ -264,6 +272,7 @@ export default function QuickLinks() {
           })}
         </ul>
       )}
+      {confirmDialog}
     </Panel>
   );
 }

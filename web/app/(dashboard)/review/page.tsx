@@ -4,6 +4,8 @@ import { useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
+import Button from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/useConfirm";
 import { apiFetch, fetcher } from "@/lib/api";
 
 interface ScheduleBlock {
@@ -35,7 +37,7 @@ function blockTime(iso: string): string {
 
 function DiffView({ diff }: { diff: string }) {
   return (
-    <pre className="overflow-x-auto border border-line bg-sunken p-3 font-mono text-[12px] leading-relaxed">
+    <pre className="overflow-x-auto border border-line bg-sunken p-3 font-mono text-label leading-relaxed">
       {diff.split("\n").map((line, i) => (
         <div
           key={i}
@@ -60,6 +62,7 @@ export default function ReviewPage() {
   const { data: suggestions, mutate } = useSWR<Suggestion[]>("/api/review", fetcher);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  const { confirm, confirmDialog } = useConfirm();
 
   async function act(id: number, action: "approve" | "dismiss", reason?: string) {
     setBusy(id);
@@ -78,6 +81,27 @@ export default function ReviewPage() {
     );
     setBusy(null);
     mutate();
+  }
+
+  /**
+   * Why the suggestion was wrong is the most useful thing the planner can
+   * learn, so it gets a real field instead of a browser prompt. Cancelling
+   * now cancels: `window.prompt` returned null on cancel, which the old code
+   * coerced to `""` and dismissed anyway.
+   */
+  async function dismiss(id: number) {
+    const reason = await confirm({
+      label: "Dismiss suggestion",
+      message: "Dismiss this suggestion?",
+      detail: "Your reason goes back to the planner so it stops proposing the same thing.",
+      confirmLabel: "Dismiss",
+      reason: {
+        label: "why?",
+        placeholder: "already scheduled it · wrong course · not this week",
+      },
+    });
+    if (reason === null) return;
+    await act(id, "dismiss", reason);
   }
 
   return (
@@ -106,12 +130,12 @@ export default function ReviewPage() {
           <Panel key={suggestion.id} className="animate-rise">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <span
-                className={`border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${KIND_STYLE[suggestion.kind]}`}
+                className={`border px-2.5 py-0.5 font-mono text-meta uppercase tracking-wide ${KIND_STYLE[suggestion.kind]}`}
               >
                 {suggestion.kind}
               </span>
-              <span className="font-mono text-[11px] text-ink-faint">#{suggestion.id}</span>
-              <span className="ml-auto font-mono text-[11px] text-ink-faint">
+              <span className="font-mono text-label text-ink-faint">#{suggestion.id}</span>
+              <span className="ml-auto font-mono text-label text-ink-faint">
                 {suggestion.created_at}
               </span>
             </div>
@@ -122,7 +146,7 @@ export default function ReviewPage() {
               <ul className="mb-3 space-y-1.5">
                 {((suggestion.payload.blocks as ScheduleBlock[]) ?? []).map((block, i) => (
                   <li key={i} className="flex items-center gap-3 text-sm">
-                    <span className="w-32 shrink-0 font-mono text-[11px] text-mode-study">
+                    <span className="w-32 shrink-0 font-mono text-label text-mode-study">
                       {blockTime(block.start)} – {blockTime(block.end)}
                     </span>
                     <span className="h-6 w-1 bg-[var(--ac)]" />
@@ -133,7 +157,7 @@ export default function ReviewPage() {
             )}
 
             {suggestion.kind === "task" && (
-              <div className="mb-3 space-y-1 font-mono text-[12px]">
+              <div className="mb-3 space-y-1 font-mono text-label">
                 <p className="border border-danger/30 bg-danger/10 px-3 py-1.5 text-danger">
                   − {String(suggestion.payload.old_line)}
                 </p>
@@ -148,7 +172,7 @@ export default function ReviewPage() {
 
             {suggestion.kind === "note" && (
               <div className="mb-3">
-                <p className="mb-1 font-mono text-[11px] text-ink-faint">
+                <p className="mb-1 font-mono text-label text-ink-faint">
                   {String(suggestion.payload.path)}
                 </p>
                 <DiffView diff={String(suggestion.payload.diff)} />
@@ -156,27 +180,22 @@ export default function ReviewPage() {
             )}
 
             <div className="flex gap-2">
-              <button
+              <Button
+                size="md"
+                variant="primary"
                 onClick={() => act(suggestion.id, "approve")}
                 disabled={busy !== null}
-                className="border border-line bg-[var(--ac-bg)] px-5 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
               >
                 {busy === suggestion.id ? "Applying…" : "Approve"}
-              </button>
-              <button
-                onClick={() => {
-                  const reason = window.prompt("Why dismiss? (feeds back to the planner)") ?? "";
-                  act(suggestion.id, "dismiss", reason);
-                }}
-                disabled={busy !== null}
-                className="border border-line px-5 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
-              >
+              </Button>
+              <Button size="md" onClick={() => dismiss(suggestion.id)} disabled={busy !== null}>
                 Dismiss
-              </button>
+              </Button>
             </div>
           </Panel>
         ))}
       </div>
+      {confirmDialog}
     </>
   );
 }

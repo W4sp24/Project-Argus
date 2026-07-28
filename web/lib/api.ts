@@ -265,6 +265,13 @@ export interface UsageReport {
   estimated_cost_usd: number;
   series: UsagePoint[];
   features: FeatureUsage[];
+  /**
+   * Models that ran but have no published rate in Argus's table — a local
+   * Ollama model, or a hosted provider whose prices Argus does not track.
+   * They contribute nothing to `estimated_cost_usd`, so the figure is an
+   * honest partial rather than a local model billed at Claude rates.
+   */
+  unpriced_models?: string[];
 }
 
 /** ARGUS.USAGE (§14) — GET /api/usage?range=session|week|all. */
@@ -300,9 +307,222 @@ export interface CliUsageReport {
   models: CliModelUsage[];
 }
 
-/** CLAUDE CODE — account-wide CLI usage, GET /api/usage/cli?range=today|week|all. */
+/** CLAUDE CODE only — GET /api/usage/cli. Superseded by `useAgentUsage`. */
 export function useCliUsage(range: CliUsageRange) {
   return useSWR<CliUsageReport>(`/api/usage/cli?range=${range}`, fetcher);
+}
+
+export interface AgentModelUsage {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  /** Argus has no published rate for this model — the cost is a floor, not a bill. */
+  unpriced: boolean;
+}
+
+export interface AgentUsagePoint {
+  label: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+}
+
+/** One agent's slice of the usage report — or the combined view, id `all`. */
+export interface AgentUsage {
+  id: string;
+  label: string;
+  /** Whether this agent is installed. False still carries zeroes, never an error. */
+  detected: boolean;
+  install_hint: string;
+  /** False for user-registered sources — only those can be deleted. */
+  builtin: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  /** Total for the equivalent window before this one; null for the all-time range. */
+  previous_total_tokens: number | null;
+  series: AgentUsagePoint[];
+  models: AgentModelUsage[];
+  unpriced_models: string[];
+}
+
+export interface AgentsUsageReport {
+  range: CliUsageRange;
+  /** One entry per known agent, installed or not — an absent tab reads as a bug. */
+  agents: AgentUsage[];
+  combined: AgentUsage;
+}
+
+/**
+ * AGENT.USAGE — every local coding agent Argus can read, from
+ * `GET /api/usage/agents?range=today|week|all`. Replaces `useCliUsage`, which
+ * only ever saw Claude Code.
+ */
+export function useAgentUsage(range: CliUsageRange) {
+  return useSWR<AgentsUsageReport>(`/api/usage/agents?range=${range}`, fetcher);
+}
+
+export interface AgentScanResult {
+  ok: boolean;
+  detail: string;
+  format: string | null;
+  format_label: string | null;
+  glob: string;
+  files: number;
+  turns: number;
+  total_tokens: number;
+  models: string[];
+  first_ts: string | null;
+  last_ts: string | null;
+  /** True when the preview read only part of the matched files. */
+  sampled: boolean;
+  sample_paths: string[];
+}
+
+/**
+ * Look at a folder and report what is really in it, saving nothing — the
+ * add-agent equivalent of `testModel`. Omitting `glob` means "work it out".
+ */
+export function scanAgentFolder(body: { path: string; glob?: string }) {
+  return mutateJSON<AgentScanResult>("/api/usage/agents/scan", body);
+}
+
+export interface CustomAgentInfo {
+  id: string;
+  label: string;
+  path: string;
+  glob: string;
+  format: string;
+}
+
+/** Register a folder as a tracked agent. The backend re-scans before saving. */
+export function addCustomAgent(body: {
+  name: string;
+  path: string;
+  glob?: string;
+  format?: string;
+}) {
+  return mutateJSON<CustomAgentInfo>("/api/usage/agents/custom", body);
+}
+
+/** Remove a custom agent and purge every usage row that belonged to it. */
+export function deleteCustomAgent(id: string) {
+  return mutateJSON<{ status: string; id: string; rows_removed: number }>(
+    `/api/usage/agents/custom/${encodeURIComponent(id)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+/** `needs-credentials`: a prerequisite file is missing, not just the consent. */
+export type ConnectorStatus = "wired" | "not-connected" | "needs-credentials";
+
+export interface ConnectorInfo {
+  id: string;
+  name: string;
+  status: ConnectorStatus;
+  detail: string;
+  can_connect: boolean;
+}
+
+export interface McpServerInfo {
+  name: string;
+  transport: "stdio" | "http";
+  command?: string | null;
+  args: string[];
+  url?: string | null;
+  /** Tool names captured when the server last passed a test. */
+  tools: string[];
+  /** A bearer token is stored for this server. The token itself never leaves the keyring (I4). */
+  has_key: boolean;
+}
+
+export interface IntegrationsResponse {
+  connectors: ConnectorInfo[];
+  mcp_servers: McpServerInfo[];
+  /** False until registered MCP tools are callable from Argus chat. */
+  mcp_tools_in_chat: boolean;
+}
+
+/** INTEGRATIONS (§12) — GET /api/integrations. */
+export function useIntegrations() {
+  return useSWR<IntegrationsResponse>("/api/integrations", fetcher);
+}
+
+export interface ConnectResult {
+  ok: boolean;
+  detail: string;
+}
+
+/** Verify a Todoist token against the API, then store it in the OS keyring. */
+export function connectTodoist(token: string) {
+  return mutateJSON<ConnectResult>("/api/integrations/todoist/connect", { token });
+}
+
+/** Save the Google OAuth *client* JSON so the consent flow has something to run. */
+export function uploadGcalCredentials(credentials_json: string) {
+  return mutateJSON<ConnectResult>("/api/integrations/gcal/credentials", { credentials_json });
+}
+
+/** Run the browser consent flow. Resolves once the redirect completes. */
+export function connectGcal() {
+  return mutateJSON<ConnectResult>("/api/integrations/gcal/connect", undefined);
+}
+
+/** Forget a connector's stored credential. */
+export function disconnectIntegration(id: string) {
+  return mutateJSON<ConnectResult>(`/api/integrations/${id}`, undefined, "DELETE");
+}
+
+export interface McpServerBody {
+  name: string;
+  transport?: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
+  token?: string;
+  verify?: boolean;
+}
+
+export interface McpProbeResult {
+  ok: boolean;
+  detail: string;
+  latency_ms: number;
+  tools: string[];
+}
+
+/** Handshake with an MCP server and list its tools. Saves nothing. */
+export function testMcpServer(body: McpServerBody) {
+  return mutateJSON<McpProbeResult>("/api/integrations/mcp/test", body);
+}
+
+/** Register an MCP server. The backend verifies the handshake before it saves. */
+export function addMcpServer(body: McpServerBody) {
+  return mutateJSON<McpServerInfo>("/api/integrations/mcp", body);
+}
+
+export function deleteMcpServer(name: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/integrations/mcp/${encodeURIComponent(name)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+/** Copy-paste config exposing *Argus* to your coding agents (the other direction). */
+export function useMcpSnippets() {
+  return useSWR<Record<string, string>>("/api/integrations/mcp/snippets", fetcher);
 }
 
 export interface DoctorCheck {
@@ -320,18 +540,164 @@ export function useDoctor() {
   return useSWR<DoctorCheck[]>("/api/doctor", () => mutateJSON<DoctorCheck[]>("/api/doctor", undefined));
 }
 
+/**
+ * A registry provider (§7).
+ * - `anthropic` — Claude through the Claude Code CLI, on your subscription.
+ * - `anthropic-api` — Claude through an API key. No Claude Code needed.
+ * - `openai-compat` — anything speaking the OpenAI chat API: Ollama on this
+ *   PC, or a hosted provider like Groq/Together/Fireworks/OpenRouter.
+ */
+export type ModelProvider = "anthropic" | "anthropic-api" | "openai-compat";
+
 export interface ModelInfo {
   name: string;
   provider: string;
   endpoint?: string | null;
   key_ref?: string | null;
+  model_id?: string | null;
   default: boolean;
   builtin: boolean;
+  /** Runs entirely on this machine — drives the LOCAL/HOSTED badge. */
+  local: boolean;
+  /** A key is stored for this model. The key itself is never returned (I4). */
+  has_key: boolean;
 }
 
 /** Model registry (§7/§12) — GET /api/models. Built-ins first, then local. */
 export function useModels() {
   return useSWR<ModelInfo[]>("/api/models", fetcher);
+}
+
+export interface AddModelBody {
+  name: string;
+  provider?: ModelProvider;
+  endpoint?: string;
+  api_key?: string;
+  model_id?: string;
+  verify?: boolean;
+}
+
+/** Register a model. The backend probes tool calling before it saves. */
+export function addModel(body: AddModelBody) {
+  return mutateJSON<ModelInfo>("/api/models", body);
+}
+
+/** Make a model the one used when nothing else is chosen. */
+export function setDefaultModel(name: string) {
+  return mutateJSON<ModelInfo>("/api/models/default", { name });
+}
+
+export interface TestModelBody {
+  provider: ModelProvider;
+  endpoint?: string;
+  api_key?: string;
+  model_id?: string;
+  name?: string;
+}
+
+export interface TestModelResult {
+  ok: boolean;
+  detail: string;
+  tool_calling: boolean;
+  latency_ms: number;
+  available_models: string[];
+}
+
+/**
+ * Check a configuration before saving it — the Test button. Nothing is
+ * persisted, and a key sent here is used for the one call and discarded.
+ */
+export function testModel(body: TestModelBody) {
+  return mutateJSON<TestModelResult>("/api/models/test", body);
+}
+
+/** How well a catalog model suits the detected machine. */
+export type FitVerdict = "fits" | "slow" | "insufficient" | "unknown";
+
+export interface CatalogEntry {
+  name: string;
+  label: string;
+  parameters: string;
+  size_gb: number;
+  summary: string;
+  tool_calling: boolean;
+  min_ram_gb: number;
+  min_vram_gb: number;
+  verdict: FitVerdict;
+  reason: string;
+  installed: boolean;
+}
+
+export interface HardwareInfo {
+  /** `null` means Argus could not detect it — never "zero". */
+  ram_gb: number | null;
+  vram_gb: number | null;
+  gpu_name: string | null;
+  platform: string;
+  ollama_url: string;
+  ollama_models_dir: string;
+}
+
+export interface CatalogResponse {
+  hardware: HardwareInfo;
+  recommended: string | null;
+  models: CatalogEntry[];
+}
+
+/** Curated tool-calling local models, scored against this machine. */
+export function useModelCatalog() {
+  return useSWR<CatalogResponse>("/api/models/catalog", fetcher);
+}
+
+export interface InstallEvent {
+  type: "progress" | "done" | "error";
+  status?: string;
+  completed?: number;
+  total?: number;
+  detail?: string;
+  name?: string;
+}
+
+/**
+ * Download a model through Ollama, streaming NDJSON progress.
+ *
+ * A download runs for minutes, so the response body is read incrementally
+ * rather than awaited whole — `onEvent` fires per line as it arrives.
+ */
+export async function installModel(
+  name: string,
+  onEvent: (event: InstallEvent) => void,
+): Promise<void> {
+  const response = await apiFetch("/api/models/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, body, body.detail ?? `Request failed: ${response.status}`);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("this browser cannot stream the download progress");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // A chunk can split mid-line, so the tail is held back until its newline.
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onEvent(JSON.parse(line) as InstallEvent);
+      } catch {
+        // A partial or malformed line is not worth aborting a download over.
+      }
+    }
+  }
 }
 
 // --- Flashcards (real FSRS spaced repetition) --------------------------

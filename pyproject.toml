@@ -16,7 +16,17 @@ dependencies = [
     "python-frontmatter>=1.1",
     "watchdog>=4.0",
     "keyring>=25.0",
+    # Optional at runtime: only the "anthropic" (Claude Code CLI) provider
+    # imports it, and that import is lazy. Argus runs entirely on Ollama or a
+    # hosted API with Claude Code absent — see backend/agent/adapters.py.
     "claude-agent-sdk>=0.1",
+    # The OpenAI-compatible and Anthropic API adapters speak HTTP directly
+    # rather than pulling in a vendor SDK; httpx is also what FastAPI's own
+    # test client uses.
+    "httpx>=0.27",
+    # `argus mcp-server`. Previously present only as a claude-agent-sdk
+    # transitive, which would vanish the moment that dependency changed.
+    "mcp>=1.0",
     "websockets>=12.0",
     "python-multipart>=0.0.9",
     "apscheduler>=3.10",
@@ -51,8 +61,12 @@ dev = [
 [project.scripts]
 argus = "backend.cli:main"
 
-[tool.setuptools]
-packages = ["backend"]
+# `packages = ["backend"]` would list only the top-level package: every
+# subpackage (backend.agent, backend.rag, backend.core, backend.features, ...)
+# would be missing from a built wheel. Editable installs and PyInstaller's
+# collect_submodules("backend") both hid that, so it went unnoticed.
+[tool.setuptools.packages.find]
+include = ["backend*"]
 
 [tool.ruff]
 line-length = 100

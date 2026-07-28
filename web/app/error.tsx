@@ -17,11 +17,11 @@ export default function RouteError({
           {error.message || "An unexpected error occurred while rendering this page."}
         </p>
         {error.digest && (
-          <p className="mt-2 font-mono text-[11px] text-ink-faint">digest: {error.digest}</p>
+          <p className="mt-2 font-mono text-label text-ink-faint">digest: {error.digest}</p>
         )}
         <button
           onClick={reset}
-          className="mt-4 border border-line bg-[var(--ac-bg)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi"
+          className="mt-4 border border-line bg-[var(--ac-bg)] px-4 py-2 font-mono text-label uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi"
         >
           Try again
         </button>

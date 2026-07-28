@@ -20,8 +20,8 @@ export default function GlobalError({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#0b0614",
-          color: "#ede9fe",
+          background: "#06040c", // void
+          color: "#d6cdf0", // ink
           fontFamily: "system-ui, sans-serif",
         }}
       >
@@ -29,29 +29,32 @@ export default function GlobalError({
           style={{
             maxWidth: 420,
             padding: 24,
-            borderRadius: 20,
-            border: "1px solid rgba(255,255,255,0.1)",
-            background: "rgba(23,9,46,0.7)",
+            border: "1px solid #2c2250", // lineHi
+            background: "#0c0916", // panel
           }}
         >
-          <p style={{ fontSize: 12, letterSpacing: 2, color: "#6b5f94", margin: 0 }}>
+          <p style={{ fontSize: 13, letterSpacing: 2, color: "#a78bfa", margin: 0 }}>
             {"// FATAL"}
           </p>
-          <h2 style={{ margin: "8px 0 12px", fontWeight: 600 }}>Argus hit a wall</h2>
-          <p style={{ fontSize: 14, color: "#9d8fc7", margin: 0 }}>
+          <h2 style={{ margin: "8px 0 12px", fontSize: 22, fontWeight: 600 }}>
+            Argus hit a wall
+          </h2>
+          <p style={{ fontSize: 15, lineHeight: 1.6, color: "#9d8fc7", margin: 0 }}>
             {error.message || "The app shell itself failed to render."}
           </p>
           <button
             onClick={reset}
             style={{
               marginTop: 16,
+              minHeight: 36,
               padding: "8px 16px",
-              borderRadius: 12,
-              border: "none",
+              border: "1px solid #2c2250", // lineHi
               cursor: "pointer",
-              color: "white",
-              background: "linear-gradient(90deg, #8b5cf6, #d946ef)",
-              fontSize: 14,
+              color: "#a78bfa",
+              background: "#171029", // --ac-bg
+              fontSize: 13,
+              textTransform: "uppercase",
+              letterSpacing: "0.12em",
             }}
           >
             Reload

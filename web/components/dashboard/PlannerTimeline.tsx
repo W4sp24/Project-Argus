@@ -150,11 +150,11 @@ export default function PlannerTimeline() {
       label="PLANNER.TIMELINE"
       headerRight={
         gcalConfigured ? (
-          <span className="font-mono text-[10px] uppercase tracking-wide text-ok">GCAL: WIRED</span>
+          <span className="font-mono text-meta uppercase tracking-wide text-ok">GCAL: WIRED</span>
         ) : (
           <Link
             href="/system"
-            className="font-mono text-[10px] uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]"
+            className="font-mono text-meta uppercase tracking-wide text-ink-faint hover:text-[var(--ac)]"
           >
             GCAL: NOT CONNECTED →
           </Link>
@@ -170,8 +170,8 @@ export default function PlannerTimeline() {
             {i === nowPosition && <NowLine label={nowLabel} />}
             <div className="flex gap-3 py-1.5">
               <div className="w-16 shrink-0 text-right">
-                <p className="font-mono text-[12px] font-semibold text-ink">{timeLabel(row.start)}</p>
-                <p className="font-mono text-[10px] text-ink-faint">{timeLabel(row.end)}</p>
+                <p className="font-mono text-label font-semibold text-ink">{timeLabel(row.start)}</p>
+                <p className="font-mono text-meta text-ink-faint">{timeLabel(row.end)}</p>
               </div>
               <div
                 className="min-w-0 flex-1 border-l-[3px] px-3 py-1.5"
@@ -183,32 +183,32 @@ export default function PlannerTimeline() {
                 }}
               >
                 <div className="flex items-center gap-2">
-                  <p className="min-w-0 flex-1 truncate text-[14px] text-ink-bright">{row.title}</p>
-                  <span className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-ink-faint">
+                  <p className="min-w-0 flex-1 truncate text-lead text-ink-bright">{row.title}</p>
+                  <span className="shrink-0 font-mono text-micro uppercase tracking-wide text-ink-faint">
                     {classifyKind(row.title)}
                   </span>
-                  <span className="shrink-0 font-mono text-[10px] text-ink-faint">
+                  <span className="shrink-0 font-mono text-meta text-ink-faint">
                     {durationLabel(row.start, row.end)}
                   </span>
                 </div>
                 {row.kind === "suggestion" && row.isFirstOfGroup && (
                   <div className="mt-1.5">
                     {results[row.suggestionId] ? (
-                      <p className="font-mono text-[11px] text-ink-muted">{results[row.suggestionId]}</p>
+                      <p className="font-mono text-label text-ink-muted">{results[row.suggestionId]}</p>
                     ) : (
                       <div className="flex items-center gap-3">
-                        <p className="font-mono text-[10px] text-ink-faint">{row.rationale}</p>
+                        <p className="font-mono text-meta text-ink-faint">{row.rationale}</p>
                         <button
                           disabled={busy !== null}
                           onClick={() => act(row.suggestionId, "approve")}
-                          className="font-mono text-[10px] uppercase tracking-wide text-ok hover:underline disabled:opacity-40"
+                          className="font-mono text-meta uppercase tracking-wide text-ok hover:underline disabled:opacity-40"
                         >
                           [Y] APPROVE
                         </button>
                         <button
                           disabled={busy !== null}
                           onClick={() => act(row.suggestionId, "dismiss")}
-                          className="font-mono text-[10px] uppercase tracking-wide text-danger hover:underline disabled:opacity-40"
+                          className="font-mono text-meta uppercase tracking-wide text-danger hover:underline disabled:opacity-40"
                         >
                           [N] DISMISS
                         </button>
@@ -230,7 +230,7 @@ function NowLine({ label }: { label: string }) {
   return (
     <div className="my-1 flex items-center gap-2 pl-[76px]">
       <span className="h-px flex-1 bg-[var(--ac)]" />
-      <span className="font-mono text-[10px] text-[var(--ac)]">now {label}</span>
+      <span className="font-mono text-meta text-[var(--ac)]">now {label}</span>
     </div>
   );
 }

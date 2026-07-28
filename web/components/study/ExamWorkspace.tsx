@@ -4,6 +4,7 @@ import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import { apiFetch, fetcher, useStudyCourses, useStudyExams } from "@/lib/api";
+import { selectedModel } from "@/lib/models";
 
 interface QuizQuestion {
   q: string;
@@ -57,7 +58,8 @@ export default function ExamWorkspace() {
     const response = await apiFetch("/api/study/exam", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ course: genCourse, n: 10 }),
+      // Same model selection chat uses (§7); omitted means the registry default.
+      body: JSON.stringify({ course: genCourse, n: 10, model: selectedModel() }),
     });
     const payload = await response.json();
     setGenerating(false);
@@ -91,8 +93,8 @@ export default function ExamWorkspace() {
   // ---- Results ----
   if (result) {
     return (
-      <Panel label="RESULTS" headerRight={<span className="font-mono text-[11px] text-ink-muted">{result.score} / {result.total}</span>}>
-        <p className="mb-4 text-[13px] text-ink-muted">
+      <Panel label="RESULTS" headerRight={<span className="font-mono text-label text-ink-muted">{result.score} / {result.total}</span>}>
+        <p className="mb-4 text-body text-ink-muted">
           {result.weak_topics.length
             ? "Missed topics were added to the review queue in the vault."
             : "Perfect score — nothing added to the review queue."}
@@ -102,7 +104,7 @@ export default function ExamWorkspace() {
             const options = quiz?.questions[i]?.options ?? null;
             return (
               <div key={i} className="border border-line p-3">
-                <p className="mb-2 text-[14px] text-ink">{item.q}</p>
+                <p className="mb-2 text-lead text-ink">{item.q}</p>
                 {options ? (
                   <div className="grid gap-1.5">
                     {options.map((option) => {
@@ -114,22 +116,22 @@ export default function ExamWorkspace() {
                           ? "border-danger text-danger"
                           : "border-line text-ink-muted";
                       return (
-                        <div key={option} className={`border px-3 py-1.5 text-[13px] ${border}`}>
+                        <div key={option} className={`border px-3 py-1.5 text-body ${border}`}>
                           {option}
                         </div>
                       );
                     })}
                   </div>
                 ) : (
-                  <p className={`text-[13px] ${item.correct ? "text-ok" : "text-danger"}`}>
+                  <p className={`text-body ${item.correct ? "text-ok" : "text-danger"}`}>
                     {item.correct ? "✓ " : "✗ "}
                     {item.your_answer || "(no answer)"}
                     {!item.correct && <span className="text-ink-muted"> — correct: {item.correct_answer}</span>}
                   </p>
                 )}
-                {item.explanation && <p className="mt-2 text-[12.5px] text-ink-muted">{item.explanation}</p>}
+                {item.explanation && <p className="mt-2 text-label text-ink-muted">{item.explanation}</p>}
                 {item.citation && (
-                  <p className="mt-2 font-mono text-[11px] text-[var(--ac)]">{`⌗ ${item.citation}`}</p>
+                  <p className="mt-2 font-mono text-label text-[var(--ac)]">{`⌗ ${item.citation}`}</p>
                 )}
               </div>
             );
@@ -140,7 +142,7 @@ export default function ExamWorkspace() {
             setResult(null);
             setQuiz(null);
           }}
-          className="mt-4 border border-line px-4 py-2 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi"
+          className="mt-4 border border-line px-4 py-2 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi"
         >
           BACK TO EXAMS
         </button>
@@ -154,11 +156,11 @@ export default function ExamWorkspace() {
     const answered = answers[current] !== "";
     const pct = Math.round(((current + 1) / quiz.questions.length) * 100);
     return (
-      <Panel label="PRACTICE.EXAM" headerRight={<span className="font-mono text-[11px] text-ink-muted">Q{current + 1}/{quiz.questions.length}</span>}>
+      <Panel label="PRACTICE.EXAM" headerRight={<span className="font-mono text-label text-ink-muted">Q{current + 1}/{quiz.questions.length}</span>}>
         <div className="mb-4 h-1 w-full bg-sunken">
           <div className="h-1 bg-[var(--ac)] transition-[width]" style={{ width: `${pct}%` }} />
         </div>
-        <p className="mb-5 font-body text-[17px] text-ink-bright">{question.q}</p>
+        <p className="mb-5 font-body text-title text-ink-bright">{question.q}</p>
         {question.options ? (
           <div className="grid gap-2">
             {question.options.map((option, i) => {
@@ -168,7 +170,7 @@ export default function ExamWorkspace() {
                 <button
                   key={option}
                   onClick={() => setAnswers((prev) => prev.map((a, j) => (j === current ? option : a)))}
-                  className={`border px-4 py-2.5 text-left text-[13.5px] transition-colors ${
+                  className={`border px-4 py-2.5 text-left text-body transition-colors ${
                     selected ? "border-[var(--ac)] bg-[var(--ac-bg)] text-ink" : "border-line text-ink-muted hover:border-lineHi"
                   }`}
                 >
@@ -183,14 +185,15 @@ export default function ExamWorkspace() {
             value={answers[current]}
             onChange={(event) => setAnswers((prev) => prev.map((a, j) => (j === current ? event.target.value : a)))}
             placeholder="Type your answer"
-            className="w-full border border-line bg-sunken px-4 py-2.5 text-[13.5px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+            aria-label="Your answer"
+            className="w-full border border-line bg-sunken px-4 py-2.5 text-body placeholder:text-ink-faint focus:border-lineHi"
           />
         )}
         <div className="mt-6 flex items-center justify-between">
           <button
             onClick={() => setCurrent((v) => Math.max(0, v - 1))}
             disabled={current === 0}
-            className="border border-line px-4 py-2 font-mono text-[11px] uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi disabled:opacity-40"
+            className="border border-line px-4 py-2 font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi disabled:opacity-40"
           >
             ← PREV
           </button>
@@ -198,7 +201,7 @@ export default function ExamWorkspace() {
             <button
               onClick={() => setCurrent((v) => v + 1)}
               disabled={!answered}
-              className="border border-[var(--ac)] px-4 py-2 font-mono text-[11px] uppercase tracking-wide text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-40"
+              className="border border-[var(--ac)] px-4 py-2 font-mono text-label uppercase tracking-wide text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-40"
             >
               NEXT →
             </button>
@@ -206,7 +209,7 @@ export default function ExamWorkspace() {
             <button
               onClick={submitQuiz}
               disabled={!answered}
-              className="border border-[var(--ac)] bg-[var(--ac-bg)] px-4 py-2 font-mono text-[11px] uppercase tracking-wide text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-40"
+              className="border border-[var(--ac)] bg-[var(--ac-bg)] px-4 py-2 font-mono text-label uppercase tracking-wide text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-40"
             >
               GRADE ME
             </button>
@@ -223,7 +226,8 @@ export default function ExamWorkspace() {
         <select
           value={genCourse}
           onChange={(event) => setGenCourse(event.target.value)}
-          className="border border-line bg-sunken px-2 py-1.5 font-mono text-[12px] text-ink focus:border-lineHi focus:outline-none"
+          aria-label="Course"
+          className="min-h-9 border border-line bg-sunken px-2 py-1.5 font-mono text-label text-ink focus:border-lineHi"
         >
           <option value="">select course…</option>
           {(courses ?? []).map((course) => (
@@ -235,14 +239,14 @@ export default function ExamWorkspace() {
         <button
           type="submit"
           disabled={!genCourse || generating}
-          className="border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+          className="border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
         >
           {generating ? "GENERATING…" : "+ GENERATE EXAM"}
         </button>
       </form>
 
       {!exams || exams.length === 0 ? (
-        <p className="text-[13px] text-ink-faint">
+        <p className="text-body text-ink-faint">
           No exams yet — generate one above (needs a course with uploaded materials).
         </p>
       ) : (
@@ -254,12 +258,12 @@ export default function ExamWorkspace() {
                 className="flex w-full items-center justify-between border border-line px-4 py-3 text-left transition-colors hover:border-lineHi"
               >
                 <span className="min-w-0">
-                  <span className="block truncate text-[13.5px] text-ink">{exam.title}</span>
-                  <span className="font-mono text-[11px] text-ink-faint">
+                  <span className="block truncate text-body text-ink">{exam.title}</span>
+                  <span className="font-mono text-label text-ink-faint">
                     {exam.course} · {exam.questions} questions
                   </span>
                 </span>
-                <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-[var(--ac)]">
+                <span className="shrink-0 font-mono text-label uppercase tracking-wide text-[var(--ac)]">
                   TAKE →
                 </span>
               </button>

@@ -51,7 +51,7 @@ export default function TasksPage() {
                 {tasks.map((task, i) => (
                   <li key={i} className="border border-line bg-panel p-3">
                     <p className="text-sm text-ink">{task.text}</p>
-                    <p className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[10px] text-ink-faint">
+                    <p className="mt-1 flex flex-wrap items-center gap-2 font-mono text-meta text-ink-faint">
                       {task.due && <span className={column.accent}>{task.due}</span>}
                       {task.priority && <span>{task.priority}</span>}
                       {task.tags.map((tag) => (

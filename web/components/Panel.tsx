@@ -39,14 +39,14 @@ export default function Panel({
         <div className="mb-1 flex items-center gap-2">
           {label && <p className="eyebrow">{`▍${label}`}</p>}
           {preview && (
-            <span className="border border-[#3d2f66] px-1 py-px font-mono text-[8px] uppercase tracking-[0.16em] text-[#8b7bc0]">
+            <span className="border border-[#3d2f66] px-1 py-px font-mono text-micro uppercase tracking-[0.16em] text-[#8b7bc0]">
               PREVIEW
             </span>
           )}
           {headerRight && <div className="ml-auto flex items-center">{headerRight}</div>}
         </div>
       )}
-      {title && <h2 className="mb-3 font-body text-[15px] font-medium text-ink-bright">{title}</h2>}
+      {title && <h2 className="mb-3 font-body text-lead font-medium text-ink-bright">{title}</h2>}
       {children}
     </section>
   );

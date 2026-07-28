@@ -6,7 +6,7 @@ Setup: Todoist → Settings → Integrations → Developer → API token, then
 
 from __future__ import annotations
 
-from backend.tasks.parser import TaskItem
+from backend.vault.tasks import TaskItem
 
 KEYRING_SERVICE = "argus-todoist"
 KEYRING_USER = "token"
@@ -32,6 +32,16 @@ def connect(token: str) -> None:
     if not token.strip():
         raise ValueError("empty Todoist token")
     keyring.set_password(KEYRING_SERVICE, KEYRING_USER, token.strip())
+
+
+def disconnect() -> None:
+    """Forget the stored token. Best-effort — already-absent is success."""
+    try:
+        import keyring
+
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
+    except Exception:  # noqa: BLE001 - already gone, or the keyring is unusable
+        pass
 
 
 def list_tasks(api=None) -> list[TaskItem]:

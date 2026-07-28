@@ -1,6 +1,7 @@
 "use client";
 
 import Panel from "@/components/Panel";
+import Button from "@/components/ui/Button";
 import { useDoctor } from "@/lib/api";
 
 const STATUS_CLASS: Record<string, string> = {
@@ -22,19 +23,14 @@ export default function DoctorPanel() {
     <Panel
       label="DOCTOR"
       headerRight={
-        <button
-          type="button"
-          onClick={() => mutate()}
-          disabled={isLoading}
-          className="border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
-        >
+        <Button variant="quiet" onClick={() => mutate()} disabled={isLoading}>
           {isLoading ? "RUNNING…" : "RUN AGAIN"}
-        </button>
+        </Button>
       }
     >
-      {isLoading && !checks && <p className="text-[12.5px] text-ink-faint">running checks…</p>}
+      {isLoading && !checks && <p className="text-label text-ink-faint">running checks…</p>}
       {!isLoading && !checks && (
-        <p className="text-[12.5px] text-ink-faint">
+        <p className="text-label text-ink-faint">
           couldn&apos;t reach the backend — is <span className="font-mono text-xs">argus web</span> running?
         </p>
       )}
@@ -43,13 +39,13 @@ export default function DoctorPanel() {
           {checks.map((check) => (
             <div key={check.name} className="flex items-center gap-2 border border-line px-2.5 py-1.5">
               <span
-                className={`shrink-0 border px-1.5 py-0.5 font-mono text-[9px] uppercase ${STATUS_CLASS[check.status]}`}
+                className={`shrink-0 border px-1.5 py-0.5 font-mono text-micro uppercase ${STATUS_CLASS[check.status]}`}
               >
                 {check.status}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate font-mono text-[11.5px] text-ink">{check.name}</span>
-                <span className="block truncate text-[10.5px] text-ink-faint">{check.detail}</span>
+                <span className="block truncate font-mono text-label text-ink">{check.name}</span>
+                <span className="block truncate text-meta text-ink-faint">{check.detail}</span>
               </span>
             </div>
           ))}

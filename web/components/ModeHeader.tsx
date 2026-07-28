@@ -32,7 +32,7 @@ export default function ModeHeader({ mode, greeting, status }: ModeHeaderProps) 
   return (
     <header className="mb-8 animate-rise">
       <p className="eyebrow mb-2">{`// SYS.${mode.toUpperCase()} :: ${formatToday()} :: ${statusLine}`}</p>
-      <h1 className="font-mono text-[23px] font-semibold tracking-tight text-ink-bright">
+      <h1 className="font-mono text-display font-semibold tracking-tight text-ink-bright">
         {output}
         <span className={`text-[var(--ac)] ${done ? "animate-blink" : ""}`}>▊</span>
       </h1>

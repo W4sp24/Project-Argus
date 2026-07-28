@@ -81,7 +81,7 @@ def _emit(payload: dict) -> None:
 def _cmd_init(dest: Path) -> int:
     """Create a vault at ``dest`` and record VAULT_PATH in ARGUS_ENV_FILE."""
     from backend.cli import InitError, init_vault
-    from backend.config import DEFAULT_ENV_FILE
+    from backend.core.config import DEFAULT_ENV_FILE
 
     try:
         created = init_vault(dest, env_file=DEFAULT_ENV_FILE)
@@ -99,8 +99,8 @@ def _cmd_doctor() -> int:
     is configured yet, so guard it -- the wizard calls this on a half-set-up
     machine by definition.
     """
-    from backend.config import ConfigError, Settings
-    from backend.doctor import run_checks
+    from backend.core.config import ConfigError, Settings
+    from backend.features.system.doctor import run_checks
 
     try:
         checks = run_checks(Settings.load())

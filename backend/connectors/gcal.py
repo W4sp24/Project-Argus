@@ -46,8 +46,16 @@ def configured() -> bool:
         return False
 
 
-def connect(credentials_file: Path = CREDENTIALS_FILE) -> None:
-    """Run the one-time browser consent flow and store the token (I4)."""
+def connect(
+    credentials_file: Path = CREDENTIALS_FILE, timeout_seconds: float | None = None
+) -> None:
+    """Run the one-time browser consent flow and store the token (I4).
+
+    ``timeout_seconds`` bounds the wait for the browser redirect. The CLI
+    leaves it None (a person at a terminal can take as long as they like); the
+    HTTP endpoint sets it, because an abandoned consent must not pin a worker
+    thread for the life of the process.
+    """
     import keyring
     from google_auth_oauthlib.flow import InstalledAppFlow
 
@@ -57,8 +65,18 @@ def connect(credentials_file: Path = CREDENTIALS_FILE) -> None:
             "Console and save its JSON here first."
         )
     flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
-    creds = flow.run_local_server(port=0)
+    creds = flow.run_local_server(port=0, timeout_seconds=timeout_seconds)
     keyring.set_password(KEYRING_SERVICE, KEYRING_USER, creds.to_json())
+
+
+def disconnect() -> None:
+    """Forget the stored token. Best-effort — already-absent is success."""
+    try:
+        import keyring
+
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
+    except Exception:  # noqa: BLE001 - already gone, or the keyring is unusable
+        pass
 
 
 def _service():
@@ -84,7 +102,7 @@ def _service():
 
 
 def insert_event(title: str, start: str, end: str, service=None) -> None:
-    """Insert one Argus block. Only ``backend.writer`` may call this (I1)."""
+    """Insert one Argus block. Only ``backend.vault.writer`` may call this (I1)."""
     service = service or _service()
     if service is None:
         raise RuntimeError("Google Calendar is not connected — run `argus connect gcal`")

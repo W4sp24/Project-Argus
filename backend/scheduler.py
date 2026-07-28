@@ -11,11 +11,11 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from backend.briefing import Composer, compose_briefing
-from backend.config import Settings
-from backend.db import connect, init_schema
-from backend.tasks.parser import refresh_cache
-from backend.writer import write_briefing
+from backend.core.config import Settings
+from backend.core.db import connect, init_schema
+from backend.features.briefing.service import Composer, compose_briefing
+from backend.vault.tasks import refresh_cache
+from backend.vault.writer import write_briefing
 
 logger = logging.getLogger("argus.scheduler")
 

@@ -19,8 +19,9 @@
       <ol class="steps">
         <li data-step="welcome" class="on">1</li>
         <li data-step="prereqs">2</li>
-        <li data-step="vault">3</li>
-        <li data-step="check">4</li>
+        <li data-step="ai">3</li>
+        <li data-step="vault">4</li>
+        <li data-step="check">5</li>
       </ol>
     </header>
 
@@ -34,24 +35,82 @@
           you can open it in Obsidian, or in any text editor, at any time.
         </p>
         <p class="muted">
-          Two things need to be installed before it can work. Let's check them.
+          One thing needs to be installed before it can work, and you'll pick
+          how the AI runs. Let's check.
         </p>
         <footer><button class="primary" data-go="prereqs">Get started</button></footer>
       </section>
 
       <!-- 2 ------------------------------------------------------------- -->
       <section data-panel="prereqs">
-        <h2>Required software</h2>
+        <h2>Software check</h2>
         <p class="muted">
-          These can't ship inside Argus — Claude Code signs in with your own
-          Claude subscription, and git is what lets Argus snapshot your vault
-          before it changes anything.
+          Only <strong>git</strong> is required — it's what lets Argus snapshot
+          your vault before it changes anything, so every edit can be undone.
+          The rest are the different ways to run the AI, and you only need one
+          of them. You can add one later instead.
         </p>
         <div id="prereq-list" class="rows"><p class="muted">Checking…</p></div>
+        <p class="muted" id="prereq-hint"></p>
         <footer>
           <button data-go="welcome">Back</button>
           <button id="recheck">Check again</button>
-          <button class="primary" id="prereq-next" data-go="vault" disabled>Continue</button>
+          <button class="primary" id="prereq-next" data-go="ai" disabled>Continue</button>
+        </footer>
+      </section>
+
+      <!-- 2b ------------------------------------------------------------ -->
+      <section data-panel="ai">
+        <h2>How should the AI run?</h2>
+        <p class="muted">
+          Argus needs a model to answer questions about your notes, plan your
+          day, and build practice exams. Three ways, and you can change or mix
+          them any time under <strong>System → Models</strong>.
+        </p>
+        <div class="rows">
+          <div class="row ok">
+            <span class="badge">FREE</span>
+            <span class="body">
+              <span class="name">A model on this computer (Ollama)</span>
+              <div class="detail">
+                Costs nothing, works offline, and your notes never leave this
+                machine. Needs a reasonably modern PC — Argus will tell you
+                which models fit yours and download one for you.
+                <br /><a href="#" data-url="https://ollama.com/download">Get Ollama →</a>
+              </div>
+            </span>
+          </div>
+          <div class="row warn">
+            <span class="badge">PAID</span>
+            <span class="body">
+              <span class="name">A hosted API key</span>
+              <div class="detail">
+                Works on any machine, however old, because the work happens on
+                someone else's servers — which does mean excerpts of your notes
+                are sent to them. Groq, Together, Fireworks, OpenRouter, or
+                Anthropic. Usually a few dollars a month.
+              </div>
+            </span>
+          </div>
+          <div class="row warn">
+            <span class="badge">SUB</span>
+            <span class="body">
+              <span class="name">Claude Code</span>
+              <div class="detail">
+                Uses a Claude subscription you already pay for. Note excerpts
+                are sent to Anthropic.
+                <br /><a href="#" data-url="https://claude.com/code">Get Claude Code →</a>
+              </div>
+            </span>
+          </div>
+        </div>
+        <p class="muted">
+          Nothing to decide right now — finish setup, then open
+          <strong>System</strong> and Argus will walk you through it.
+        </p>
+        <footer>
+          <button data-go="prereqs">Back</button>
+          <button class="primary" data-go="vault">Continue</button>
         </footer>
       </section>
 

@@ -7,7 +7,7 @@
  * /health, served by a process that cannot function, after a 15s torch import.
  */
 
-const STEPS = ["welcome", "prereqs", "vault", "check"];
+const STEPS = ["welcome", "prereqs", "ai", "vault", "check"];
 const state = { vault: null, prereqsOk: false };
 
 function show(step) {
@@ -20,6 +20,7 @@ function show(step) {
     li.classList.toggle("done", i < index);
   });
   if (step === "prereqs") checkPrereqs();
+  if (step === "ai") wireLinks(document.querySelector('[data-panel="ai"]'));
   if (step === "check") runDoctor();
 }
 
@@ -51,27 +52,41 @@ function wireLinks(container) {
 async function checkPrereqs() {
   const list = document.getElementById("prereq-list");
   const next = document.getElementById("prereq-next");
+  const hint = document.getElementById("prereq-hint");
   list.innerHTML = `<p class="muted">Checking…</p>`;
   next.disabled = true;
 
   const checks = await window.argus.checkPrereqs();
   list.innerHTML = checks
-    .map((check) =>
-      row({
-        cls: check.ok ? "ok" : "fail",
-        badge: check.ok ? "FOUND" : "MISSING",
+    .map((check) => {
+      // Required and missing is a hard failure; optional and missing is just
+      // one AI option unavailable, and there are others.
+      const cls = check.ok ? "ok" : check.required ? "fail" : "warn";
+      const badge = check.ok ? "FOUND" : check.required ? "MISSING" : "OPTIONAL";
+      return row({
+        cls,
+        badge,
         name: check.label,
         detail: `${check.detail}<br>${check.help}`,
         url: check.ok ? null : check.url,
-      }),
-    )
+      });
+    })
     .join("");
   wireLinks(list);
 
-  // Hard block, not a warning: without these the app installs and then fails
-  // in the middle of the first chat turn, which is far more confusing.
-  state.prereqsOk = checks.every((check) => check.ok);
+  // Only git blocks. Argus can run its AI on a local Ollama model, on a
+  // hosted API key, or on Claude Code — so requiring any one of them here
+  // would refuse to install a perfectly workable setup.
+  const required = checks.filter((check) => check.required);
+  state.prereqsOk = required.every((check) => check.ok);
   next.disabled = !state.prereqsOk;
+
+  const anyAi = checks.some((check) => !check.required && check.ok);
+  if (hint) {
+    hint.textContent = anyAi
+      ? "You have at least one way to run the AI. You can add or change models later in Argus under System."
+      : "No AI backend detected yet. You can still finish setup — Argus will walk you through adding one (a local model, or an API key) under System.";
+  }
 }
 
 // --- step 3: vault ---------------------------------------------------------

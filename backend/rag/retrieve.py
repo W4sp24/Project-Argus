@@ -59,7 +59,7 @@ def _expand_wikilinks(hits: list[dict], vault_path: Path) -> list[dict]:
             seen.add(name)
             for candidate in vault_path.rglob(f"{name}.md"):
                 rel = candidate.relative_to(vault_path).as_posix()
-                from backend.rag.paths import is_indexable
+                from backend.vault.paths import is_indexable
 
                 if not is_indexable(rel):
                     continue

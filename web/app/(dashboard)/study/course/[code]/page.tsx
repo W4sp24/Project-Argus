@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { EngineTrigger } from "@/components/EnginePicker";
 import { CourseChat, CourseStudio } from "@/components/preview/CourseHub";
 import CourseSourcesPanel from "@/components/study/CourseSourcesPanel";
 import { useStudyCourses } from "@/lib/api";
@@ -29,27 +30,24 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
         <button
           type="button"
           onClick={() => router.back()}
-          className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint transition-colors hover:text-ink-bright"
+          className="font-mono text-label uppercase tracking-[0.14em] text-ink-faint transition-colors hover:text-ink-bright"
         >
           ← BACK
         </button>
         <div className="min-w-0">
           <p className="eyebrow">{`▍COURSE.HUB · ${code}`}</p>
-          <p className="truncate text-[15px] font-medium text-ink-bright">
+          <p className="truncate text-lead font-medium text-ink-bright">
             {course?.title ?? "Unknown course"}
           </p>
         </div>
-        <span className="border border-[#3d2f66] px-1 py-px font-mono text-[8px] uppercase tracking-[0.16em] text-[#8b7bc0]">
+        <span className="border border-[#3d2f66] px-1 py-px font-mono text-micro uppercase tracking-[0.16em] text-[#8b7bc0]">
           PREVIEW
         </span>
-        <button
-          type="button"
-          aria-label="Model selector — wired in a later phase"
-          disabled
-          className="ml-auto border border-line px-2.5 py-1.5 font-mono text-[11px] text-ink-faint"
-        >
-          claude-sonnet-5 ▾
-        </button>
+        {/* Was a disabled button with `claude-sonnet-5` baked into it, which
+            misreported the model the moment anything else was selected. */}
+        <div className="ml-auto">
+          <EngineTrigger />
+        </div>
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[300px_minmax(0,1fr)_270px]">

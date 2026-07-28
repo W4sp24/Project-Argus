@@ -57,6 +57,57 @@ function need(target, hint) {
   }
 }
 
+// --- backend freshness -----------------------------------------------------
+
+/**
+ * The frozen backend is built by a *separate* command, so staging will happily
+ * pair a dashboard built seconds ago with a PyInstaller bundle from last week.
+ * That is not hypothetical: it shipped a build whose UI called
+ * `/api/usage/agents` against a backend that answered 404, and the only symptom
+ * was an empty usage panel — nothing failed, nothing logged.
+ *
+ * Comparing the exe's mtime against the newest `.py` under `backend/` turns
+ * that silent mismatch into a build error. Checked *before* the dashboard build
+ * so CI fails in a second rather than after a multi-minute Next compile.
+ *
+ * Hard failure in CI, loud warning locally: iterating on the dashboard alone
+ * with a slightly old backend is normal and legitimate during development.
+ */
+function newestPythonMtime(dir) {
+  let newest = 0;
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      if (entry.name === "__pycache__") continue;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".py")) newest = Math.max(newest, fs.statSync(full).mtimeMs);
+    }
+  };
+  walk(dir);
+  return newest;
+}
+
+const REBUILD_HINT =
+  "pyinstaller desktop/argus-backend.spec --noconfirm --distpath desktop/resources";
+const frozenExe = path.join(resources, "backend", "argus-backend.exe");
+
+if (fs.existsSync(frozenExe)) {
+  const frozenAt = fs.statSync(frozenExe).mtimeMs;
+  const sourceAt = newestPythonMtime(path.join(repo, "backend"));
+  if (sourceAt > frozenAt) {
+    const behind = Math.round((sourceAt - frozenAt) / 60000);
+    const message =
+      `resources/backend is ${behind} min older than backend/ sources — ` +
+      `the packaged app would ship a stale API. Rebuild it:\n  ${REBUILD_HINT}`;
+    if (process.env.GITHUB_ACTIONS) {
+      console.error(message);
+      annotate(message);
+      process.exit(1);
+    }
+    console.warn(`\nWARNING: ${message}\n`);
+  }
+}
+
 // --- Next ------------------------------------------------------------------
 
 if (!skipBuild) {

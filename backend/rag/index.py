@@ -14,7 +14,7 @@ from typing import Any
 
 from backend.rag.chunk import Chunk, chunk_blocks
 from backend.rag.extract import extract_blocks
-from backend.rag.paths import is_indexable
+from backend.vault.paths import is_indexable
 
 # A HuggingFace repo id by default (downloaded on first use). The packaged
 # desktop app pre-bakes the weights and points this at an absolute path so a

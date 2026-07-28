@@ -40,7 +40,7 @@ export default function ResearchPage() {
           ]}
         />
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid gap-4 lg:grid-cols-shell">
           <div className="flex min-w-0 flex-col gap-4">
             <LibraryQueue onCounts={handleLibraryCounts} />
           </div>
@@ -48,12 +48,12 @@ export default function ResearchPage() {
           <div className="flex min-w-0 flex-col gap-4">
             <HighlightsRecent onCount={handleHighlightCount} />
             <Panel label="ASK.VAULT">
-              <p className="mb-3 text-[13px] leading-relaxed text-ink-muted">
+              <p className="mb-3 text-body leading-relaxed text-ink-muted">
                 Ask Argus anything about your reading queue — every answer cites the passage it came from.
               </p>
               <Link
                 href="/chat"
-                className="inline-block border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi"
+                className="inline-block border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi"
               >
                 open chat →
               </Link>
