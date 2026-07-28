@@ -224,10 +224,13 @@ export default function UsageAreaChart({
         </div>
       )}
 
-      {/* Axis labels sit outside the stretched SVG so they are not smeared. */}
+      {/* Axis labels sit outside the stretched SVG so they are not smeared.
+          Read defensively: `labels` is a separate array from `series`, so a
+          caller that lets them disagree used to render a literal "undefined"
+          at the end of the axis rather than nothing. */}
       <div className="mt-1 flex shrink-0 justify-between font-mono text-micro text-ink-faint">
-        <span>{labels[0]}</span>
-        {labels.length > 1 && <span>{labels[labels.length - 1]}</span>}
+        <span>{labels[0] ?? ""}</span>
+        {labels.length > 1 && <span>{labels[labels.length - 1] ?? ""}</span>}
       </div>
     </div>
   );

@@ -15,6 +15,18 @@ export interface AgentOption {
 }
 
 /**
+ * Whether a row can be chosen.
+ *
+ * Detection is about the *installation*, not the data: usage rows deliberately
+ * outlive an uninstall, and they stay in the combined total. An agent whose
+ * tokens are still being counted must therefore stay reachable, or the parts
+ * visibly fail to add up to the whole and there is no way to see why.
+ */
+function isAvailable(option: AgentOption): boolean {
+  return option.detected || option.total > 0;
+}
+
+/**
  * The agent selector.
  *
  * A dropdown rather than a chip rail because the list is now open-ended — three
@@ -47,7 +59,7 @@ export default function AgentSelect({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
 
-  const selectable = options.filter((option) => option.detected);
+  const selectable = options.filter(isAvailable);
   const selected = options.find((option) => option.id === value) ?? options[0];
 
   useEffect(() => {
@@ -135,19 +147,23 @@ export default function AgentSelect({
         </span>
       </button>
 
+      {/* min-w is 17rem, not 21rem: the dashboard rail is 21.25rem wide and
+          Panel adds 1.25rem of padding either side, so a 21rem menu spilled
+          past the panel's right border on both GENERAL and CODE. Everything
+          here is rem, so it holds at every DISPLAY scale. */}
       {open && (
         <ul
           id={listId}
           role="listbox"
           aria-label="Agent"
-          className="animate-palette absolute left-0 top-full z-30 mt-1 max-h-[19rem] w-full min-w-[21rem] overflow-y-auto border border-lineHi bg-panel py-1 shadow-xl"
+          className="animate-palette absolute left-0 top-full z-30 mt-1 max-h-[19rem] w-full min-w-[17rem] max-w-[calc(100vw-2rem)] overflow-y-auto border border-lineHi bg-panel py-1 shadow-xl"
         >
           {options.map((option) => {
             const index = selectable.indexOf(option);
             const isActive = index >= 0 && index === active;
             const isSelected = option.id === value;
 
-            if (!option.detected) {
+            if (!isAvailable(option)) {
               return (
                 <li
                   key={option.id}
@@ -199,6 +215,17 @@ export default function AgentSelect({
                   >
                     {option.label}
                   </span>
+                  {/* Selectable but no longer installed: its rows are still in
+                      the combined total, so the row says why it looks stale
+                      rather than disappearing and leaving the sum unexplained. */}
+                  {!option.detected && (
+                    <span
+                      className="shrink-0 font-mono text-micro uppercase tracking-[0.1em] text-ink-faint"
+                      title={option.hint}
+                    >
+                      past
+                    </span>
+                  )}
                   <span
                     className="shrink-0 font-mono text-micro tabular-nums text-ink"
                     title={`${option.total.toLocaleString()} tokens`}

@@ -121,7 +121,7 @@ export default function AgentUsage({ size = "default" }: { size?: "default" | "l
   const [range, setRange] = useState<CliUsageRange>("today");
   const [agentId, setAgentId] = useState<string>(COMBINED_ID);
   const [adding, setAdding] = useState(false);
-  const { data, isLoading, mutate } = useAgentUsage(range);
+  const { data, error, isLoading, mutate } = useAgentUsage(range);
   const { show } = useToast();
   const { confirm, confirmDialog } = useConfirm();
 
@@ -154,18 +154,34 @@ export default function AgentUsage({ size = "default" }: { size?: "default" | "l
 
   // The combined view compares agents; a single agent breaks down its own
   // token kinds. Same chart, two questions.
-  const detected = agents.filter((agent) => agent.detected && agent.total_tokens > 0);
-  const chartLabels = (
-    showingAll ? (detected[0]?.series ?? active?.series ?? []) : (active?.series ?? [])
-  ).map((point) => chartLabel(range, point.label));
+  //
+  // Gated on spend, not on detection: rows outlive an uninstall by design (a
+  // missing root is usually an unreachable folder, so `_reap` keeps them), and
+  // they stay in the combined headline. Hiding their series only produced a
+  // headline of N tokens above "no activity in this range".
+  const charted = agents.filter((agent) => agent.total_tokens > 0);
+
+  // Backend series are *sparse* — only buckets that actually have rows — so
+  // agents that ran at different times have different-length series with
+  // different labels. Overlaying them index-by-index drew one agent's 13:00
+  // spend at another's 09:00. Project every agent onto the union of buckets.
+  const buckets = showingAll
+    ? Array.from(new Set(charted.flatMap((agent) => agent.series.map((point) => point.label))))
+        .sort()
+    : (active?.series ?? []).map((point) => point.label);
+
+  const chartLabels = buckets.map((label) => chartLabel(range, label));
 
   const chartSeries: ChartSeries[] = showingAll
-    ? detected.map((agent) => ({
-        key: agent.id,
-        label: agent.label,
-        color: agentColor(agent.id),
-        points: agent.series.map((point) => point.total_tokens),
-      }))
+    ? charted.map((agent) => {
+        const byBucket = new Map(agent.series.map((point) => [point.label, point.total_tokens]));
+        return {
+          key: agent.id,
+          label: agent.label,
+          color: agentColor(agent.id),
+          points: buckets.map((label) => byBucket.get(label) ?? 0),
+        };
+      })
     : COUNTERS.map((counter) => ({
         key: counter.key,
         label: counter.label,
@@ -232,7 +248,19 @@ export default function AgentUsage({ size = "default" }: { size?: "default" | "l
           )}
         </div>
 
-        {isLoading && !data ? (
+        {error && !data ? (
+          // An unreachable backend used to fall through to "no usage data",
+          // which reads as "you have spent nothing" — the opposite of the truth.
+          <div className="border border-danger/50 px-4 py-6">
+            <p className="font-mono text-label text-danger">could not load usage</p>
+            <p className="mt-1 text-label leading-relaxed text-ink-faint">
+              {error instanceof Error ? error.message : "the backend did not answer"}
+            </p>
+            <Button className="mt-3" onClick={() => void mutate()}>
+              RETRY
+            </Button>
+          </div>
+        ) : isLoading && !data ? (
           <p className="text-label text-ink-faint">loading usage…</p>
         ) : !active ? (
           <p className="text-label text-ink-faint">no usage data</p>
@@ -265,7 +293,7 @@ export default function AgentUsage({ size = "default" }: { size?: "default" | "l
               <div className="flex flex-wrap items-baseline gap-2">
                 <p
                   className={`font-mono font-semibold tabular-nums text-ink-bright ${
-                    wide ? "text-4xl" : "text-2xl"
+                    wide ? "text-display" : "text-title"
                   }`}
                   title={`${active.total_tokens.toLocaleString()} tokens`}
                 >
@@ -307,9 +335,9 @@ export default function AgentUsage({ size = "default" }: { size?: "default" | "l
                 stacked={!showingAll}
                 className={wide ? "h-44" : "h-32"}
               />
-              {showingAll && detected.length > 1 && (
+              {showingAll && charted.length > 1 && (
                 <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                  {detected.map((agent) => (
+                  {charted.map((agent) => (
                     <li
                       key={agent.id}
                       className="flex items-center gap-1.5 font-mono text-micro text-ink-faint"

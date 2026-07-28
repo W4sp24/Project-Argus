@@ -36,7 +36,10 @@ export default function Panel({
       onDrop={onDrop}
     >
       {hasHeader && (
-        <div className="mb-1 flex items-center gap-2">
+        // Wraps because `headerRight` is open-ended — AGENT.USAGE puts a button
+        // and a three-way switcher there, which together overflow the 21.25rem
+        // dashboard rail and pushed the controls out past the panel border.
+        <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
           {label && <p className="eyebrow">{`▍${label}`}</p>}
           {preview && (
             <span className="border border-[#3d2f66] px-1 py-px font-mono text-micro uppercase tracking-[0.16em] text-[#8b7bc0]">
