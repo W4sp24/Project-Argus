@@ -148,12 +148,21 @@ def _reap(
     )
 
 
+#: ``ts`` is stored UTC (Claude Code writes ISO-Z; ``token_usage`` defaults to
+#: ``datetime('now')``), but every range in the UI is a *human* range. "TODAY"
+#: has to mean the reader's today or the panel reads empty all morning and
+#: attributes last night's work to it. COALESCE keeps this module's never-raise
+#: contract: an unparseable timestamp falls back to its raw value instead of
+#: becoming NULL and taking the whole report with it.
+LOCAL_TS = "COALESCE(datetime(ts, 'localtime'), ts)"
+
+
 def _window(range_: CliRange) -> str:
     """The WHERE fragment bounding one range (empty for ``all``)."""
     if range_ == "today":
-        return "ts >= datetime('now', 'start of day')"
+        return f"{LOCAL_TS} >= datetime('now', 'localtime', 'start of day')"
     if range_ == "week":
-        return "ts >= datetime('now', '-6 days', 'start of day')"
+        return f"{LOCAL_TS} >= datetime('now', 'localtime', '-6 days', 'start of day')"
     return ""
 
 
@@ -164,11 +173,14 @@ def _previous_window(range_: CliRange) -> str:
     fabricated one.
     """
     if range_ == "today":
-        return "ts >= datetime('now', '-1 day', 'start of day') AND ts < datetime('now', 'start of day')"
+        return (
+            f"{LOCAL_TS} >= datetime('now', 'localtime', '-1 day', 'start of day')"
+            f" AND {LOCAL_TS} < datetime('now', 'localtime', 'start of day')"
+        )
     if range_ == "week":
         return (
-            "ts >= datetime('now', '-13 days', 'start of day')"
-            " AND ts < datetime('now', '-6 days', 'start of day')"
+            f"{LOCAL_TS} >= datetime('now', 'localtime', '-13 days', 'start of day')"
+            f" AND {LOCAL_TS} < datetime('now', 'localtime', '-6 days', 'start of day')"
         )
     return ""
 
@@ -183,7 +195,9 @@ def fetch_rows(
     return conn.execute(
         "SELECT ts, agent, model, input_tokens, output_tokens,"
         " cache_creation_input_tokens, cache_read_input_tokens,"
-        f" strftime('%W', ts) AS week FROM cli_usage {where} ORDER BY ts",
+        f" {LOCAL_TS} AS local_ts,"
+        " COALESCE(strftime('%W', ts, 'localtime'), strftime('%W', ts)) AS week"
+        f" FROM cli_usage {where} ORDER BY ts",
         params,
     ).fetchall()
 
@@ -228,9 +242,11 @@ def bucket_key(ts: str, week: str, range_: CliRange) -> str:
 
     ``today`` buckets by **hour**: bucketing a single day by day produces one
     point, which a chart can only draw as a flat block. Hours give the day its
-    actual shape. Timestamps are UTC throughout this table (Claude Code writes
-    ISO-Z, and the range windows use ``datetime('now')``), so the hour labels
-    are UTC — the same basis the day boundary already used.
+    actual shape.
+
+    ``ts`` is expected in **local** time — :func:`fetch_rows` selects
+    ``local_ts`` for exactly this — so an hour label reads as the hour the user
+    was sitting there, on the same basis as the day boundary in :func:`_window`.
     """
     if range_ == "today":
         return f"{ts[11:13]}:00"
@@ -243,7 +259,7 @@ def series(rows: list[sqlite3.Row], range_: CliRange) -> list[UsagePoint]:
     """Hour buckets for today, day for week, ISO-week for all-time."""
     buckets: dict[str, list[int]] = {}
     for row in rows:
-        key = bucket_key(row["ts"], row["week"], range_)
+        key = bucket_key(row["local_ts"], row["week"], range_)
         entry = buckets.setdefault(key, [0, 0, 0, 0])
         for index, counter in enumerate(COUNTERS):
             entry[index] += int(row[counter] or 0)

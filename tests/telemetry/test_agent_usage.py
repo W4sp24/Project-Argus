@@ -188,12 +188,20 @@ def test_unknown_codex_model_is_named_not_guessed(tmp_path: Path, conn, monkeypa
 
 
 def test_today_buckets_by_hour_not_day(conn) -> None:
-    """A single day bucketed by day is one point, which draws as a flat block."""
+    """A single day bucketed by day is one point, which draws as a flat block.
+
+    Rows go in as UTC (that is what the column holds), written as the UTC
+    instant of 09:00 and 14:00 *local* — so the assertion is on the reader's
+    clock and holds in any timezone.
+    """
     conn.execute(
         "INSERT INTO cli_usage (file_path, agent, ts, model, input_tokens) VALUES"
-        " ('f', 'claude-code', datetime('now', 'start of day', '+9 hours'), 'm', 10),"
-        " ('f', 'claude-code', datetime('now', 'start of day', '+9 hours'), 'm', 5),"
-        " ('f', 'claude-code', datetime('now', 'start of day', '+14 hours'), 'm', 20)"
+        " ('f', 'claude-code', datetime('now', 'localtime', 'start of day', '+9 hours', 'utc'),"
+        "  'm', 10),"
+        " ('f', 'claude-code', datetime('now', 'localtime', 'start of day', '+9 hours', 'utc'),"
+        "  'm', 5),"
+        " ('f', 'claude-code', datetime('now', 'localtime', 'start of day', '+14 hours', 'utc'),"
+        "  'm', 20)"
     )
     conn.commit()
 
@@ -202,6 +210,26 @@ def test_today_buckets_by_hour_not_day(conn) -> None:
 
     # The week view still buckets by day.
     assert len(scan.series(scan.fetch_rows(conn, "week"), "week")) == 1
+
+
+def test_today_is_the_local_day_not_the_utc_one(conn) -> None:
+    """Work done just after local midnight belongs to TODAY.
+
+    Bounding the window with UTC instead means a user east of Greenwich opens
+    the panel each morning to "nothing recorded in this range" while the tokens
+    they just spent are filed under yesterday. The regression is invisible in
+    UTC+0, which is why this asserts on a fixed local wall-clock time.
+    """
+    conn.execute(
+        "INSERT INTO cli_usage (file_path, agent, ts, model, input_tokens) VALUES"
+        " ('f', 'claude-code', datetime('now', 'localtime', 'start of day', '+5 minutes', 'utc'),"
+        "  'm', 42)"
+    )
+    conn.commit()
+
+    rows = scan.fetch_rows(conn, "today")
+    assert [row["input_tokens"] for row in rows] == [42]
+    assert scan.series(rows, "today")[0].label == "00:00"
 
 
 def test_previous_total_is_none_for_all_time(tmp_path: Path, conn, monkeypatch) -> None:

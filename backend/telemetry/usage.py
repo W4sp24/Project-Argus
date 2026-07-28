@@ -13,6 +13,7 @@ correct boundary (documented on :class:`UsageReport`).
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
@@ -21,6 +22,9 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from backend.core.model_registry import MODEL_RATES, ZERO_RATE
+from backend.telemetry.scan import LOCAL_TS
+
+log = logging.getLogger(__name__)
 
 SESSION_ID = uuid.uuid4().hex  # one per backend process boot
 
@@ -116,8 +120,11 @@ def record_usage(
             conn.commit()
         finally:
             conn.close()
-    except Exception:  # noqa: S110 - usage logging is strictly best-effort
-        pass
+    except Exception:  # noqa: BLE001 - usage logging is strictly best-effort
+        # Logged, not swallowed silently: without this line a usage pipeline
+        # that is broken looks exactly like one that is idle, which is the
+        # hardest possible thing to diagnose from an empty panel.
+        log.debug("usage: could not record %s tokens for %r", feature, model, exc_info=True)
 
 
 def record_result_usage(
@@ -139,8 +146,8 @@ def record_result_usage(
             int(usage.get("cache_creation_input_tokens") or 0),
             int(usage.get("cache_read_input_tokens") or 0),
         )
-    except Exception:  # noqa: S110 - usage logging is strictly best-effort
-        pass
+    except Exception:  # noqa: BLE001 - usage logging is strictly best-effort
+        log.debug("usage: could not read a %s result for %r", feature, model, exc_info=True)
 
 
 def _cost(rows: list[sqlite3.Row]) -> float:
@@ -216,11 +223,15 @@ def usage_report(
     if range_ == "session":
         where, params = "WHERE session_id = ?", (session_id,)
     elif range_ == "week":
-        where = "WHERE ts >= datetime('now', '-6 days', 'start of day')"
+        # `ts` is UTC; the window and the labels are the reader's local time, so
+        # WEEK means the last seven of *their* days. Same basis as
+        # :data:`backend.telemetry.scan.LOCAL_TS`.
+        where = f"WHERE {LOCAL_TS} >= datetime('now', 'localtime', '-6 days', 'start of day')"
     rows = conn.execute(
-        "SELECT ts, feature, model, input_tokens, output_tokens,"
+        "SELECT feature, model, input_tokens, output_tokens,"
         " cache_creation_input_tokens, cache_read_input_tokens,"
-        " strftime('%W', ts) AS week"
+        f" {LOCAL_TS} AS ts,"
+        " COALESCE(strftime('%W', ts, 'localtime'), strftime('%W', ts)) AS week"
         f" FROM token_usage {where} ORDER BY id",
         params,
     ).fetchall()
