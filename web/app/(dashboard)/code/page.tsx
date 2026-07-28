@@ -18,8 +18,12 @@ function isoDaysAgo(n: number): string {
 
 /**
  * Code mode (§4) — PROJECTS.VAULT / DEV.JOURNAL / SESSIONS.14D are real
- * vault + journal data; ACTIVE.WORK plus the `commits`/`PRs open` stats are
- * mock (no GitHub connector in this branch's ancestry).
+ * vault + journal data; ACTIVE.WORK is still mock.
+ *
+ * The stat row carries no `commits`/`PRs open`: there is no GitHub connector,
+ * so those were hardcoded 23 and 2, sitting in the same row as a real token
+ * count and indistinguishable from it. A dashboard that invents two of its
+ * five numbers cannot be trusted for the other three.
  */
 export default function CodePage() {
   const { data: sessions } = useJournalSessions();
@@ -39,8 +43,6 @@ export default function CodePage() {
         <StatRow
           items={[
             { href: "/code", label: "sessions/wk", value: sessions ? sessionsThisWeek : "–" },
-            { href: "/code", label: "commits", value: 23 },
-            { href: "/code", label: "prs open", value: 2 },
             { href: "/system", label: "tokens", value: tokens.toLocaleString() },
             { href: "/study", label: "streak", value: streak, unit: typeof streak === "number" ? "days" : undefined },
           ]}

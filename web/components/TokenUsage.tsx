@@ -4,16 +4,12 @@ import { useState } from "react";
 import Panel from "@/components/Panel";
 import UsageAreaChart from "@/components/charts/UsageAreaChart";
 import TokenComposition from "@/components/usage/TokenComposition";
+import Button from "@/components/ui/Button";
 import { useUsage, type UsageRange } from "@/lib/api";
 import { COUNTERS, compactTokens } from "@/lib/agentPalette";
 
 const VIEWS: UsageRange[] = ["session", "week", "all"];
 const VIEW_LABEL: Record<UsageRange, string> = { session: "SESSION", week: "WEEK", all: "ALL" };
-
-// Soft caps (§14: "config-less soft caps client-side" — no budget config
-// exists yet, so these mirror the pre-wiring mock's numbers): a single
-// session's worth, a weekly budget, and a lifetime/monthly-ish budget.
-const SOFT_CAPS: Record<UsageRange, number> = { session: 25_000, week: 175_000, all: 2_000_000 };
 
 function chartLabel(range: UsageRange, label: string): string {
   if (range === "session") return label.slice(11, 16) || label; // "HH:MM" from "YYYY-MM-DD HH:MM:SS"
@@ -33,13 +29,18 @@ function chartLabel(range: UsageRange, label: string): string {
  * Shares the composition bar and area chart with that panel so they read as
  * one family — including the fix that every token counter is now visible,
  * rather than an `in · out` line that never added up to the headline.
+ *
+ * There is deliberately no budget bar. §14 called for "config-less soft caps
+ * client-side" and the first pass hardcoded 25k/175k/2M, which rendered as an
+ * authoritative "% of soft cap" against a number nothing configures and no
+ * plan ever set. A made-up limit is worse than no limit; this waits for a real
+ * budget setting.
  */
 export default function TokenUsage() {
   const [view, setView] = useState<UsageRange>("session");
-  const { data, isLoading } = useUsage(view);
+  const { data, error, isLoading, mutate } = useUsage(view);
 
   const total = data?.total_tokens ?? 0;
-  const pctOfCap = Math.min(100, Math.round((total / SOFT_CAPS[view]) * 100));
   const features = data?.features ?? [];
   const maxFeature = Math.max(1, ...features.map((feature) => feature.total_tokens));
 
@@ -66,7 +67,19 @@ export default function TokenUsage() {
         </div>
       }
     >
-      {isLoading && total === 0 ? (
+      {error && !data ? (
+        // Without this an unreachable backend rendered as "no usage recorded
+        // yet", which claims a fact the panel does not actually have.
+        <div className="border border-danger/50 px-4 py-6">
+          <p className="font-mono text-label text-danger">could not load usage</p>
+          <p className="mt-1 text-label leading-relaxed text-ink-faint">
+            {error instanceof Error ? error.message : "the backend did not answer"}
+          </p>
+          <Button className="mt-3" onClick={() => void mutate()}>
+            RETRY
+          </Button>
+        </div>
+      ) : isLoading && total === 0 ? (
         <p className="text-label text-ink-faint">loading usage…</p>
       ) : total === 0 ? (
         <p className="text-label text-ink-faint">no usage recorded yet</p>
@@ -74,7 +87,7 @@ export default function TokenUsage() {
         <>
           <div className="flex flex-wrap items-baseline gap-2">
             <p
-              className="font-mono text-2xl font-semibold tabular-nums text-ink-bright"
+              className="font-mono text-title font-semibold tabular-nums text-ink-bright"
               title={`${total.toLocaleString()} tokens`}
             >
               {compactTokens(total)}
@@ -86,13 +99,6 @@ export default function TokenUsage() {
           </div>
 
           {data && <TokenComposition counts={data} className="mt-3" />}
-
-          <div className="mt-3">
-            <div className="h-1 w-full bg-sunken">
-              <div className="h-1 bg-[var(--ac)]" style={{ width: `${pctOfCap}%` }} />
-            </div>
-            <p className="mt-1 font-mono text-micro text-ink-faint">{pctOfCap}% of soft cap</p>
-          </div>
 
           <UsageAreaChart
             series={COUNTERS.map((counter) => ({
