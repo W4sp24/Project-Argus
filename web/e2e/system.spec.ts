@@ -46,24 +46,28 @@ test("adding a model requires passing the connection test first", async ({ page 
   const dialog = page.getByRole("dialog", { name: "Add a model" });
   await expect(dialog).toBeVisible();
 
-  // Ollama is the default choice, so the endpoint is prefilled — a
-  // non-developer never has to know this URL.
-  await expect(dialog.getByLabel("Display name")).toBeVisible();
-  await expect(page.getByPlaceholder("http://127.0.0.1:11434/v1")).toHaveValue(
+  // The wizard opens on WHERE — the provider choice comes before anything
+  // else, because it decides which of the later steps even exist.
+  await expect(dialog.getByText("Where should this model run?")).toBeVisible();
+  await dialog.getByRole("button", { name: /Ollama on this PC/ }).click();
+
+  // Picking Ollama prefills its address, so a non-developer never has to know
+  // this URL. 127.0.0.1, not localhost — see the comment in AddModelDialog.
+  await expect(dialog.getByPlaceholder("http://127.0.0.1:11434/v1")).toHaveValue(
     "http://127.0.0.1:11434/v1",
   );
 
-  // Naming it is not enough: Save stays locked until the test goes green.
-  await dialog.getByLabel("Display name").fill("e2e-model");
-  await expect(dialog.getByRole("button", { name: "SAVE MODEL" })).toBeDisabled();
-
-  // Nothing is running on 11434 in CI, so the test must fail *readably*
-  // rather than hang or save a broken entry.
+  // Nothing is listening on 11434 in CI, so the test must fail *readably*
+  // rather than hang or let a broken entry through.
   await dialog.getByRole("button", { name: "TEST CONNECTION" }).click();
   await expect(dialog.getByText(/could not reach that endpoint/)).toBeVisible({
     timeout: 30_000,
   });
-  await expect(dialog.getByRole("button", { name: "SAVE MODEL" })).toBeDisabled();
+
+  // The gate is the whole point: a failed connection cannot be walked past,
+  // so the naming step and SAVE MODEL stay out of reach.
+  await expect(dialog.getByRole("button", { name: "NEXT" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "SAVE MODEL" })).toHaveCount(0);
 
   await dialog.getByRole("button", { name: "CANCEL" }).click();
   await expect(dialog).toBeHidden();
