@@ -143,6 +143,13 @@ Registration requires a live tool-calling check to pass. There is no
 no-tools fallback on any provider: chat's citations and the planner's
 suggest-then-approve flow are both enforced *through* tools, so a model that
 can't call them would look like it was working while quietly breaking both.
+(`POST /api/models` accepts `verify: false` to register a hosted endpoint that
+is not up yet. It skips the *check*, not the requirement — the model still has
+to call tools when it runs, and the UI never sends it.)
+
+Token usage is recorded against the name you gave the model, on every
+provider. Local and hosted open-weight models are priced at zero and named in
+`unpriced_models` rather than billed at Anthropic's rates.
 
 ### Connect your coding agent
 

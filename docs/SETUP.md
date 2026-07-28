@@ -35,14 +35,19 @@ This is the only thing Argus genuinely requires.
 ## Step 3 — Choose how the AI runs
 
 Argus needs an AI model to answer questions about your notes, plan your day,
-and build practice exams. **You need one of these three. You do not need all
-three,** and you can change your mind later.
+and build practice exams. **You need one of these four. You do not need all
+four,** and you can change your mind later.
 
 | | Cost | Speed | Your notes |
 |---|---|---|---|
 | **A model on your own PC** | Free | Depends on your PC | Never leave your computer |
 | **A hosted API key** | A few dollars a month | Fast on any PC | Excerpts sent to that company |
+| **An Anthropic API key** | Billed per use | Fast on any PC | Excerpts sent to Anthropic |
 | **Claude Code** | Uses a Claude subscription | Fast | Excerpts sent to Anthropic |
+
+The middle two both mean "paste a key"; they are separate rows because Argus
+asks for them separately, and only the Anthropic one gives you Claude without
+a Claude Code subscription.
 
 ### Which should you pick?
 

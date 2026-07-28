@@ -26,4 +26,14 @@ Argus is currently pre-1.0 (0.x releases).
 - `httpx` and `mcp` are now explicit dependencies rather than transitives of `claude-agent-sdk`.
 
 ### Fixed
+- **Token usage is recorded on every provider.** A streamed chat-completion carries no `usage` unless the request asks for one, so every Ollama / Groq / Together / OpenRouter model recorded zero tokens and the usage panel stayed permanently empty — for exactly the providers the adapter exists to serve. Argus now asks via `stream_options`, and falls back gracefully for servers that reject it.
+- **The model you set as DEFAULT is the one that runs.** Any call that did not name a model ran Claude Code regardless of `MAKE DEFAULT`, so a machine configured entirely for Ollama still demanded Claude Code for the 07:00 briefing, email ingest and study generation.
+- **Usage is priced under the name you gave the model**, not the provider's model id — an Anthropic API entry pointed at a real model id used to show $0.00 and appear as "unpriced".
+- **TODAY means your today.** Usage ranges and hour labels were bounded in UTC, so a reader east of Greenwich saw an empty panel each morning with that work filed under yesterday.
+- **AGENT.USAGE renders correctly in the dashboard rail.** The agent dropdown and the panel header overflowed their container on the General and Code tabs; `ALL AGENTS` plotted each agent's sparse series against another agent's time axis, so multi-agent comparison was wrong whenever two agents ran at different times; an agent whose tokens were still counted in the total disappeared from the chart and could not be selected; and a failed request rendered as "no usage data" rather than as an error.
+- **A model you add under the Claude Code provider can be deleted.** It was reported as built-in and refused deletion permanently.
+- **The connection test says what actually went wrong** — a rejected API key no longer reports "check that the server is running".
+- No more invented numbers: the Code tab's hardcoded `commits`/`prs open` stats and ARGUS.USAGE's hardcoded "soft cap" progress bar are gone.
+- The dashboard no longer fails hydration. `PLANNER.TIMELINE` read the clock during render, so the server and client disagreed by a second and React discarded the entire server-rendered tree.
+- `web/e2e/seed_suggestion.py` still imported the pre-refactor `backend.db` / `backend.suggestions`, which took the whole Playwright harness down — no e2e test could run at all.
 - Dev-mode CSP now includes `'unsafe-eval'` **in development only**, so `next dev`'s React Refresh runtime can hydrate client components (previously all dev-mode client hydration silently failed). Production and packaged builds keep the strict, eval-free policy. This also unblocks the Playwright e2e suite.
