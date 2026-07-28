@@ -172,7 +172,13 @@ class AgentAdapter(Protocol):
     equivalent orchestrator.
     """
 
+    #: The id the provider is asked to run.
     model: str
+    #: The registry name the user picked. Often the same as ``model``, but a
+    #: hosted entry labels one thing and runs another ("groq-llama" serving
+    #: "llama-3.3-70b-versatile"). Token usage is recorded against *this*,
+    #: because it is what the rate table and the dashboard are both keyed on.
+    label: str
     provider: str
 
     def run(
@@ -207,7 +213,11 @@ class ClaudeSDKAdapter:
     model: str
     tool_namespace: str = "argus"
     disallowed_tools: tuple[str, ...] = ("Bash", "Write", "Edit")
+    label: str = ""
     provider: str = field(default=PROVIDER_CLAUDE_CLI, init=False)
+
+    def __post_init__(self) -> None:
+        self.label = self.label or self.model
 
     def _to_sdk_tools(self, tools: Sequence[ToolSpec]) -> list[Any]:
         """Translate ToolSpecs into the SDK's decorated tool objects."""
@@ -383,6 +393,7 @@ def adapter_for_entry(
             model=name,
             tool_namespace=tool_namespace,
             disallowed_tools=tuple(disallowed_tools),
+            label=name,
         )
 
     if provider == PROVIDER_ANTHROPIC_API:
@@ -396,6 +407,7 @@ def adapter_for_entry(
             model=model_id,
             api_key=resolved_key,
             endpoint=str(entry.get("endpoint") or DEFAULT_ENDPOINT),
+            label=name,
         )
 
     if provider == PROVIDER_OPENAI_COMPAT:
@@ -404,7 +416,9 @@ def adapter_for_entry(
         endpoint = entry.get("endpoint")
         if not endpoint:
             raise AgentError(f"model {name!r} has no endpoint — re-add it under /system")
-        return OpenAICompatAdapter(model=model_id, endpoint=str(endpoint), api_key=resolved_key)
+        return OpenAICompatAdapter(
+            model=model_id, endpoint=str(endpoint), api_key=resolved_key, label=name
+        )
 
     raise AgentError(
         f"model {name!r} uses unknown provider {provider!r} "
@@ -422,19 +436,27 @@ def resolve_adapter(
 ) -> AgentAdapter:
     """The adapter for a registry model name.
 
-    ``model=None`` keeps each call site's historical behavior: it runs
-    ``fallback_model`` (the module's long-standing ``MODEL`` constant) on the
-    Claude Code path, so nothing changes for callers that never opt in. Passing
-    a name routes through the registry, whatever provider backs it.
+    ``model=None`` means "whatever the user set as default" — the whole point of
+    ``POST /api/models/default``. Without that, every call that does not name a
+    model would run ``fallback_model`` on the Claude Code path, so a user who
+    has no Claude Code would find their briefing and study generation demanding
+    it anyway, however carefully they configured Ollama.
+
+    ``fallback_model`` is the safety net for the cases that genuinely have no
+    registry to consult: no ``settings`` at all, or a default that has been
+    deleted out from under the preference file.
     """
     if not model:
-        if fallback_model:
-            return ClaudeSDKAdapter(
-                model=fallback_model,
-                tool_namespace=tool_namespace,
-                disallowed_tools=tuple(disallowed_tools),
-            )
-        model = settings.default_model
+        model = getattr(settings, "default_model", None) if settings is not None else None
+        if not model or find_entry(settings.models, model) is None:
+            if fallback_model:
+                return ClaudeSDKAdapter(
+                    model=fallback_model,
+                    tool_namespace=tool_namespace,
+                    disallowed_tools=tuple(disallowed_tools),
+                )
+            if not model:
+                raise RuntimeError("no model given and no default is set — pick one under /system")
 
     entry = find_entry(settings.models, model)
     if entry is None:

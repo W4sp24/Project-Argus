@@ -49,7 +49,9 @@ async def agent_generate(
         disallowed_tools=DISALLOWED_TOOLS,
         fallback_model=MODEL,
     )
-    resolved_model = getattr(adapter, "model", MODEL)
+    # The registry name rather than the provider-side id — the rate table and
+    # the dashboard are both keyed on it.
+    resolved_model = getattr(adapter, "label", None) or getattr(adapter, "model", MODEL)
 
     parts: list[str] = []
     async for event in adapter.run(system_prompt="", user_message=prompt, tools=[], max_turns=1):

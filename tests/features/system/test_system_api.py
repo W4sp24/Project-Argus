@@ -422,7 +422,8 @@ def test_chat_agent_builds_the_right_adapter_per_provider(vault: Path) -> None:
         ],
     )
 
-    # No model at all keeps the historical Claude Code path.
+    # No model at all runs the registry default, which here is still a Claude
+    # Code entry — see test_no_model_runs_the_configured_default below.
     assert isinstance(
         resolve_adapter(settings, None, fallback_model="claude-opus-4-8"), ClaudeSDKAdapter
     )
@@ -442,6 +443,76 @@ def test_chat_agent_builds_the_right_adapter_per_provider(vault: Path) -> None:
         assert hosted.api_key == "sk-test", "the key comes from the keyring, never models.json"
     finally:
         keyring.delete_password(KEYRING_SERVICE, "model:claude-key")
+
+
+def test_no_model_runs_the_configured_default(vault: Path) -> None:
+    """A call that names no model must honour MAKE DEFAULT.
+
+    Otherwise `POST /api/models/default` is decoration: the scheduled briefing,
+    email ingest and study generation would all still demand Claude Code on a
+    machine that has none, however carefully Ollama was configured.
+    """
+    from backend.agent.adapters import resolve_adapter
+    from backend.agent.openai_compat import OpenAICompatAdapter
+    from backend.core.model_registry import save_model_prefs, save_user_models
+
+    settings = Settings(_vault_path=vault)
+    save_user_models(
+        settings.models_file,
+        [{"name": "llama3", "provider": "openai-compat", "endpoint": "http://localhost:11434/v1"}],
+    )
+    save_model_prefs(settings.model_prefs_file, {"default": "llama3"})
+
+    adapter = resolve_adapter(settings, None, fallback_model="claude-opus-4-8")
+    assert isinstance(adapter, OpenAICompatAdapter)
+    assert adapter.label == "llama3"
+
+
+def test_a_deleted_default_falls_back_instead_of_raising(vault: Path) -> None:
+    """A stale preference must not take the whole app down with it.
+
+    ``Settings._resolve_default`` already self-heals to the built-in flag, so a
+    model deleted out from under ``model-prefs.json`` degrades to the shipped
+    default rather than raising "unknown model" on every call.
+    """
+    from backend.agent.adapters import ClaudeSDKAdapter, resolve_adapter
+    from backend.core.model_registry import DEFAULT_MODELS, save_model_prefs
+
+    settings = Settings(_vault_path=vault)
+    save_model_prefs(settings.model_prefs_file, {"default": "deleted-yesterday"})
+
+    adapter = resolve_adapter(settings, None, fallback_model="claude-opus-4-8")
+    assert isinstance(adapter, ClaudeSDKAdapter)
+    assert adapter.model == next(e["name"] for e in DEFAULT_MODELS if e.get("default"))
+
+
+def test_no_registry_at_all_still_falls_back(vault: Path) -> None:
+    """The guard that keeps a caller with no settings working (e.g. generate)."""
+    from backend.agent.adapters import ClaudeSDKAdapter, resolve_adapter
+
+    adapter = resolve_adapter(None, None, fallback_model="claude-opus-4-8")
+    assert isinstance(adapter, ClaudeSDKAdapter)
+    assert adapter.model == "claude-opus-4-8"
+
+
+def test_usage_is_labelled_with_the_registry_name_not_the_provider_id(vault: Path) -> None:
+    """The rate table and the dashboard are both keyed on the registry name.
+
+    Recording the provider-side id instead prices a real Anthropic model at $0
+    and lists it as "unpriced", because that id is not in MODEL_RATES.
+    """
+    from backend.agent.adapters import adapter_for_entry
+
+    adapter = adapter_for_entry(
+        {
+            "name": "groq-llama",
+            "provider": "openai-compat",
+            "endpoint": "http://api.groq.com/openai/v1",
+            "model_id": "llama-3.3-70b-versatile",
+        }
+    )
+    assert adapter.model == "llama-3.3-70b-versatile", "the wire gets the provider's id"
+    assert adapter.label == "groq-llama", "usage and pricing get the name the user picked"
 
 
 def test_anthropic_api_model_without_a_stored_key_fails_readably(vault: Path) -> None:

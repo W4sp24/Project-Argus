@@ -242,4 +242,7 @@ class ChatAgent:
                 yield event.text
             elif isinstance(event, UsageReported):
                 # Fire-and-forget usage logging (§14) — never breaks chat.
-                record_result_usage(self._settings.db_path, "chat", event, model=resolved_model)
+                # Recorded against the *registry name*, which is what the rate
+                # table and the dashboard are keyed on; `resolved_model` above
+                # is the provider-side id, which neither of them knows.
+                record_result_usage(self._settings.db_path, "chat", event, model=adapter.label)

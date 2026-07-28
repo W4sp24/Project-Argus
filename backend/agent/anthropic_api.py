@@ -108,7 +108,11 @@ class AnthropicAPIAdapter:
     max_tokens: int = DEFAULT_MAX_TOKENS
     timeout: float = DEFAULT_TIMEOUT_SECONDS
     transport: httpx.AsyncBaseTransport | None = None
+    label: str = ""
     provider: str = field(default=PROVIDER_ANTHROPIC_API, init=False)
+
+    def __post_init__(self) -> None:
+        self.label = self.label or self.model
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(

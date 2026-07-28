@@ -209,7 +209,9 @@ async def run_planner(settings: Settings, instruction: str, model: str | None = 
         ):
             # Proposals happen via tools; the text summary is discarded.
             if isinstance(event, UsageReported):
-                record_result_usage(settings.db_path, "planner", event, model=resolved_model)
+                # The registry name, not the provider-side id: it is what the
+                # rate table and the dashboard are both keyed on.
+                record_result_usage(settings.db_path, "planner", event, model=adapter.label)
         return len(queue.pending(conn)) - before
     finally:
         conn.close()
