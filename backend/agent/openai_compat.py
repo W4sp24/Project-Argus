@@ -153,7 +153,15 @@ class OpenAICompatAdapter:
     api_key: str | None = None
     timeout: float = DEFAULT_TIMEOUT_SECONDS
     transport: httpx.AsyncBaseTransport | None = None
+    #: Whether to ask for token counts via ``stream_options``. Cleared for the
+    #: rest of this adapter's life the first time an endpoint rejects it, so a
+    #: server that cannot do it pays one wasted request, not one per turn.
+    include_usage: bool = True
+    label: str = ""
     provider: str = field(default=PROVIDER_OPENAI_COMPAT, init=False)
+
+    def __post_init__(self) -> None:
+        self.label = self.label or self.model
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -180,7 +188,7 @@ class OpenAICompatAdapter:
         messages.append({"role": "user", "content": user_message})
 
         by_name = {spec.name: spec for spec in tools}
-        totals = {"input_tokens": 0, "output_tokens": 0}
+        totals = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
         url = chat_completions_url(self.endpoint)
 
         async with self._client() as client:
@@ -235,7 +243,9 @@ class OpenAICompatAdapter:
                     )
 
         yield UsageReported(
-            input_tokens=totals["input_tokens"], output_tokens=totals["output_tokens"]
+            input_tokens=totals["input_tokens"],
+            output_tokens=totals["output_tokens"],
+            cache_read_input_tokens=totals["cache_read_input_tokens"],
         )
 
     async def _stream_turn(
@@ -247,33 +257,68 @@ class OpenAICompatAdapter:
         buffer: _ToolCallBuffer,
         totals: dict[str, int],
     ) -> AsyncIterator[AgentEvent]:
-        """Stream one completion, filling ``text_parts``/``buffer``/``totals``."""
+        """Stream one completion, filling ``text_parts``/``buffer``/``totals``.
+
+        A streamed chat-completion carries **no** ``usage`` object unless the
+        request asks for one, so a panel wired to these numbers stays at zero
+        for every local and hosted open-weight model — which is most of the
+        point of this adapter. We therefore ask, but do not insist: some
+        compat servers reject unknown request fields outright, so a ``400`` on
+        the first attempt drops ``stream_options`` and retries once. A request
+        that is genuinely malformed fails the retry too and raises with the
+        endpoint's own message.
+        """
+        if self.include_usage:
+            attempt = {**payload, "stream_options": {"include_usage": True}}
+            async with client.stream("POST", url, json=attempt) as response:
+                if response.status_code != 400:
+                    if response.status_code >= 400:
+                        raise AgentError(await _error_detail(response, self.model))
+                    async for event in self._consume(response, text_parts, buffer, totals):
+                        yield event
+                    return
+            self.include_usage = False
+
         async with client.stream("POST", url, json=payload) as response:
             if response.status_code >= 400:
                 raise AgentError(await _error_detail(response, self.model))
-            async for line in response.aiter_lines():
-                chunk = _sse_payload(line)
-                if chunk is None:
-                    continue
+            async for event in self._consume(response, text_parts, buffer, totals):
+                yield event
 
-                # Usage is read opportunistically rather than requested via
-                # `stream_options`: several OpenAI-compatible servers reject
-                # unknown request fields outright, and token logging is
-                # best-effort by design (see backend/usage.py) while broad
-                # provider compatibility is not.
-                usage = chunk.get("usage")
-                if isinstance(usage, dict):
-                    totals["input_tokens"] += int(usage.get("prompt_tokens") or 0)
-                    totals["output_tokens"] += int(usage.get("completion_tokens") or 0)
+    async def _consume(
+        self,
+        response: httpx.Response,
+        text_parts: list[str],
+        buffer: _ToolCallBuffer,
+        totals: dict[str, int],
+    ) -> AsyncIterator[AgentEvent]:
+        """Read one open SSE stream into ``text_parts``/``buffer``/``totals``."""
+        async for line in response.aiter_lines():
+            chunk = _sse_payload(line)
+            if chunk is None:
+                continue
 
-                for choice in chunk.get("choices") or []:
-                    delta = choice.get("delta") or {}
-                    content = delta.get("content")
-                    if content:
-                        text_parts.append(str(content))
-                        yield TextDelta(str(content))
-                    for fragment in delta.get("tool_calls") or []:
-                        buffer.add(fragment)
+            usage = chunk.get("usage")
+            if isinstance(usage, dict):
+                # OpenAI counts cached prompt tokens *inside* `prompt_tokens`,
+                # where Anthropic reports them alongside `input_tokens`. Split
+                # them out so the four counters still sum to the total rather
+                # than counting the cached prefix twice.
+                details = usage.get("prompt_tokens_details")
+                cached = int((details or {}).get("cached_tokens") or 0)
+                prompt = int(usage.get("prompt_tokens") or 0)
+                totals["input_tokens"] += max(0, prompt - cached)
+                totals["output_tokens"] += int(usage.get("completion_tokens") or 0)
+                totals["cache_read_input_tokens"] += cached
+
+            for choice in chunk.get("choices") or []:
+                delta = choice.get("delta") or {}
+                content = delta.get("content")
+                if content:
+                    text_parts.append(str(content))
+                    yield TextDelta(str(content))
+                for fragment in delta.get("tool_calls") or []:
+                    buffer.add(fragment)
 
 
 def _sse_payload(line: str) -> dict[str, Any] | None:

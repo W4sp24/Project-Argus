@@ -311,6 +311,86 @@ async def test_usage_is_recorded_when_the_provider_reports_it() -> None:
 
 
 @pytest.mark.anyio
+async def test_usage_is_actually_requested() -> None:
+    """A streamed completion carries no usage unless the request asks for it.
+
+    Without this the whole non-Claude half of the app records zero tokens and
+    the usage panel is permanently empty — for exactly the providers the
+    adapter exists to support.
+    """
+    sent: list[dict] = []
+    adapter = adapter_for([sse(text_chunk("hi"), usage_chunk(120, 30))], record=sent)
+
+    await collect(adapter, [])
+
+    assert sent[0]["stream_options"] == {"include_usage": True}
+
+
+@pytest.mark.anyio
+async def test_a_server_that_rejects_stream_options_still_answers() -> None:
+    """Some compat servers 400 on unknown request fields. Retry without it."""
+    sent: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        sent.append(payload)
+        if "stream_options" in payload:
+            return httpx.Response(400, json={"error": {"message": "unknown field stream_options"}})
+        return httpx.Response(200, content=sse(text_chunk("answered anyway")))
+
+    adapter = OpenAICompatAdapter(
+        model="llama3.1", endpoint=ENDPOINT, transport=httpx.MockTransport(handle)
+    )
+
+    events = await collect(adapter, [])
+
+    assert texts(events) == "answered anyway"
+    assert [("stream_options" in payload) for payload in sent] == [True, False]
+    assert adapter.include_usage is False, "the endpoint is asked once, not once per turn"
+
+
+@pytest.mark.anyio
+async def test_a_genuine_bad_request_still_raises() -> None:
+    """The retry must not turn a real 400 into silence."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "context length exceeded"}})
+
+    adapter = OpenAICompatAdapter(
+        model="llama3.1", endpoint=ENDPOINT, transport=httpx.MockTransport(handle)
+    )
+
+    with pytest.raises(AgentError, match="context length exceeded"):
+        await collect(adapter, [])
+
+
+@pytest.mark.anyio
+async def test_cached_prompt_tokens_are_split_out_not_double_counted() -> None:
+    """OpenAI counts cached tokens *inside* prompt_tokens; Anthropic does not.
+
+    Recording both as-is would make the four counters sum to more than the
+    total the provider billed, and the composition bar reads as a share of that
+    sum.
+    """
+    chunk = {
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_tokens_details": {"cached_tokens": 800},
+        },
+    }
+    adapter = adapter_for([sse(text_chunk("hi"), chunk)])
+
+    events = await collect(adapter, [])
+
+    usage = next(e for e in events if isinstance(e, UsageReported)).usage
+    assert usage["input_tokens"] == 200
+    assert usage["cache_read_input_tokens"] == 800
+    assert sum(usage.values()) == 1050
+
+
+@pytest.mark.anyio
 async def test_toolless_run_sends_no_tools_field() -> None:
     sent: list[dict] = []
     adapter = adapter_for([sse(text_chunk("plain answer"))], record=sent)
