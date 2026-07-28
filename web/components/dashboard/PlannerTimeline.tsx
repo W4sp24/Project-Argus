@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
 import { apiFetch, fetcher } from "@/lib/api";
@@ -88,7 +88,14 @@ export default function PlannerTimeline() {
   const { data: suggestions, mutate: mutateReview } = useSWR<Suggestion[]>("/api/review", fetcher);
   const [busy, setBusy] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, string>>({});
-  const [now] = useState(() => new Date());
+  // The now-line is client-only. Reading the clock during render bakes the
+  // *server's* second into the HTML, and the client hydrates a moment later
+  // with a different one — a text mismatch React cannot patch, so it threw
+  // away the whole server tree and re-rendered the entire page on the client.
+  // Both the label and the line's position depend on `now`, so neither can be
+  // rendered until after mount.
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => setNow(new Date()), []);
 
   const scheduleSuggestions = (suggestions ?? []).filter((s) => s.kind === "schedule");
 
@@ -115,9 +122,13 @@ export default function PlannerTimeline() {
     return list.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
   }, [agenda, scheduleSuggestions]);
 
-  const nowIndex = rows.findIndex((row) => new Date(row.start).getTime() > now.getTime());
-  const nowPosition = nowIndex === -1 ? rows.length : nowIndex;
-  const nowLabel = now.toLocaleTimeString("en-US", { hour12: false });
+  // -1 until mounted, which matches no row and no tail — so the server renders
+  // the agenda without a now-line and the client adds it.
+  const nowIndex = now
+    ? rows.findIndex((row) => new Date(row.start).getTime() > now.getTime())
+    : -1;
+  const nowPosition = now ? (nowIndex === -1 ? rows.length : nowIndex) : -1;
+  const nowLabel = now ? now.toLocaleTimeString("en-US", { hour12: false }) : "";
 
   async function act(id: number, action: "approve" | "dismiss") {
     setBusy(id);
