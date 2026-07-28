@@ -3,8 +3,8 @@
 import sys
 from pathlib import Path
 
-from backend.db import connect, init_schema
-from backend.suggestions import insert_suggestion
+from backend.core.db import connect, init_schema
+from backend.vault.suggestions import insert_suggestion
 
 vault = Path(sys.argv[1])
 conn = connect(vault / ".argus" / "argus.db")
