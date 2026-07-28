@@ -104,6 +104,21 @@ def test_delete_model_guards(client: TestClient) -> None:
     assert client.delete("/api/models/ghost").status_code == 404
 
 
+def test_a_user_added_claude_code_model_is_not_treated_as_builtin(client: TestClient) -> None:
+    """Being built-in means membership in DEFAULT_MODELS, not a shape heuristic.
+
+    Deriving it from `provider == anthropic and no endpoint` made any model the
+    user added under the Claude Code provider permanently undeletable — 400 on
+    every attempt, recoverable only by hand-editing models.json.
+    """
+    created = client.post("/api/models", json={"name": "my-claude", "provider": "anthropic"})
+    assert created.status_code == 201
+    assert created.json()["builtin"] is False
+
+    assert client.delete("/api/models/my-claude").status_code == 200
+    assert "my-claude" not in {m["name"] for m in client.get("/api/models").json()}
+
+
 # --- capability probe -------------------------------------------------------
 
 
@@ -179,6 +194,51 @@ def test_test_endpoint_surfaces_a_failure_reason(vault: Path) -> None:
 
     assert payload["ok"] is False
     assert "never called the test tool" in payload["detail"]
+
+
+def test_a_rejected_key_does_not_read_as_a_dead_server(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """401 and "nothing is listening" are different problems with different fixes.
+
+    Collapsing every reachability failure into "check that the server is
+    running" sends a user who mistyped their API key off to restart a server
+    that was fine — on the one screen of the setup flow they are alone on.
+    """
+    from backend.agent.adapters import AgentError
+
+    async def rejects(*_args: object, **_kwargs: object) -> list[str]:
+        raise AgentError("401 from the model endpoint: invalid_api_key — check the API key")
+
+    monkeypatch.setattr("backend.agent.openai_compat.list_models", rejects)
+
+    payload = client.post(
+        "/api/models/test",
+        json={"provider": "openai-compat", "endpoint": "https://api.groq.com/openai/v1"},
+    ).json()
+
+    assert payload["ok"] is False
+    assert "check the API key" in payload["detail"]
+    assert "server is running" not in payload["detail"]
+
+
+def test_an_unreachable_endpoint_still_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wording e2e pins, for the case it actually describes."""
+
+    async def refuses(*_args: object, **_kwargs: object) -> list[str]:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("backend.agent.openai_compat.list_models", refuses)
+
+    payload = client.post(
+        "/api/models/test",
+        json={"provider": "openai-compat", "endpoint": "http://127.0.0.1:1/v1"},
+    ).json()
+
+    assert payload["ok"] is False
+    assert "could not reach that endpoint" in payload["detail"]
 
 
 def test_test_endpoint_rejects_an_unknown_provider(client: TestClient) -> None:

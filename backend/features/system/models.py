@@ -39,6 +39,7 @@ from backend.agent.credentials import CredentialError, delete_key, has_key, key_
 from backend.agent.hardware import HardwareProfile, detect, ollama_base_url, ollama_models_dir
 from backend.core.config import Settings
 from backend.core.model_registry import (
+    DEFAULT_MODELS,
     load_model_prefs,
     load_user_models,
     save_model_prefs,
@@ -46,6 +47,13 @@ from backend.core.model_registry import (
 )
 
 MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+
+#: The models Argus ships with. Membership here — not a guess from the shape of
+#: an entry — is what makes a model undeletable.
+BUILTIN_MODEL_NAMES = frozenset(entry["name"] for entry in DEFAULT_MODELS)
+
+#: Kept exact: `web/e2e/system.spec.ts` asserts a user sees this wording.
+UNREACHABLE_DETAIL = "could not reach that endpoint; check the URL and that the server is running"
 
 # A pull can take many minutes on a slow connection; the stream itself is the
 # progress indicator, so only a stall should end it.
@@ -222,7 +230,12 @@ def build_models_router(
                 key_ref=entry.get("key_ref"),
                 model_id=entry.get("model_id"),
                 default=entry.get("default", False),
-                builtin=entry["provider"] == PROVIDER_CLAUDE_CLI and entry.get("endpoint") is None,
+                # Membership in DEFAULT_MODELS, not a shape heuristic. Deriving
+                # it from `provider == anthropic and no endpoint` meant a model
+                # the *user* added with provider "anthropic" was reported
+                # built-in and could then never be deleted — 400 forever, only
+                # recoverable by hand-editing models.json.
+                builtin=entry["name"] in BUILTIN_MODEL_NAMES,
                 local=entry_is_local(entry),
                 has_key=has_key(entry.get("key_ref")),
             )
@@ -281,7 +294,7 @@ def build_models_router(
             "model_id": request.model_id,
         }
 
-        available = await _list_available(provider, request.endpoint, request.api_key)
+        available, reason = await _list_available(provider, request.endpoint, request.api_key)
 
         if not request.model_id:
             # Nothing to probe yet — the user is still discovering what the
@@ -289,12 +302,7 @@ def build_models_router(
             reachable = available is not None
             return TestModelResponse(
                 ok=reachable,
-                detail=(
-                    "reachable — now choose a model"
-                    if reachable
-                    else "could not reach that endpoint; check the URL and that "
-                    "the server is running"
-                ),
+                detail="reachable — now choose a model" if reachable else reason,
                 available_models=available or [],
             )
 
@@ -385,10 +393,13 @@ def build_models_router(
             raise HTTPException(status_code=409, detail=f"model {request.name} already exists")
 
         async def stream() -> AsyncIterator[bytes]:
+            # Two failure domains, reported separately. Registration used to sit
+            # inside this try, so a failed models.json write was reported as
+            # "is Ollama installed and running?" — which is both wrong and
+            # unactionable when the download plainly just succeeded.
             try:
                 async for event in pull(request.name):
                     yield _ndjson({"type": "progress", **event})
-                _register_pulled(request.name)
             except AgentError as exc:
                 yield _ndjson({"type": "error", "detail": str(exc)})
                 return
@@ -399,6 +410,20 @@ def build_models_router(
                         "detail": (
                             f"{exc} — is Ollama installed and running? "
                             f"Argus looked at {ollama_base_url()}"
+                        ),
+                    }
+                )
+                return
+
+            try:
+                _register_pulled(request.name)
+            except Exception as exc:  # noqa: BLE001 - the client sees the reason
+                yield _ndjson(
+                    {
+                        "type": "error",
+                        "detail": (
+                            f"{request.name} downloaded, but Argus could not add it to the "
+                            f"model list: {exc}"
                         ),
                     }
                 )
@@ -470,23 +495,44 @@ def _validated_provider(provider: str) -> str:
 
 async def _list_available(
     provider: str, endpoint: str | None, api_key: str | None
-) -> list[str] | None:
-    """Model ids an endpoint serves, or None when it cannot be reached."""
+) -> tuple[list[str] | None, str]:
+    """Model ids an endpoint serves, and why not when it cannot be reached.
+
+    The reason is carried rather than collapsed. A rejected API key, a name
+    that does not resolve and a server that never answers are three different
+    problems with three different fixes, and reporting all of them as "check
+    that the server is running" sends someone who mistyped a key off to restart
+    a server that was fine all along. This is the front door of the guided
+    setup flow and the one screen a non-developer is alone on.
+    """
     try:
         if provider == PROVIDER_OPENAI_COMPAT:
             if not endpoint:
-                return None
+                return None, "enter the server's address first"
             from backend.agent.openai_compat import list_models
 
-            return await asyncio.wait_for(list_models(endpoint, api_key), timeout=15)
+            return await asyncio.wait_for(list_models(endpoint, api_key), timeout=15), ""
         if provider == PROVIDER_ANTHROPIC_API:
             if not api_key:
-                return None
+                return None, "paste an API key first"
             from backend.agent.anthropic_api import DEFAULT_ENDPOINT, list_models
 
-            return await asyncio.wait_for(
-                list_models(api_key, endpoint or DEFAULT_ENDPOINT), timeout=15
+            return (
+                await asyncio.wait_for(
+                    list_models(api_key, endpoint or DEFAULT_ENDPOINT), timeout=15
+                ),
+                "",
             )
+        if provider == PROVIDER_CLAUDE_CLI:
+            return None, (
+                "Claude Code has nothing to connect to — it runs through your signed-in CLI"
+            )
+    except TimeoutError:
+        return None, "the endpoint did not answer within 15 seconds"
+    except AgentError as exc:
+        # The provider's own words: "401 … — check the API key", "404 … is the
+        # model pulled on that endpoint?". Far better than anything we'd invent.
+        return None, str(exc)
     except Exception:  # noqa: BLE001 - unreachable is a normal answer here
-        return None
-    return None
+        return None, UNREACHABLE_DETAIL
+    return None, UNREACHABLE_DETAIL
