@@ -160,7 +160,19 @@ def _post(port: int, path: str, timeout: int = 120) -> tuple[int, str]:
         return 0, repr(exc)
 
 
-def _mcp_server_starts(target: Path) -> tuple[bool, str]:
+def _tail(text: str, limit: int = 600) -> str:
+    """The *end* of a traceback — where the exception actually is.
+
+    Truncating from the front yields nothing but "Traceback (most recent call
+    last)" and a few frame headers, which is how a ConfigError escaping
+    ``--mcp-server`` reached CI as an unreadable annotation. Annotations are the
+    only failure detail visible without a login, so they have to carry the tail.
+    """
+    flat = text.strip()
+    return flat[-limit:].strip() if len(flat) > limit else flat
+
+
+def _mcp_server_starts(target: Path, env_file: Path) -> tuple[bool, str]:
     """Does ``--mcp-server`` actually serve, or die on a missing import?
 
     The bridge's ``mcp`` imports are all lazy and in-function, which PyInstaller
@@ -171,6 +183,10 @@ def _mcp_server_starts(target: Path) -> tuple[bool, str]:
     Probed with a real MCP ``initialize`` over stdio rather than by starting and
     killing it, because a process that exits instantly on a bad import and one
     that is quietly waiting for input look identical from the outside.
+
+    ``env_file`` is not optional: the bridge resolves VAULT_PATH before it
+    serves, so without the throwaway vault's env file this check only ever
+    proved that an unconfigured backend refuses to start.
     """
     request = json.dumps(
         {
@@ -191,6 +207,7 @@ def _mcp_server_starts(target: Path) -> tuple[bool, str]:
         stderr=subprocess.PIPE,
         text=True,
         cwd=_cwd_for(target),
+        env={**os.environ, "ARGUS_ENV_FILE": str(env_file)},
     )
     try:
         out, err = proc.communicate(input=request + "\n", timeout=180)
@@ -202,7 +219,7 @@ def _mcp_server_starts(target: Path) -> tuple[bool, str]:
         return False, err.strip().splitlines()[-1][:200]
     if '"result"' in out and "serverInfo" in out:
         return True, "handshake ok"
-    return False, (err.strip() or out.strip() or "no handshake")[:200]
+    return False, _tail(err) or _tail(out) or "no handshake"
 
 
 def _watchdog_dies_with_parent(target: Path) -> bool:
@@ -364,7 +381,7 @@ def main() -> int:
 
     # The MCP bridge, which the desktop build could not run at all until the
     # --mcp-server flag and the spec's mcp hiddenimports landed together.
-    ok, detail = _mcp_server_starts(target)
+    ok, detail = _mcp_server_starts(target, env_file)
     result.check("--mcp-server serves over stdio", ok, detail)
 
     shutil.rmtree(workdir, ignore_errors=True)

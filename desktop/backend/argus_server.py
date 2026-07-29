@@ -156,12 +156,20 @@ def _cmd_mcp_server() -> int:
     from backend.agent.mcp_server import serve_stdio
     from backend.core.config import ConfigError, Settings
 
+    settings = Settings.load()
     try:
-        settings = Settings.load()
+        # The access, not the load: Settings.load() returns an unconfigured
+        # object and defers ConfigError to first use, so guarding the load
+        # caught nothing and an unconfigured vault escaped as a traceback out
+        # of asyncio.run below. Same shape as `argus mcp-server` in backend/cli.
+        _ = settings.vault_path  # raises ConfigError when VAULT_PATH is unset
     except ConfigError as exc:
         print(f"argus: {exc}", file=sys.stderr)
         return 1
-    asyncio.run(serve_stdio(settings))
+    try:
+        asyncio.run(serve_stdio(settings))
+    except KeyboardInterrupt:
+        return 130
     return 0
 
 
