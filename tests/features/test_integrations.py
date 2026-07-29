@@ -50,6 +50,9 @@ def test_load_servers_tolerates_missing_and_corrupt(tmp_path: Path) -> None:
     corrupt = tmp_path / "corrupt.json"
     corrupt.write_text("{{{ not json", encoding="utf-8")
     assert store.load_servers(corrupt) == []
+    # Quarantined, so the next save cannot bury what the user registered.
+    assert not corrupt.exists()
+    assert (tmp_path / "corrupt.json.corrupt").exists()
 
 
 def test_list_integrations_reports_connector_state(settings: Settings, monkeypatch) -> None:
@@ -129,7 +132,10 @@ def test_token_never_comes_back_over_the_api(settings: Settings, monkeypatch) ->
         "backend.features.integrations.router.store_key",
         lambda ref, key: stored.__setitem__(ref, key),
     )
-    monkeypatch.setattr("backend.features.integrations.router.has_key", lambda ref: ref in stored)
+    monkeypatch.setattr(
+        "backend.features.integrations.router.key_state",
+        lambda ref: "present" if ref in stored else "absent",
+    )
 
     client = _client(settings, _ok_prober([]))
     created = client.post(
@@ -138,6 +144,7 @@ def test_token_never_comes_back_over_the_api(settings: Settings, monkeypatch) ->
     )
     assert created.status_code == 201
     assert created.json()["has_key"] is True
+    assert created.json()["key_state"] == "present"
     assert "s3cret" not in created.text
 
     on_disk = settings.mcp_servers_file.read_text(encoding="utf-8")

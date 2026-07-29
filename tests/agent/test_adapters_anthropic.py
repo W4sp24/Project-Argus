@@ -219,6 +219,105 @@ async def test_usage_accumulates_across_message_start_and_delta() -> None:
 
 
 @pytest.mark.anyio
+async def test_overlapping_usage_keys_are_not_double_counted() -> None:
+    """The real shape of the API's events, which the disjoint fixture above hides.
+
+    ``message_start`` always carries a small ``output_tokens`` alongside the
+    input counters, and newer API versions repeat ``input_tokens`` and the cache
+    figures on ``message_delta``. Summing every key of both events therefore
+    over-reported output on every single message and doubled input outright —
+    real money, wrong, on the user's dashboard.
+    """
+    adapter = adapter_for(
+        [
+            sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "usage": {
+                            "input_tokens": 200,
+                            "output_tokens": 2,  # the API's initial estimate
+                            "cache_read_input_tokens": 50,
+                        }
+                    },
+                },
+                text_delta("hi"),
+                {
+                    "type": "message_delta",
+                    "usage": {
+                        "input_tokens": 200,  # echoed, not additional
+                        "output_tokens": 17,  # cumulative for the message
+                        "cache_read_input_tokens": 50,
+                    },
+                },
+            )
+        ]
+    )
+
+    events = await collect(adapter, [])
+
+    usage = next(e for e in events if isinstance(e, UsageReported))
+    assert usage.usage == {
+        "input_tokens": 200,  # not 400
+        "output_tokens": 17,  # not 19
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 50,  # not 100
+    }
+
+
+@pytest.mark.anyio
+async def test_usage_sums_across_turns_not_within_a_message() -> None:
+    """Each tool-use turn is a separate billed request, so turns *do* add up."""
+    spec, _ = spy_tool()
+    adapter = adapter_for(
+        [
+            sse(
+                {"type": "message_start", "message": {"usage": {"input_tokens": 100}}},
+                tool_start(0, "call_1", "search_vault"),
+                tool_delta(0, '{"query": "x"}'),
+                {"type": "message_delta", "usage": {"input_tokens": 100, "output_tokens": 10}},
+            ),
+            sse(
+                {"type": "message_start", "message": {"usage": {"input_tokens": 300}}},
+                text_delta("answer"),
+                {"type": "message_delta", "usage": {"input_tokens": 300, "output_tokens": 40}},
+            ),
+        ]
+    )
+
+    events = await collect(adapter, [spec], max_turns=3)
+
+    usage = next(e for e in events if isinstance(e, UsageReported))
+    assert usage.input_tokens == 400, "two separate requests, both billed"
+    assert usage.output_tokens == 50
+
+
+@pytest.mark.anyio
+async def test_partial_usage_survives_an_abandoned_stream() -> None:
+    """Closing the tab mid-answer must not lose tokens the provider already billed."""
+    adapter = adapter_for(
+        [
+            sse(
+                {"type": "message_start", "message": {"usage": {"input_tokens": 500}}},
+                text_delta("a long answer that "),
+                text_delta("the user walks away from"),
+                {"type": "message_delta", "usage": {"output_tokens": 900}},
+            )
+        ]
+    )
+
+    stream = adapter.run(
+        system_prompt="", user_message="explain everything", tools=[], max_turns=1
+    )
+    assert isinstance(await stream.__anext__(), TextDelta)  # first delta, then give up
+    await stream.aclose()
+
+    partial = adapter.partial_usage()
+    assert partial is not None
+    assert partial.input_tokens == 500, "message_start had already reported the input cost"
+
+
+@pytest.mark.anyio
 async def test_system_prompt_is_a_top_level_field_not_a_message() -> None:
     sent: list[dict] = []
     adapter = adapter_for([sse(text_delta("ok"))], record=sent)

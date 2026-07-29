@@ -11,10 +11,11 @@ in-app chat is separate work in :mod:`backend.agent.adapters`.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
+
+from backend.core.jsonstore import load_json, save_json
 
 #: Same shape as a model name — it becomes a keyring reference and a URL path.
 SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -28,15 +29,16 @@ def key_ref_for(name: str) -> str:
 
 
 def load_servers(path: Path) -> list[dict[str, Any]]:
-    """Registered servers ([] when the file is absent, empty, or corrupt)."""
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return [entry for entry in payload if isinstance(entry, dict) and entry.get("name")]
-    except Exception:  # noqa: BLE001 - an unreadable registry is an empty one
+    """Registered servers ([] when the file is absent, empty, or corrupt).
+
+    Corrupt is quarantined, not overwritten — see :mod:`backend.core.jsonstore`.
+    """
+    payload = load_json(path, [])
+    if not isinstance(payload, list):
         return []
+    return [entry for entry in payload if isinstance(entry, dict) and entry.get("name")]
 
 
 def save_servers(path: Path, servers: list[dict[str, Any]]) -> None:
     """Persist the registry beside the sqlite db (never the vault)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(servers, ensure_ascii=False, indent=1), encoding="utf-8")
+    save_json(path, servers)

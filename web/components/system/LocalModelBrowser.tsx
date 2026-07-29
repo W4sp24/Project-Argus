@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import {
@@ -35,28 +35,56 @@ export default function LocalModelBrowser() {
   const { show } = useToast();
   const [progress, setProgress] = useState<Record<string, string>>({});
   const [installing, setInstalling] = useState<string | null>(null);
+  // Held in a ref, not state: cancelling must not wait for a re-render, and the
+  // controller is machinery rather than something the UI renders.
+  const abortRef = useRef<AbortController | null>(null);
+
+  function cancel() {
+    abortRef.current?.abort();
+  }
 
   async function download(entry: CatalogEntry) {
     if (installing) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setInstalling(entry.name);
     setProgress((current) => ({ ...current, [entry.name]: "starting…" }));
     try {
-      await installModel(entry.name, (event) => {
-        if (event.type === "error") {
-          show(`model :: ${event.detail ?? "download failed"}`);
-          setProgress((current) => ({ ...current, [entry.name]: `failed — ${event.detail ?? ""}` }));
-          return;
-        }
-        if (event.type === "done") {
-          setProgress((current) => ({ ...current, [entry.name]: "installed" }));
-          show(`model :: ${entry.name} installed and ready`);
-          return;
-        }
-        setProgress((current) => ({ ...current, [entry.name]: describe(event) }));
-      });
+      await installModel(
+        entry.name,
+        (event) => {
+          if (event.type === "error") {
+            show(`model :: ${event.detail ?? "download failed"}`, { tone: "error" });
+            setProgress((current) => ({
+              ...current,
+              [entry.name]: `failed — ${event.detail ?? ""}`,
+            }));
+            return;
+          }
+          if (event.type === "done") {
+            setProgress((current) => ({ ...current, [entry.name]: "installed" }));
+            show(`model :: ${entry.name} installed and ready`);
+            return;
+          }
+          setProgress((current) => ({ ...current, [entry.name]: describe(event) }));
+        },
+        controller.signal,
+      );
     } catch (error) {
-      show(`model :: ${error instanceof Error ? error.message : "download failed"}`);
+      if (controller.signal.aborted) {
+        // A deliberate cancel is not a failure. Ollama keeps the bytes it has,
+        // so re-downloading resumes rather than starting over.
+        setProgress((current) => ({
+          ...current,
+          [entry.name]: "cancelled — partial download kept, re-download to resume",
+        }));
+      } else {
+        show(`model :: ${error instanceof Error ? error.message : "download failed"}`, {
+          tone: "error",
+        });
+      }
     } finally {
+      abortRef.current = null;
       setInstalling(null);
       mutate();
       mutateModels();
@@ -105,6 +133,20 @@ export default function LocalModelBrowser() {
                   <span className="shrink-0 font-mono text-meta uppercase tracking-[0.1em] text-ok">
                     ✓ added
                   </span>
+                ) : installing === entry.name ? (
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    <span className="font-mono text-meta uppercase tracking-[0.1em] text-[var(--ac)]">
+                      DOWNLOADING…
+                    </span>
+                    <button
+                      type="button"
+                      onClick={cancel}
+                      title="Stop this download. Ollama keeps what it already fetched."
+                      className="border border-line px-2 py-0.5 font-mono text-meta uppercase tracking-[0.1em] text-ink transition-colors hover:border-lineHi"
+                    >
+                      CANCEL
+                    </button>
+                  </span>
                 ) : (
                   <button
                     type="button"
@@ -117,7 +159,7 @@ export default function LocalModelBrowser() {
                     }
                     className="shrink-0 border border-line px-2 py-0.5 font-mono text-meta uppercase tracking-[0.1em] text-ink transition-colors hover:border-lineHi disabled:opacity-40"
                   >
-                    {installing === entry.name ? "DOWNLOADING…" : "DOWNLOAD"}
+                    DOWNLOAD
                   </button>
                 )}
               </div>

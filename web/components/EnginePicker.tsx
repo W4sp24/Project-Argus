@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import AddModelDialog from "@/components/system/AddModelDialog";
 import Button from "@/components/ui/Button";
 import Dialog from "@/components/ui/Dialog";
-import { useModels, type ModelInfo } from "@/lib/api";
+import { useModels, type KeyState, type ModelInfo } from "@/lib/api";
 import { BUILTIN_MODELS, setModel, useModelSync, useSelectedModel } from "@/lib/models";
 import { useUi } from "@/lib/ui";
 
@@ -64,9 +64,17 @@ function toEngine(model: ModelInfo): Engine {
   const host = hostOf(model.endpoint);
   return {
     ...base,
-    source: `${host ?? "hosted"} · ${model.has_key ? "your api key" : "no key stored"}`,
+    source: `${host ?? "hosted"} · ${describeKey(model.key_state)}`,
     privacy: "note excerpts are sent to this provider",
   };
+}
+
+/** How a stored key reads in the picker's one-line summary. */
+function describeKey(state: KeyState | undefined): string {
+  // "unknown" is not "absent": telling someone no key is stored when the
+  // keyring merely failed to open sends them to re-enter one they already have.
+  if (state === "unknown") return "key status unknown";
+  return state === "present" ? "your api key" : "no key stored";
 }
 
 /** Offline shape — the backend is unreachable, so show what config.py ships. */

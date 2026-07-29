@@ -148,6 +148,120 @@ def test_build_vault_tools_exposes_only_read_only_tools(settings: Settings) -> N
     assert not any(name.startswith("propose_") for name in names)
 
 
+def test_the_mcp_bridge_warms_its_index_like_chat_does(settings: Settings, monkeypatch) -> None:
+    """The 07-27 warm fix reached chat but never reached the MCP bridge.
+
+    Without it the ~20s embedding-model load happens inline on the first
+    ``search_vault`` — and because ``retrieve`` is synchronous, that stalls the
+    whole stdio event loop with no diagnostic the calling agent can see.
+    """
+    from backend.agent import mcp_server
+
+    warmed: list[str] = []
+
+    class RecordingIndex:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def query(self, *_args, **_kwargs):
+            warmed.append("warm")
+            return {}
+
+    monkeypatch.setattr("backend.rag.index.VaultIndex", RecordingIndex)
+
+    tools = mcp_server.read_only_tools(settings)
+
+    assert {spec.name for spec in tools} == set(mcp_server.READ_ONLY_TOOLS)
+    for _ in range(50):  # the warm runs on a daemon thread
+        if warmed:
+            break
+        time.sleep(0.02)
+    assert warmed, "the MCP bridge must warm the index instead of paying for it inline"
+
+
+# --- usage survives an abandoned answer -------------------------------------
+
+
+class _AbandonableAdapter:
+    """An adapter whose usage only arrives after the deltas, as all three do."""
+
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self._counted = {"input_tokens": 0, "output_tokens": 0}
+
+    def partial_usage(self):
+        from backend.agent.adapters import UsageReported
+
+        return UsageReported(**self._counted)
+
+    async def run(self, **_kwargs):
+        from backend.agent.adapters import TextDelta, UsageReported
+
+        self._counted["input_tokens"] = 400
+        self._counted["output_tokens"] = 300
+        yield TextDelta("a long ")
+        self._counted["output_tokens"] = 800
+        yield TextDelta("expensive answer")
+        yield UsageReported(**self._counted)
+
+
+def _usage_rows(settings: Settings) -> list[tuple]:
+    from backend.core.db import connect, init_schema
+
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        return [
+            (row["feature"], row["input_tokens"], row["output_tokens"])
+            for row in conn.execute("SELECT * FROM token_usage")
+        ]
+    finally:
+        conn.close()
+
+
+@pytest.mark.anyio
+async def test_abandoning_the_stream_still_records_the_tokens(
+    settings: Settings, monkeypatch
+) -> None:
+    """Closing the tab mid-answer used to drop the whole turn's tokens.
+
+    Every adapter yields UsageReported *last*, and the WS handler returned on
+    disconnect without draining, so the provider billed for an answer that never
+    reached the usage dashboard — biased towards the long, expensive answers
+    people actually abandon.
+    """
+    adapter = _AbandonableAdapter()
+    monkeypatch.setattr("backend.agent.runtime.resolve_adapter", lambda *a, **k: adapter)
+    monkeypatch.setattr("backend.agent.runtime.build_vault_tools", lambda *a, **k: [])
+
+    agent = ChatAgent(settings)
+    agent._index = FakeIndex()
+    stream = agent.stream_chat("explain everything")
+
+    assert await stream.__anext__() == "a long "  # then the user walks away
+    await stream.aclose()
+
+    rows = _usage_rows(settings)
+    assert rows == [("chat", 400, 300)], "the abandoned turn's tokens were lost"
+
+
+@pytest.mark.anyio
+async def test_a_completed_stream_records_usage_exactly_once(
+    settings: Settings, monkeypatch
+) -> None:
+    """The drain must not double-bill a turn that finished normally."""
+    adapter = _AbandonableAdapter()
+    monkeypatch.setattr("backend.agent.runtime.resolve_adapter", lambda *a, **k: adapter)
+    monkeypatch.setattr("backend.agent.runtime.build_vault_tools", lambda *a, **k: [])
+
+    agent = ChatAgent(settings)
+    agent._index = FakeIndex()
+    assert [chunk async for chunk in agent.stream_chat("hi")] == ["a long ", "expensive answer"]
+
+    assert _usage_rows(settings) == [("chat", 400, 800)]
+
+
 def test_resolve_model_keeps_the_default_path(settings: Settings) -> None:
     from backend.agent.runtime import MODEL
 

@@ -109,6 +109,26 @@ class AnthropicAPIAdapter:
     timeout: float = DEFAULT_TIMEOUT_SECONDS
     transport: httpx.AsyncBaseTransport | None = None
     provider: str = field(default=PROVIDER_ANTHROPIC_API, init=False)
+    # Live token counters for the run in flight. A consumer that abandons the
+    # stream (the user closing the tab mid-answer) never receives the final
+    # UsageReported, but the tokens were still billed — see partial_usage.
+    _live_usage: dict[str, int] | None = field(default=None, init=False, repr=False)
+    _live_message: dict[str, int] | None = field(default=None, init=False, repr=False)
+
+    def partial_usage(self) -> UsageReported | None:
+        """Whatever has been counted so far, for a stream that ended early.
+
+        Reads the banked turns *and* the message still in flight. Relying on
+        ``_stream_turn``'s ``finally`` alone would not do: when the outer
+        generator is closed, the inner one is only finalized whenever the GC
+        gets to it, so its counters may not have been merged yet.
+        """
+        if self._live_usage is None:
+            return None
+        live = self._live_message or {}
+        return UsageReported(
+            **{key: value + live.get(key, 0) for key, value in self._live_usage.items()}
+        )
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -138,6 +158,7 @@ class AnthropicAPIAdapter:
             "cache_read_input_tokens": 0,
         }
         url = f"{self.endpoint.rstrip('/')}/messages"
+        self._live_usage = totals
 
         async with self._client() as client:
             for _turn in range(max(1, max_turns)):
@@ -197,39 +218,73 @@ class AnthropicAPIAdapter:
         buffer: _BlockBuffer,
         totals: dict[str, int],
     ) -> AsyncIterator[AgentEvent]:
-        async with client.stream("POST", url, json=payload) as response:
-            if response.status_code >= 400:
-                raise AgentError(await _error_detail(response))
-            async for line in response.aiter_lines():
-                event = _sse_payload(line)
-                if event is None:
-                    continue
-                kind = event.get("type")
+        # This message's own counters, folded into ``totals`` when it ends.
+        message_totals = dict.fromkeys(totals, 0)
+        self._live_message = message_totals
+        try:
+            async with client.stream("POST", url, json=payload) as response:
+                if response.status_code >= 400:
+                    raise AgentError(await _error_detail(response))
+                async for line in response.aiter_lines():
+                    event = _sse_payload(line)
+                    if event is None:
+                        continue
+                    kind = event.get("type")
 
-                if kind == "message_start":
-                    _add_usage(totals, (event.get("message") or {}).get("usage"))
-                elif kind == "content_block_start":
-                    buffer.start(int(event.get("index") or 0), event.get("content_block") or {})
-                elif kind == "content_block_delta":
-                    delta = event.get("delta") or {}
-                    if delta.get("type") == "text_delta" and delta.get("text"):
-                        text_parts.append(str(delta["text"]))
-                        yield TextDelta(str(delta["text"]))
-                    else:
-                        buffer.delta(int(event.get("index") or 0), delta)
-                elif kind == "message_delta":
-                    _add_usage(totals, event.get("usage"))
-                elif kind == "error":
-                    detail = (event.get("error") or {}).get("message") or "stream error"
-                    raise AgentError(f"the model endpoint errored mid-stream: {detail}")
+                    if kind == "message_start":
+                        _apply_usage(message_totals, (event.get("message") or {}).get("usage"))
+                    elif kind == "content_block_start":
+                        buffer.start(
+                            int(event.get("index") or 0), event.get("content_block") or {}
+                        )
+                    elif kind == "content_block_delta":
+                        delta = event.get("delta") or {}
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            text_parts.append(str(delta["text"]))
+                            yield TextDelta(str(delta["text"]))
+                        else:
+                            buffer.delta(int(event.get("index") or 0), delta)
+                    elif kind == "message_delta":
+                        _apply_usage(message_totals, event.get("usage"))
+                    elif kind == "error":
+                        detail = (event.get("error") or {}).get("message") or "stream error"
+                        raise AgentError(f"the model endpoint errored mid-stream: {detail}")
+        finally:
+            # Even a cancelled or failed turn already cost the user tokens, so
+            # bank whatever the API reported before we stopped reading.
+            _merge_message(totals, message_totals)
 
 
-def _add_usage(totals: dict[str, int], usage: Any) -> None:
-    """Fold one usage report into the running totals (both events carry partials)."""
+def _apply_usage(message_totals: dict[str, int], usage: Any) -> None:
+    """Record one usage report for the message currently streaming.
+
+    **Assignment, not addition.** The Messages API reports usage cumulatively
+    *per message*: ``message_start`` carries the full ``input_tokens`` and
+    cache counters plus a small initial ``output_tokens``, and
+    ``message_delta`` carries the running total for the message — newer API
+    versions repeating the input and cache figures alongside it.
+
+    Adding the two therefore over-reported ``output_tokens`` on every message
+    and could double ``input_tokens`` outright, inflating the cost estimate on
+    the usage dashboard. Only keys actually present are touched, so a
+    ``message_delta`` that omits ``input_tokens`` leaves the ``message_start``
+    figure standing rather than zeroing it.
+
+    Summing is still correct *across* messages — see :func:`_merge_message` —
+    because each tool-use turn is a separate billed request.
+    """
     if not isinstance(usage, dict):
         return
+    for key in message_totals:
+        if usage.get(key) is not None:
+            message_totals[key] = int(usage[key] or 0)
+
+
+def _merge_message(totals: dict[str, int], message_totals: dict[str, int]) -> None:
+    """Fold a finished message's usage into the run's totals, then reset it."""
     for key in totals:
-        totals[key] += int(usage.get(key) or 0)
+        totals[key] += message_totals[key]
+        message_totals[key] = 0
 
 
 def _sse_payload(line: str) -> dict[str, Any] | None:

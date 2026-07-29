@@ -117,6 +117,22 @@ def test_load_sources_tolerates_missing_and_corrupt(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text("{{{", encoding="utf-8")
     assert store.load_sources(bad) == []
+    # Corrupt is set aside, not left in place for the next save to overwrite.
+    assert not bad.exists()
+    assert (tmp_path / "bad.json.corrupt").read_text(encoding="utf-8") == "{{{"
+
+
+def test_saved_sources_survive_a_corrupt_read(tmp_path: Path) -> None:
+    """The old code's data-loss path: load [] -> append -> save, wiping the file."""
+    path = tmp_path / "agent-sources.json"
+    path.write_text('[{"id": "gemini-cli", "path', encoding="utf-8")  # truncated write
+
+    assert store.load_sources(path) == []
+    store.save_sources(path, [{"id": "new", "path": "/logs"}])
+
+    assert store.load_sources(path) == [{"id": "new", "path": "/logs"}]
+    quarantined = (tmp_path / "agent-sources.json.corrupt").read_text(encoding="utf-8")
+    assert "gemini-cli" in quarantined  # the user's entry is still recoverable
 
 
 # --- endpoints ------------------------------------------------------------

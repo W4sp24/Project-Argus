@@ -10,10 +10,23 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from backend.core.config import Settings
 
 ChatRunner = Callable[[str], AsyncIterator[str]]
+
+
+def _connected(websocket: WebSocket) -> bool:
+    """Is this socket still writable?
+
+    Sending to a socket the client has dropped raises ``RuntimeError`` rather
+    than ``WebSocketDisconnect``, so the error path has to look before it sends.
+    """
+    return (
+        websocket.application_state is WebSocketState.CONNECTED
+        and websocket.client_state is WebSocketState.CONNECTED
+    )
 
 
 def default_chat_runner(settings: Settings) -> ChatRunner:
@@ -60,9 +73,25 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
                     async for delta in stream:
                         await websocket.send_json({"type": "delta", "text": delta})
                     await websocket.send_json({"type": "done"})
+                except WebSocketDisconnect:
+                    # Must be re-raised before the broad handler below, which
+                    # would otherwise swallow it and try to send an error frame
+                    # down a socket starlette has already marked DISCONNECTED —
+                    # raising RuntimeError('Cannot call "send" once a close
+                    # message has been sent') straight out of the handler.
+                    raise
                 except Exception as exc:  # agent errors must reach the UI, not kill the socket
+                    if not _connected(websocket):
+                        return
                     await websocket.send_json({"type": "error", "detail": str(exc)})
         except WebSocketDisconnect:
             return
+        except RuntimeError as exc:
+            # starlette raises a plain RuntimeError, not WebSocketDisconnect,
+            # for a send or receive on a socket that is already gone. Losing the
+            # race with a closing browser tab is normal, not a server fault.
+            if "close message has been sent" in str(exc) or "not connected" in str(exc).lower():
+                return
+            raise
 
     return router

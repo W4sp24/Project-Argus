@@ -35,12 +35,36 @@ READ_ONLY_TOOLS = ("search_vault", "read_note", "list_tasks")
 
 
 def read_only_tools(settings: Settings) -> list[ToolSpec]:
-    """Chat's vault tools, filtered to the read-only allow-list."""
+    """Chat's vault tools, filtered to the read-only allow-list.
+
+    Warming happens here for the same reason it happens when the chat socket
+    connects: a cold embedding-model load costs ~20s, and paying it inside the
+    first ``search_vault`` call stalls the stdio server's event loop until it
+    finishes — long enough that the calling agent may time the tool out with no
+    explanation. Warming on a background thread and gating searches on the
+    ``ready`` event turns that into a wait the caller can actually survive.
+    """
+    import threading
+
     from backend.agent.runtime import build_vault_tools
     from backend.rag.index import VaultIndex
 
     index = VaultIndex(settings.db_path.parent / "chroma")
-    tools = build_vault_tools(settings, index, model_label="mcp")
+    ready = threading.Event()
+
+    def warm() -> None:
+        import contextlib
+
+        try:
+            # Best-effort, exactly as ChatAgent.warm: a failed warm must release
+            # waiters so a search fails on its own terms instead of hanging.
+            with contextlib.suppress(Exception):
+                index.query("warmup", n_results=1)
+        finally:
+            ready.set()
+
+    threading.Thread(target=warm, daemon=True).start()
+    tools = build_vault_tools(settings, index, model_label="mcp", ready=ready)
     return [spec for spec in tools if spec.name in READ_ONLY_TOOLS]
 
 
@@ -96,9 +120,24 @@ async def serve_stdio(settings: Settings) -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def client_config_snippets(command: str = "argus mcp-server") -> dict[str, str]:
+def default_command() -> list[str]:
+    """How to invoke this bridge *on this install*.
+
+    The desktop app ships ``argus-backend.exe``, not the ``argus`` console
+    script, so handing a desktop user ``argus mcp-server`` gave them a command
+    their machine does not have. Frozen builds get their own executable path.
+    """
+    import sys
+
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--mcp-server"]
+    return ["argus", "mcp-server"]
+
+
+def client_config_snippets(command: str | None = None) -> dict[str, str]:
     """Copy-pasteable config for each supported CLI, for the docs and /system."""
-    argv = command.split()
+    argv = command.split() if command else default_command()
+    command = " ".join(argv)
     stdio_entry = {"command": argv[0], "args": argv[1:]}
     return {
         "claude-code": f"claude mcp add {SERVER_NAME} -s user -- {command}",

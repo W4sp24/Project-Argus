@@ -25,9 +25,17 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.agent.credentials import CredentialError, delete_key, has_key, store_key
+from backend.agent.credentials import (
+    KEY_ABSENT,
+    KEY_PRESENT,
+    CredentialError,
+    delete_key,
+    key_state,
+    store_key,
+)
 from backend.connectors import gcal, todoist
 from backend.core.config import Settings
+from backend.core.jsonstore import save_json
 from backend.features.integrations import store
 from backend.features.integrations.mcp_client import McpProbeResult, probe_server
 
@@ -60,6 +68,8 @@ class McpServerInfo(BaseModel):
     #: Tool names captured when the server last passed a test.
     tools: list[str] = []
     has_key: bool = False
+    #: "present" | "absent" | "unknown" — see backend.agent.credentials.
+    key_state: str = KEY_ABSENT
 
 
 class IntegrationsResponse(BaseModel):
@@ -189,18 +199,22 @@ def build_integrations_router(
             ),
         ]
 
+    def _server_info(entry: dict[str, Any]) -> McpServerInfo:
+        state = key_state(entry.get("key_ref"))  # one keyring read, two fields
+        return McpServerInfo(
+            name=entry["name"],
+            transport=entry.get("transport", "stdio"),
+            command=entry.get("command"),
+            args=list(entry.get("args") or []),
+            url=entry.get("url"),
+            tools=list(entry.get("tools") or []),
+            has_key=state == KEY_PRESENT,
+            key_state=state,
+        )
+
     def _servers() -> list[McpServerInfo]:
         return [
-            McpServerInfo(
-                name=entry["name"],
-                transport=entry.get("transport", "stdio"),
-                command=entry.get("command"),
-                args=list(entry.get("args") or []),
-                url=entry.get("url"),
-                tools=list(entry.get("tools") or []),
-                has_key=has_key(entry.get("key_ref")),
-            )
-            for entry in store.load_servers(settings.mcp_servers_file)
+            _server_info(entry) for entry in store.load_servers(settings.mcp_servers_file)
         ]
 
     @router.get("/integrations", response_model=IntegrationsResponse)
@@ -248,9 +262,10 @@ def build_integrations_router(
                 "secret for a *Desktop* OAuth client and paste that file",
             )
 
-        target = settings.gcal_credentials_file
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(request.credentials_json, encoding="utf-8")
+        # The parsed payload, written atomically: a half-written OAuth client
+        # file fails deep inside google-auth with a far worse error than "that
+        # is not valid JSON".
+        save_json(settings.gcal_credentials_file, payload)
         return ConnectResult(ok=True, detail="OAuth client saved — now finish the consent flow")
 
     @router.post("/integrations/gcal/connect", response_model=ConnectResult)
@@ -318,17 +333,30 @@ def build_integrations_router(
 
         # The token is stored only once the server is known to work, so a failed
         # registration leaves nothing behind in the keyring.
+        #
+        # Registry first, keyring second — see the same ordering and reasoning in
+        # backend.features.system.models.add_model. A crash between the two must
+        # leave a visible server, not an unreachable secret.
         if request.token:
-            ref = store.key_ref_for(name)
-            try:
-                store_key(ref, request.token)
-            except CredentialError as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-            entry["key_ref"] = ref
+            entry["key_ref"] = store.key_ref_for(name)
 
         servers = store.load_servers(settings.mcp_servers_file)
         servers.append({k: v for k, v in entry.items() if v not in (None, [], {})})
         store.save_servers(settings.mcp_servers_file, servers)
+
+        if request.token:
+            try:
+                store_key(entry["key_ref"], request.token)
+            except CredentialError as exc:
+                store.save_servers(
+                    settings.mcp_servers_file,
+                    [
+                        e
+                        for e in store.load_servers(settings.mcp_servers_file)
+                        if e.get("name") != name
+                    ],
+                )
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
         return next(server for server in _servers() if server.name == name)
 
     @router.delete("/integrations/mcp/{name}", response_model=ConnectResult)
@@ -337,11 +365,13 @@ def build_integrations_router(
         target = next((entry for entry in servers if entry.get("name") == name), None)
         if target is None:
             raise HTTPException(status_code=404, detail=f"no server {name}")
+        # An orphaned secret would outlive the thing it belonged to, so the
+        # keyring goes first: a crash after this leaves a listed server the user
+        # can delete again, not a secret nothing points at.
+        delete_key(target.get("key_ref"))
         store.save_servers(
             settings.mcp_servers_file, [e for e in servers if e.get("name") != name]
         )
-        # An orphaned secret would outlive the thing it belonged to.
-        delete_key(target.get("key_ref"))
         return ConnectResult(ok=True, detail=f"{name} removed")
 
     @router.get("/integrations/mcp/snippets", response_model=dict[str, str])

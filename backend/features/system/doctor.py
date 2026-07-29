@@ -89,6 +89,31 @@ def _check_chroma(settings: Settings) -> Check:
     )
 
 
+def _check_config_files(settings: Settings) -> Check:
+    """Did any registry fail to parse and get quarantined?
+
+    :mod:`backend.core.jsonstore` renames an unreadable ``models.json`` (or any
+    sibling registry) to ``*.corrupt`` rather than letting the next save bury
+    it. That recovers the bytes, but only this check tells the user it happened
+    — otherwise their models simply appear to have vanished.
+    """
+    from backend.core.jsonstore import corrupt_files
+
+    quarantined = corrupt_files(settings.db_path.parent)
+    if not quarantined:
+        return Check(name="config-files", status="OK", detail="registries parse cleanly")
+    names = ", ".join(path.name for path in quarantined)
+    return Check(
+        name="config-files",
+        status="WARN",
+        detail=(
+            f"unreadable and set aside: {names} (in {settings.db_path.parent}). "
+            "Anything registered there was not loaded — open the file to recover "
+            "it, or re-add the entries and delete it."
+        ),
+    )
+
+
 def _check_keyring() -> Check:
     try:
         import keyring
@@ -134,6 +159,8 @@ def _check_ollama() -> Check:
 
 
 def _check_connector(name: str) -> Check:
+    from backend.agent.credentials import KEY_PRESENT, KEY_UNKNOWN
+
     try:
         if name == "gcal":
             from backend.connectors import gcal as connector
@@ -143,8 +170,17 @@ def _check_connector(name: str) -> Check:
             from backend.connectors import todoist as connector
 
             hint = "`argus connect todoist <api-token>`"
-        if connector.configured():
+        state = connector.connection_state()
+        if state == KEY_PRESENT:
             return Check(name=name, status="OK", detail="connected")
+        if state == KEY_UNKNOWN:
+            # Distinct from "not connected" on purpose: re-running the connect
+            # flow will not fix a keyring that cannot be read.
+            return Check(
+                name=name,
+                status="WARN",
+                detail="cannot tell — the OS keyring is unreadable; see the keyring check",
+            )
         return Check(name=name, status="WARN", detail=f"not connected — {hint}")
     except Exception as exc:
         return Check(name=name, status="WARN", detail=str(exc))
@@ -162,6 +198,9 @@ def run_checks(settings: Settings) -> list[Check]:
         _check_chroma(settings)
         if vault_ok
         else Check(name="chroma", status="WARN", detail="skipped — vault missing"),
+        _check_config_files(settings)
+        if vault_ok
+        else Check(name="config-files", status="WARN", detail="skipped — vault missing"),
         _check_keyring(),
         _check_ollama(),
         _check_connector("gcal"),

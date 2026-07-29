@@ -369,14 +369,19 @@ def adapter_for_entry(
     flow test a key the user has just typed but not yet saved — the key stays in
     memory for that one call and is stored only once the model is known to work.
     """
-    from backend.agent.credentials import get_key
+    from backend.agent.credentials import KeyringUnavailableError, get_key
 
     name = str(entry["name"])
     provider = str(entry.get("provider") or PROVIDER_CLAUDE_CLI)
     # Hosted entries often label a model differently from the id the provider
     # expects ("groq-llama" serving "llama-3.3-70b-versatile").
     model_id = str(entry.get("model_id") or name)
-    resolved_key = api_key or get_key(entry.get("key_ref"))
+    try:
+        resolved_key = api_key or get_key(entry.get("key_ref"))
+    except KeyringUnavailableError as exc:
+        # Not the same as "you never saved a key" — telling the user to re-add
+        # one they already have is how this used to waste their time.
+        raise AgentError(f"cannot use {name!r}: {exc}") from exc
 
     if provider == PROVIDER_CLAUDE_CLI:
         return ClaudeSDKAdapter(
@@ -412,6 +417,22 @@ def adapter_for_entry(
     )
 
 
+def _preferred_model(settings: Any) -> str | None:
+    """The user's chosen default, when there is a settings object to ask.
+
+    Tolerant on purpose: ``settings`` is typed ``Any`` because call sites pass
+    fakes, and a caller with no settings (or a half-built one) should fall back
+    rather than crash.
+    """
+    if settings is None:
+        return None
+    try:
+        chosen = settings.default_model
+    except Exception:  # noqa: BLE001 - a fake or partial settings object
+        return None
+    return str(chosen) if chosen else None
+
+
 def resolve_adapter(
     settings: Any,
     model: str | None = None,
@@ -422,11 +443,20 @@ def resolve_adapter(
 ) -> AgentAdapter:
     """The adapter for a registry model name.
 
-    ``model=None`` keeps each call site's historical behavior: it runs
-    ``fallback_model`` (the module's long-standing ``MODEL`` constant) on the
-    Claude Code path, so nothing changes for callers that never opt in. Passing
-    a name routes through the registry, whatever provider backs it.
+    ``model=None`` means "whatever the user chose under /system" — it resolves
+    through ``settings.default_model`` like a named model would. That is what
+    makes Argus's own unattended calls (the 07:00 briefing, coursework
+    generation, the planner) run on a local Ollama model on a machine that has
+    never had Claude Code installed.
+
+    ``fallback_model`` is the last resort, for callers with no ``settings`` to
+    consult at all. It used to be checked *first*, which quietly pinned every
+    model-less call to the Claude Code path and made ``default_model``
+    unreachable — the briefing then failed on an Ollama-only machine and
+    silently degraded to its deterministic template, forever.
     """
+    if not model:
+        model = _preferred_model(settings)
     if not model:
         if fallback_model:
             return ClaudeSDKAdapter(
@@ -434,7 +464,7 @@ def resolve_adapter(
                 tool_namespace=tool_namespace,
                 disallowed_tools=tuple(disallowed_tools),
             )
-        model = settings.default_model
+        raise AgentError("no model configured — register one under /system")
 
     entry = find_entry(settings.models, model)
     if entry is None:

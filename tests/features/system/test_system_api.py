@@ -331,6 +331,54 @@ def test_install_streams_progress_then_registers_the_model(vault: Path) -> None:
     assert registered[name]["local"] is True
 
 
+def test_install_probes_tool_calling_instead_of_trusting_the_catalog(vault: Path) -> None:
+    """The catalog's ``tool_calling: true`` is a hand-written literal, not a fact.
+
+    ``add_model`` gates on a live probe; the download path did not, so a model
+    whose catalog entry was wrong for a given tag or quantization only revealed
+    itself at the user's first question — answered with no citations, which is
+    precisely what the probe exists to prevent.
+    """
+    probed: list[str] = []
+
+    async def recording_prober(entry, api_key=None):
+        probed.append(entry["name"])
+        return ProbeResult(ok=True, detail="called the probe tool", tool_calling=True)
+
+    app = create_app(
+        Settings(_vault_path=vault), model_prober=recording_prober, model_puller=fake_puller
+    )
+    client = TestClient(app)
+    name = client.get("/api/models/catalog").json()["models"][0]["name"]
+
+    events = ndjson_lines(client.post("/api/models/install", json={"name": name}).text)
+
+    assert probed == [name], "a freshly pulled model must be measured, not assumed"
+    verified = next(event for event in events if event["type"] == "verified")
+    assert verified["tool_calling"] is True
+    assert events[-1]["type"] == "done"
+
+
+def test_a_pulled_model_that_fails_the_probe_is_kept_but_flagged(vault: Path) -> None:
+    """The user already paid for the download — flag it, do not discard it."""
+
+    async def failing(entry, api_key=None):
+        return ProbeResult(ok=False, detail="answered but never called the tool")
+
+    app = create_app(Settings(_vault_path=vault), model_prober=failing, model_puller=fake_puller)
+    client = TestClient(app)
+    name = client.get("/api/models/catalog").json()["models"][0]["name"]
+
+    events = ndjson_lines(client.post("/api/models/install", json={"name": name}).text)
+
+    verified = next(event for event in events if event["type"] == "verified")
+    assert verified["tool_calling"] is False
+    assert "never called the tool" in verified["detail"]
+    assert name in {m["name"] for m in client.get("/api/models").json()}, (
+        "a multi-gigabyte download is not thrown away over a failed probe"
+    )
+
+
 def test_install_reports_a_readable_error_when_ollama_is_down(vault: Path) -> None:
     app = create_app(
         Settings(_vault_path=vault), model_prober=passing_prober, model_puller=broken_puller

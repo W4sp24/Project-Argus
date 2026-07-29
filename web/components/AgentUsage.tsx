@@ -280,6 +280,18 @@ export default function AgentUsage({ size = "default" }: { size?: "default" | "l
                 </p>
               )}
 
+              {/* A zero we could not read must not pass for a zero we measured.
+                  Silently skipping unrecognised lines is what would otherwise
+                  turn a changed log format into a permanent, confident 0. */}
+              {active.unreadable && (
+                <p
+                  role="status"
+                  className="mt-2 border border-[var(--ac)] px-2 py-1 text-meta leading-relaxed text-[var(--ac)]"
+                >
+                  this number is not trustworthy — {active.unreadable}
+                </p>
+              )}
+
               <TokenComposition counts={active} color={tint} className="mt-3" />
 
               <div className="mt-4 border-t border-line pt-3">

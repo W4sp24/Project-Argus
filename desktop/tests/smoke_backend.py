@@ -160,6 +160,51 @@ def _post(port: int, path: str, timeout: int = 120) -> tuple[int, str]:
         return 0, repr(exc)
 
 
+def _mcp_server_starts(target: Path) -> tuple[bool, str]:
+    """Does ``--mcp-server`` actually serve, or die on a missing import?
+
+    The bridge's ``mcp`` imports are all lazy and in-function, which PyInstaller
+    cannot see. Without ``collect_submodules("mcp")`` in the spec, the frozen
+    exe accepts the flag and then dies with ``ModuleNotFoundError: mcp`` — and
+    the only user who would ever find out is one following the README.
+
+    Probed with a real MCP ``initialize`` over stdio rather than by starting and
+    killing it, because a process that exits instantly on a bad import and one
+    that is quietly waiting for input look identical from the outside.
+    """
+    request = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "argus-smoke", "version": "0"},
+            },
+        }
+    )
+    proc = subprocess.Popen(
+        [*_base_cmd(target), "--mcp-server"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=_cwd_for(target),
+    )
+    try:
+        out, err = proc.communicate(input=request + "\n", timeout=180)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return False, "no response to initialize within 180s"
+    if "ModuleNotFoundError" in err:
+        # The exact failure the spec's hiddenimports exist to prevent.
+        return False, err.strip().splitlines()[-1][:200]
+    if '"result"' in out and "serverInfo" in out:
+        return True, "handshake ok"
+    return False, (err.strip() or out.strip() or "no handshake")[:200]
+
+
 def _watchdog_dies_with_parent(target: Path) -> bool:
     """Force-kill a stand-in parent; the backend must exit on its own."""
     dummy = subprocess.Popen(
@@ -316,6 +361,11 @@ def main() -> int:
     # backend a stand-in parent, force-kill that parent (no handlers run, just
     # like Task Manager "End task"), and require the backend to notice.
     result.check("parent-death watchdog", _watchdog_dies_with_parent(target))
+
+    # The MCP bridge, which the desktop build could not run at all until the
+    # --mcp-server flag and the spec's mcp hiddenimports landed together.
+    ok, detail = _mcp_server_starts(target)
+    result.check("--mcp-server serves over stdio", ok, detail)
 
     shutil.rmtree(workdir, ignore_errors=True)
 

@@ -8,10 +8,11 @@ a log folder is a path, not a credential.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
+
+from backend.core.jsonstore import load_json, save_json
 
 #: An id becomes a URL path segment and a ``cli_usage.agent`` value.
 AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -28,19 +29,20 @@ def slugify(name: str) -> str:
 
 
 def load_sources(path: Path) -> list[dict[str, Any]]:
-    """Registered sources ([] when the file is absent, empty, or corrupt)."""
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return [
-            entry
-            for entry in payload
-            if isinstance(entry, dict) and entry.get("id") and entry.get("path")
-        ]
-    except Exception:  # noqa: BLE001 - an unreadable registry is an empty one
+    """Registered sources ([] when the file is absent, empty, or corrupt).
+
+    Corrupt is quarantined, not overwritten — see :mod:`backend.core.jsonstore`.
+    """
+    payload = load_json(path, [])
+    if not isinstance(payload, list):
         return []
+    return [
+        entry
+        for entry in payload
+        if isinstance(entry, dict) and entry.get("id") and entry.get("path")
+    ]
 
 
 def save_sources(path: Path, sources: list[dict[str, Any]]) -> None:
     """Persist beside the sqlite db (never the vault)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sources, ensure_ascii=False, indent=1), encoding="utf-8")
+    save_json(path, sources)

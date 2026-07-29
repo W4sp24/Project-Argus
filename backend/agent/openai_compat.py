@@ -154,6 +154,18 @@ class OpenAICompatAdapter:
     timeout: float = DEFAULT_TIMEOUT_SECONDS
     transport: httpx.AsyncBaseTransport | None = None
     provider: str = field(default=PROVIDER_OPENAI_COMPAT, init=False)
+    # See AnthropicAPIAdapter.partial_usage: a consumer that walks away
+    # mid-stream never sees the final UsageReported, but the tokens were spent.
+    _live_usage: dict[str, int] | None = field(default=None, init=False, repr=False)
+
+    def partial_usage(self) -> UsageReported | None:
+        """Whatever has been counted so far, for a stream that ended early."""
+        if not self._live_usage:
+            return None
+        return UsageReported(
+            input_tokens=self._live_usage["input_tokens"],
+            output_tokens=self._live_usage["output_tokens"],
+        )
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -181,6 +193,7 @@ class OpenAICompatAdapter:
 
         by_name = {spec.name: spec for spec in tools}
         totals = {"input_tokens": 0, "output_tokens": 0}
+        self._live_usage = totals
         url = chat_completions_url(self.endpoint)
 
         async with self._client() as client:

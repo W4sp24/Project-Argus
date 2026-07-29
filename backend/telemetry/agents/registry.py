@@ -94,6 +94,15 @@ class AgentUsage(BaseModel):
     models: list[AgentModelUsage]
     #: Models that ran but have no published rate, named rather than guessed at.
     unpriced_models: list[str]
+    #: Set when transcripts exist but none of them parsed into a single row.
+    #:
+    #: Zero is otherwise indistinguishable from "we cannot read this format",
+    #: and the parsers degrade to silently skipping lines they do not
+    #: recognise. Codex in particular has never been validated against a real
+    #: ``~/.codex`` — its tests are fixtures written from the same assumption as
+    #: its parser — so a wrong guess about the format would show a confident
+    #: zero forever. This makes that case say so.
+    unreadable: str | None = None
 
 
 class AgentsUsageReport(BaseModel):
@@ -143,6 +152,7 @@ def _summarise(
     builtin: bool,
     rate_lookup: dict[str, AgentSource],
     agent_filter: str | None,
+    unreadable: str | None = None,
 ) -> AgentUsage:
     """Fold ``rows`` into one report slice, pricing each model by its own agent."""
     totals = [0, 0, 0, 0]
@@ -211,7 +221,34 @@ def _summarise(
         series=scan.series(rows, range_),
         models=models,
         unpriced_models=sorted(unpriced),
+        unreadable=unreadable,
     )
+
+
+def _unreadable_reason(conn: sqlite3.Connection, source: AgentSource) -> str | None:
+    """"We found its logs and understood none of them", or None if all is well.
+
+    Checked against the whole table rather than the selected range: a user who
+    has not run Codex this week should see an honest zero, not a warning. Only
+    transcripts that produced *no rows ever* mean the format is wrong.
+    """
+    try:
+        if not source.detect():
+            return None
+        found = sum(1 for _ in source.transcripts())
+        if not found:
+            return None
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM cli_usage WHERE agent = ?", (source.id,)
+        ).fetchone()
+        if row and int(row["n"]) > 0:
+            return None
+        return (
+            f"found {found} transcript file(s) under {source.root()} but could not read "
+            "usage from any of them — the log format may have changed"
+        )
+    except Exception:  # noqa: BLE001 - a diagnostic must never break the page
+        return None
 
 
 def agents_report(
@@ -235,6 +272,7 @@ def agents_report(
             builtin=source.builtin,
             rate_lookup=lookup,
             agent_filter=source.id,
+            unreadable=_unreadable_reason(conn, source),
         )
         for source in sources
     ]

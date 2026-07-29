@@ -136,9 +136,9 @@ def create_app(
         return run_planner
 
     def _default_composer() -> Callable:
-        from backend.features.briefing.service import agent_composer
+        from backend.features.briefing.service import make_agent_composer
 
-        return agent_composer
+        return make_agent_composer(resolved)
 
     index = index_factory or _default_index_factory
 
@@ -164,10 +164,10 @@ def create_app(
 
 
 def _production_scheduler(settings: Settings):
-    from backend.features.briefing.service import agent_composer
+    from backend.features.briefing.service import make_agent_composer
     from backend.scheduler import build_scheduler
 
-    return build_scheduler(settings, composer=agent_composer)
+    return build_scheduler(settings, composer=make_agent_composer(settings))
 
 
 app = create_app(scheduler_factory=_production_scheduler)

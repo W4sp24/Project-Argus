@@ -1,5 +1,6 @@
 """Tests for the morning briefing: data assembly, rendering, composition."""
 
+import logging
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -84,15 +85,41 @@ def test_render_briefing_includes_and_omits_sections(vault: Path, conn: sqlite3.
 
 
 def test_compose_briefing_falls_back_when_composer_fails(
-    vault: Path, conn: sqlite3.Connection
+    vault: Path, conn: sqlite3.Connection, caplog
 ) -> None:
     def broken_composer(_data) -> str:
         raise RuntimeError("agent unavailable")
 
-    markdown = compose_briefing(
-        Settings(_vault_path=vault), conn, composer=broken_composer, today=TODAY
-    )
+    with caplog.at_level(logging.WARNING):
+        markdown = compose_briefing(
+            Settings(_vault_path=vault), conn, composer=broken_composer, today=TODAY
+        )
     assert "Submit lab report" in markdown  # deterministic fallback
+    # The 07:00 job runs unattended; a degraded briefing must leave a trace, or
+    # the user gets the plain template every morning and never learns why.
+    assert "agent unavailable" in caplog.text
+
+
+def test_a_failed_composer_writes_no_audit_row(vault: Path, conn: sqlite3.Connection) -> None:
+    """/api/audit must not claim a model read notes it never opened."""
+
+    def broken_composer(_data) -> str:
+        raise RuntimeError("agent unavailable")
+
+    compose_briefing(Settings(_vault_path=vault), conn, composer=broken_composer, today=TODAY)
+    rows = conn.execute(
+        "SELECT COUNT(*) AS n FROM audit WHERE entry_point = 'briefing'"
+    ).fetchone()
+    assert rows["n"] == 0
+
+
+def test_a_successful_composer_audits_the_model_that_ran(
+    vault: Path, conn: sqlite3.Connection
+) -> None:
+    settings = Settings(_vault_path=vault)
+    compose_briefing(settings, conn, composer=lambda _d: "prose", today=TODAY)
+    row = conn.execute("SELECT model FROM audit WHERE entry_point = 'briefing'").fetchone()
+    assert row["model"] == settings.default_model
 
 
 def test_compose_briefing_uses_composer_output(vault: Path, conn: sqlite3.Connection) -> None:

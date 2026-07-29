@@ -141,10 +141,39 @@ def _cmd_serve(host: str, parent_pid: int) -> int:
     return 0
 
 
+def _cmd_mcp_server() -> int:
+    """Serve the vault's read-only tools over stdio, for any MCP client.
+
+    The desktop app ships this binary, not the ``argus`` console script, so
+    without this flag a desktop-only user could not run the MCP bridge at all —
+    while the README and the /system panel both handed them a copy-pasteable
+    ``argus mcp-server`` command.
+
+    Nothing may be printed to stdout here: stdout *is* the MCP transport.
+    """
+    import asyncio
+
+    from backend.agent.mcp_server import serve_stdio
+    from backend.core.config import ConfigError, Settings
+
+    try:
+        settings = Settings.load()
+    except ConfigError as exc:
+        print(f"argus: {exc}", file=sys.stderr)
+        return 1
+    asyncio.run(serve_stdio(settings))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="argus-backend", add_help=True)
     parser.add_argument("--init", metavar="PATH", help="create a vault and exit")
     parser.add_argument("--doctor", action="store_true", help="print checks as JSON and exit")
+    parser.add_argument(
+        "--mcp-server",
+        action="store_true",
+        help="serve the vault's read-only tools over stdio (MCP) and exit",
+    )
     parser.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
     parser.add_argument(
         "--parent-pid",
@@ -158,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init(Path(args.init).expanduser())
     if args.doctor:
         return _cmd_doctor()
+    if args.mcp_server:
+        return _cmd_mcp_server()
     parent_pid = args.parent_pid if args.parent_pid is not None else os.getppid()
     return _cmd_serve(args.host, parent_pid)
 

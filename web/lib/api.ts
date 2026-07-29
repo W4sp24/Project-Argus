@@ -353,6 +353,12 @@ export interface AgentUsage {
   series: AgentUsagePoint[];
   models: AgentModelUsage[];
   unpriced_models: string[];
+  /**
+   * Set when transcripts were found but none of them parsed. A zero we cannot
+   * trust must not render as a confident zero — the Codex reader in particular
+   * has never been validated against a real install.
+   */
+  unreadable?: string | null;
 }
 
 export interface AgentsUsageReport {
@@ -444,6 +450,8 @@ export interface McpServerInfo {
   tools: string[];
   /** A bearer token is stored for this server. The token itself never leaves the keyring (I4). */
   has_key: boolean;
+  /** ...and whether the keyring could be read at all. See ModelInfo.key_state. */
+  key_state: KeyState;
 }
 
 export interface IntegrationsResponse {
@@ -561,7 +569,16 @@ export interface ModelInfo {
   local: boolean;
   /** A key is stored for this model. The key itself is never returned (I4). */
   has_key: boolean;
+  /**
+   * Whether a key is stored — and whether we could even tell. `has_key` alone
+   * reported a temporarily unreadable OS keyring as "no key", so the UI told
+   * people to re-enter a key they already had.
+   */
+  key_state: KeyState;
 }
+
+/** A stored-credential answer, including "the keyring would not tell us". */
+export type KeyState = "present" | "absent" | "unknown";
 
 /** Model registry (§7/§12) — GET /api/models. Built-ins first, then local. */
 export function useModels() {
@@ -663,15 +680,23 @@ export interface InstallEvent {
  *
  * A download runs for minutes, so the response body is read incrementally
  * rather than awaited whole — `onEvent` fires per line as it arrives.
+ *
+ * `signal` makes it cancellable. That matters more than it sounds: these are
+ * multi-gigabyte downloads with a 3600s server timeout, and without a way out
+ * the only escape from a wrong pick was quitting the app. Aborting closes the
+ * response body, which drops the backend's `StreamingResponse` generator and
+ * with it the connection to Ollama's `/api/pull`.
  */
 export async function installModel(
   name: string,
   onEvent: (event: InstallEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await apiFetch("/api/models/install", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
+    signal,
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -682,6 +707,9 @@ export async function installModel(
 
   const decoder = new TextDecoder();
   let buffer = "";
+  // An abort mid-`read()` rejects the pending promise; releasing the reader
+  // first keeps that from surfacing as an unhandled rejection.
+  signal?.addEventListener("abort", () => void reader.cancel().catch(() => {}), { once: true });
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;

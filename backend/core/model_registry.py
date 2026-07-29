@@ -13,8 +13,9 @@ Split out of :mod:`backend.core.config` so that module is about *settings*:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+
+from backend.core.jsonstore import load_json, save_json
 
 DEFAULT_MODELS: tuple[dict, ...] = (
     {"name": "claude-sonnet-5", "provider": "anthropic", "default": True},
@@ -40,27 +41,26 @@ ZERO_RATE = {"input": 0.0, "output": 0.0}
 
 
 def load_user_models(models_file: Path) -> list[dict]:
-    """User-registered local models from ``models.json`` ([] when absent/corrupt)."""
-    try:
-        payload = json.loads(models_file.read_text(encoding="utf-8"))
-        return [entry for entry in payload if isinstance(entry, dict) and entry.get("name")]
-    except Exception:
+    """User-registered local models from ``models.json`` ([] when absent/corrupt).
+
+    A corrupt file is quarantined rather than silently replaced — see
+    :mod:`backend.core.jsonstore`.
+    """
+    payload = load_json(models_file, [])
+    if not isinstance(payload, list):
         return []
+    return [entry for entry in payload if isinstance(entry, dict) and entry.get("name")]
 
 
 def save_user_models(models_file: Path, models: list[dict]) -> None:
     """Persist user-registered models next to the sqlite db (never the vault)."""
-    models_file.parent.mkdir(parents=True, exist_ok=True)
-    models_file.write_text(json.dumps(models, ensure_ascii=False, indent=1), encoding="utf-8")
+    save_json(models_file, models)
 
 
 def load_model_prefs(prefs_file: Path) -> dict:
     """Model preferences (currently just ``default``) — {} when absent/corrupt."""
-    try:
-        payload = json.loads(prefs_file.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else {}
-    except Exception:
-        return {}
+    payload = load_json(prefs_file, {})
+    return payload if isinstance(payload, dict) else {}
 
 
 def save_model_prefs(prefs_file: Path, prefs: dict) -> None:
@@ -70,5 +70,4 @@ def save_model_prefs(prefs_file: Path, prefs: dict) -> None:
     shape predates this feature, and keeping the chosen default out of it means
     no migration and no risk to registries written by older versions.
     """
-    prefs_file.parent.mkdir(parents=True, exist_ok=True)
-    prefs_file.write_text(json.dumps(prefs, ensure_ascii=False, indent=1), encoding="utf-8")
+    save_json(prefs_file, prefs)

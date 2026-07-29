@@ -134,12 +134,23 @@ function ModelRow({
         {model.local ? "LOCAL" : "HOSTED"}
       </span>
 
-      {model.has_key && (
+      {model.key_state === "present" && (
         <span
           className="shrink-0 border border-line px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] text-ink-faint"
           title="An API key is saved in your OS keyring for this model"
         >
           KEY
+        </span>
+      )}
+
+      {/* Not the same as no key: the badge used to just vanish when the OS
+          keyring hiccuped, which reads as "your key is gone". */}
+      {model.key_state === "unknown" && (
+        <span
+          className="shrink-0 border border-[var(--ac)] px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] text-[var(--ac)]"
+          title="Your OS keyring could not be read, so Argus cannot tell whether a key is saved. Your key is probably still there — check the keyring line under DOCTOR."
+        >
+          KEY?
         </span>
       )}
 

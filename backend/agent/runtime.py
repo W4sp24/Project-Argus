@@ -81,7 +81,12 @@ def build_vault_tools(
         from backend.rag.retrieve import retrieve
 
         await _await_index()
-        hits = retrieve(
+        # to_thread, not a direct call: retrieve() is synchronous and can take
+        # seconds against a cold index. On the MCP stdio server that would stall
+        # the whole event loop; in chat it would stall the deltas already
+        # streaming to the browser.
+        hits = await asyncio.to_thread(
+            retrieve,
             index,
             str(args["query"]),
             settings.vault_path,
@@ -232,14 +237,32 @@ class ChatAgent:
             self._settings, self._index, model_label=resolved_model, ready=self._ready
         )
 
-        async for event in adapter.run(
-            system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
-            user_message=message,
-            tools=tools,
-            max_turns=MAX_TURNS,
-        ):
-            if isinstance(event, TextDelta):
-                yield event.text
-            elif isinstance(event, UsageReported):
-                # Fire-and-forget usage logging (§14) — never breaks chat.
-                record_result_usage(self._settings.db_path, "chat", event, model=resolved_model)
+        recorded = False
+        try:
+            async for event in adapter.run(
+                system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
+                user_message=message,
+                tools=tools,
+                max_turns=MAX_TURNS,
+            ):
+                if isinstance(event, TextDelta):
+                    yield event.text
+                elif isinstance(event, UsageReported):
+                    # Fire-and-forget usage logging (§14) — never breaks chat.
+                    record_result_usage(
+                        self._settings.db_path, "chat", event, model=resolved_model
+                    )
+                    recorded = True
+        finally:
+            # Every adapter yields UsageReported *last*, so closing the tab
+            # mid-answer used to drop the whole turn — and the abandoned answers
+            # are the long, expensive ones. The tokens were already billed by
+            # the provider, so bank what the adapter counted before we stopped
+            # reading. record_result_usage swallows its own errors, which is
+            # what makes it safe to call while unwinding.
+            if not recorded:
+                partial = getattr(adapter, "partial_usage", lambda: None)()
+                if partial is not None and any(partial.usage.values()):
+                    record_result_usage(
+                        self._settings.db_path, "chat", partial, model=resolved_model
+                    )

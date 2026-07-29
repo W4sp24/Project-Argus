@@ -81,3 +81,70 @@ def test_ws_chat_surfaces_agent_errors(tmp_path: Path) -> None:
         frame = ws.receive_json()
     assert frame["type"] == "error"
     assert "agent exploded" in frame["detail"]
+
+
+class _DroppingSocket:
+    """Starlette's exact behaviour when the browser goes away mid-stream.
+
+    Reproduced rather than mocked loosely, because the bug lives in the *order*
+    of these states: ``send`` on a dropped client raises ``WebSocketDisconnect``
+    **after** flipping the state to DISCONNECTED, and any further send then
+    raises a plain ``RuntimeError`` that ``except WebSocketDisconnect`` does not
+    catch.
+    """
+
+    def __init__(self) -> None:
+        from starlette.websockets import WebSocketState
+
+        self.application_state = WebSocketState.CONNECTED
+        self.client_state = WebSocketState.CONNECTED
+        self.sent: list[dict] = []
+
+    async def accept(self) -> None:
+        return None
+
+    async def receive_json(self) -> dict:
+        from starlette.websockets import WebSocketState
+
+        if self.application_state is not WebSocketState.CONNECTED:
+            raise RuntimeError('WebSocket is not connected. Need to call "accept" first.')
+        return {"message": "a long question"}
+
+    async def send_json(self, data: dict) -> None:
+        from starlette.websockets import WebSocketDisconnect, WebSocketState
+
+        if self.application_state is not WebSocketState.CONNECTED:
+            raise RuntimeError('Cannot call "send" once a close message has been sent.')
+        self.sent.append(data)
+        if data.get("type") == "delta":
+            # The client dropped. Starlette catches uvicorn's ClientDisconnected
+            # (an OSError), marks the socket dead, and re-raises as this.
+            self.application_state = WebSocketState.DISCONNECTED
+            self.client_state = WebSocketState.DISCONNECTED
+            raise WebSocketDisconnect(code=1006)
+
+
+@pytest.mark.anyio
+async def test_a_disconnect_mid_stream_does_not_kill_the_handler(tmp_path: Path) -> None:
+    """The bug, seen live in the e2e server log.
+
+    ``WebSocketDisconnect`` *is* an ``Exception``, so the broad handler swallowed
+    the disconnect and then sent an error frame down the dead socket — and
+    starlette answers that with ``RuntimeError: Cannot call "send" once a close
+    message has been sent``, which escaped ``except WebSocketDisconnect`` and
+    took the whole handler down with it.
+    """
+    from backend.features.chat.router import build_chat_router
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    router = build_chat_router(Settings(_vault_path=vault), fake_runner)
+    ws_chat = router.routes[0].endpoint
+    socket = _DroppingSocket()
+
+    await ws_chat(socket)  # must return cleanly, not raise
+
+    assert [frame["type"] for frame in socket.sent] == ["delta"]
+    assert not any(frame["type"] == "error" for frame in socket.sent), (
+        "an error frame must never be sent to a socket already known to be closed"
+    )

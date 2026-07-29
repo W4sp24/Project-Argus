@@ -8,6 +8,7 @@ produces nothing.
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from collections.abc import Callable
@@ -21,6 +22,8 @@ from backend.connectors import gcal
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
 from backend.vault.tasks import TaskItem, bucketed_tasks, parse_task_line, refresh_cache
+
+logger = logging.getLogger(__name__)
 
 EXAM_RE = re.compile(r"\b(exam|quiz|midterm|final)\b", re.IGNORECASE)
 MAX_WEAK_TOPICS = 5
@@ -126,23 +129,46 @@ def render_briefing(data: BriefingData) -> str:
     return f"Briefing for {data.date}\n\n" + "\n\n".join(parts)
 
 
-def agent_composer(data: BriefingData) -> str:
-    """The production composer: one tool-less opus pass over the day's facts."""
-    import asyncio
-
-    from backend.agent.generate import agent_generate
-
-    prompt = (
+def _composer_prompt(data: BriefingData) -> str:
+    return (
         "You are Argus writing the user's morning briefing for their daily note.\n"
         "Rewrite the facts below as a short, warm, scannable markdown briefing "
         "(bold section labels, bullet lists, no H1/H2 headings). Do not invent "
         "events or tasks; keep every date exactly as given.\n\n"
         f"FACTS:\n{render_briefing(data)}\n\nDATA (JSON):\n{data.model_dump_json(indent=1)}"
     )
-    text = asyncio.run(agent_generate(prompt, feature="briefing")).strip()
-    if not text:
-        raise RuntimeError("composer returned empty text")
-    return text
+
+
+def make_agent_composer(settings: Settings) -> Composer:
+    """The production composer, bound to this install's model registry.
+
+    A factory rather than a plain function because :data:`Composer` takes only
+    the briefing data, leaving nowhere to pass ``settings`` — and without
+    ``settings`` :func:`~backend.agent.generate.agent_generate` never consults
+    the registry at all. That is what used to pin the 07:00 job to the Claude
+    Code CLI: on a machine set up entirely for Ollama it raised, the caller
+    swallowed it, and the user got the deterministic template every morning
+    with no error and no usage row.
+    """
+
+    def compose(data: BriefingData) -> str:
+        import asyncio
+
+        from backend.agent.generate import agent_generate
+
+        text = asyncio.run(
+            agent_generate(
+                _composer_prompt(data),
+                feature="briefing",
+                db_path=settings.db_path,
+                settings=settings,
+            )
+        ).strip()
+        if not text:
+            raise RuntimeError("composer returned empty text")
+        return text
+
+    return compose
 
 
 def compose_briefing(
@@ -157,14 +183,26 @@ def compose_briefing(
     if composer is not None:
         from backend.telemetry.audit import log_prompt_conn
 
-        yesterday_note = f"10-Daily/{(resolved_today - timedelta(days=1)).isoformat()}.md"
-        queue_paths = [
-            path.relative_to(settings.vault_path).as_posix()
-            for path in settings.vault_path.glob("15-Courses/*/study/review-queue.md")
-        ]
-        log_prompt_conn(conn, "briefing", "claude-opus-4-8", [yesterday_note, *queue_paths])
         try:
-            return composer(data)
-        except Exception:  # a dead agent must never kill the 07:00 job
-            pass
+            text = composer(data)
+        except Exception as exc:  # a dead agent must never kill the 07:00 job
+            # ...but it must not be invisible either. This ran unattended at
+            # 07:00 and silently produced the deterministic template forever on
+            # any machine where the agent could not start.
+            logger.warning(
+                "briefing composer failed, falling back to the plain render: %s", exc
+            )
+        else:
+            # Audited only on success, and against the model that actually ran.
+            # Logging before the call claimed opus had read these paths even
+            # when the composer never started.
+            yesterday_note = f"10-Daily/{(resolved_today - timedelta(days=1)).isoformat()}.md"
+            queue_paths = [
+                path.relative_to(settings.vault_path).as_posix()
+                for path in settings.vault_path.glob("15-Courses/*/study/review-queue.md")
+            ]
+            log_prompt_conn(
+                conn, "briefing", settings.default_model, [yesterday_note, *queue_paths]
+            )
+            return text
     return render_briefing(data)

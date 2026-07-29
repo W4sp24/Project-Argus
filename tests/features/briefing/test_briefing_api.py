@@ -14,6 +14,20 @@ from backend.vault.writer import write_briefing
 TODAY = date.today().isoformat()
 
 
+def _briefing_data():
+    from backend.features.briefing.service import BriefingData
+
+    return BriefingData(
+        date=TODAY,
+        events=[],
+        due_today=[],
+        overdue=[],
+        yesterday_unfinished=[],
+        exam_countdowns=[],
+        weak_topics=[],
+    )
+
+
 def _git_log(vault: Path) -> str:
     return subprocess.run(
         ["git", "log", "--oneline"], cwd=vault, capture_output=True, text=True, check=False
@@ -99,9 +113,47 @@ def test_build_scheduler_registers_jobs_without_starting() -> None:
 
 
 def test_production_scheduler_composes_with_the_agent() -> None:
-    from backend.features.briefing.service import agent_composer
     from backend.main import _production_scheduler
 
     scheduler = _production_scheduler(Settings(_vault_path=Path("unused")))
     job = scheduler.get_job("morning-briefing")
-    assert job.args[1] is agent_composer, "07:00 briefing must use opus prose, not the fallback"
+    composer = job.args[1]
+    assert composer is not None, "07:00 briefing must use agent prose, not the fallback"
+    assert callable(composer)
+
+
+def test_the_scheduled_briefing_runs_on_the_users_chosen_model(vault: Path, monkeypatch) -> None:
+    """The 07:00 job must not be pinned to Claude Code.
+
+    It used to call ``agent_generate`` with no settings at all, so on a machine
+    set up entirely for Ollama the composer raised, ``compose_briefing``
+    swallowed it, and the user silently got the deterministic template forever.
+    """
+    from backend.core.model_registry import save_model_prefs, save_user_models
+    from backend.features.briefing.service import make_agent_composer
+    from backend.main import _production_scheduler
+
+    settings = Settings(_vault_path=vault)
+    save_user_models(
+        settings.models_file,
+        [{"name": "llama3.2:3b", "provider": "openai-compat", "endpoint": "http://localhost:11434/v1"}],
+    )
+    save_model_prefs(settings.model_prefs_file, {"default": "llama3.2:3b"})
+
+    seen: dict[str, object] = {}
+
+    async def fake_generate(prompt, **kwargs):
+        seen.update(kwargs)
+        return "Good morning."
+
+    monkeypatch.setattr("backend.agent.generate.agent_generate", fake_generate)
+
+    composer = make_agent_composer(settings)
+    assert composer(_briefing_data()) == "Good morning."
+    assert seen["settings"] is settings, "without settings the registry is never consulted"
+    assert seen["db_path"] == settings.db_path, "usage rows must attribute to this install"
+    assert seen["feature"] == "briefing"
+
+    # And the scheduled job uses that same bound composer, not a bare function.
+    scheduler = _production_scheduler(settings)
+    assert scheduler.get_job("morning-briefing").args[1] is not None

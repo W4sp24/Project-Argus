@@ -35,7 +35,15 @@ from backend.agent.adapters import (
     entry_is_local,
     probe_tool_calling,
 )
-from backend.agent.credentials import CredentialError, delete_key, has_key, key_ref_for, store_key
+from backend.agent.credentials import (
+    KEY_ABSENT,
+    KEY_PRESENT,
+    CredentialError,
+    delete_key,
+    key_ref_for,
+    key_state,
+    store_key,
+)
 from backend.agent.hardware import HardwareProfile, detect, ollama_base_url, ollama_models_dir
 from backend.core.config import Settings
 from backend.core.model_registry import (
@@ -69,6 +77,10 @@ class ModelInfo(BaseModel):
     builtin: bool = False
     local: bool = False
     has_key: bool = False
+    #: "present" | "absent" | "unknown". ``has_key`` alone could not say
+    #: "the keyring is unreadable", so a transient Credential Locker failure
+    #: looked exactly like a key the user had never saved.
+    key_state: str = KEY_ABSENT
 
 
 class AddModelRequest(BaseModel):
@@ -213,21 +225,25 @@ def build_models_router(
     probe = prober or _default_prober
     pull = puller or _default_puller
 
+    def _model_info(entry: dict[str, Any]) -> ModelInfo:
+        # One keyring read per entry, reused for both fields — the OS keyring is
+        # slow enough that asking twice per model shows up on /system.
+        state = key_state(entry.get("key_ref"))
+        return ModelInfo(
+            name=entry["name"],
+            provider=entry["provider"],
+            endpoint=entry.get("endpoint"),
+            key_ref=entry.get("key_ref"),
+            model_id=entry.get("model_id"),
+            default=entry.get("default", False),
+            builtin=entry["provider"] == PROVIDER_CLAUDE_CLI and entry.get("endpoint") is None,
+            local=entry_is_local(entry),
+            has_key=state == KEY_PRESENT,
+            key_state=state,
+        )
+
     def _registry() -> list[ModelInfo]:
-        return [
-            ModelInfo(
-                name=entry["name"],
-                provider=entry["provider"],
-                endpoint=entry.get("endpoint"),
-                key_ref=entry.get("key_ref"),
-                model_id=entry.get("model_id"),
-                default=entry.get("default", False),
-                builtin=entry["provider"] == PROVIDER_CLAUDE_CLI and entry.get("endpoint") is None,
-                local=entry_is_local(entry),
-                has_key=has_key(entry.get("key_ref")),
-            )
-            for entry in settings.models
-        ]
+        return [_model_info(entry) for entry in settings.models]
 
     @router.get("/models", response_model=list[ModelInfo])
     def list_models() -> list[ModelInfo]:
@@ -344,17 +360,28 @@ def build_models_router(
 
         # The key is stored only once the model is known to work, so a failed
         # registration leaves nothing behind in the keyring.
+        #
+        # Registry first, keyring second — deliberately. A crash between the two
+        # then leaves a visible model whose key can be re-entered, rather than a
+        # secret in the OS keyring that nothing points at and nobody can find.
+        # The explicit rollback below keeps the "failed registration leaves no
+        # key" promise for the one failure we can actually catch.
         if request.api_key:
-            ref = key_ref_for(name)
-            try:
-                store_key(ref, request.api_key)
-            except CredentialError as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-            entry["key_ref"] = ref
+            entry["key_ref"] = key_ref_for(name)
 
         user_models = load_user_models(settings.models_file)
         user_models.append({k: v for k, v in entry.items() if v is not None})
         save_user_models(settings.models_file, user_models)
+
+        if request.api_key:
+            try:
+                store_key(entry["key_ref"], request.api_key)
+            except CredentialError as exc:
+                save_user_models(
+                    settings.models_file,
+                    [m for m in load_user_models(settings.models_file) if m.get("name") != name],
+                )
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
         return next(model for model in _registry() if model.name == name)
 
     @router.post("/models/default", response_model=ModelInfo)
@@ -388,7 +415,7 @@ def build_models_router(
             try:
                 async for event in pull(request.name):
                     yield _ndjson({"type": "progress", **event})
-                _register_pulled(request.name)
+                entry = _register_pulled(request.name)
             except AgentError as exc:
                 yield _ndjson({"type": "error", "detail": str(exc)})
                 return
@@ -403,23 +430,58 @@ def build_models_router(
                     }
                 )
                 return
+
+            # Measure tool-calling rather than trusting the catalog's claim.
+            # The catalog's ``tool_calling`` is a hand-maintained literal that
+            # defaults to True and is never set False, while every *hand-added*
+            # model is gated on a live probe — the inverse of this module's own
+            # stated policy. A wrong claim surfaces as a first question that
+            # comes back with no citations, which is exactly what the probe
+            # exists to prevent.
+            yield _ndjson({"type": "progress", "status": "checking tool support"})
+            try:
+                result = await probe(entry, None)
+            except Exception as exc:  # noqa: BLE001 - a failed probe is not a failed download
+                yield _ndjson(
+                    {"type": "verified", "tool_calling": None, "detail": f"could not check: {exc}"}
+                )
+            else:
+                _record_tool_calling(request.name, result.ok)
+                yield _ndjson(
+                    {
+                        "type": "verified",
+                        "tool_calling": result.ok,
+                        # Registered either way: the user has already paid for
+                        # the download, so flag it rather than discard it.
+                        "detail": result.detail,
+                    }
+                )
             yield _ndjson({"type": "done", "name": request.name})
 
         return StreamingResponse(stream(), media_type="application/x-ndjson")
 
-    def _register_pulled(name: str) -> None:
+    def _register_pulled(name: str) -> dict[str, Any]:
         """Add a freshly pulled Ollama model to the registry, ready to use."""
+        entry = {
+            "name": name,
+            "provider": PROVIDER_OPENAI_COMPAT,
+            "endpoint": f"{ollama_base_url()}/v1",
+        }
         user_models = load_user_models(settings.models_file)
-        if any(entry.get("name") == name for entry in user_models):
-            return
-        user_models.append(
-            {
-                "name": name,
-                "provider": PROVIDER_OPENAI_COMPAT,
-                "endpoint": f"{ollama_base_url()}/v1",
-            }
-        )
+        if any(existing.get("name") == name for existing in user_models):
+            return entry
+        user_models.append(dict(entry))
         save_user_models(settings.models_file, user_models)
+        return entry
+
+    def _record_tool_calling(name: str, ok: bool) -> None:
+        """Persist the *measured* tool-calling verdict against the entry."""
+        user_models = load_user_models(settings.models_file)
+        for entry in user_models:
+            if entry.get("name") == name:
+                entry["tool_calling"] = bool(ok)
+                save_user_models(settings.models_file, user_models)
+                return
 
     @router.delete("/models/{name}")
     def delete_model(name: str) -> dict[str, str]:
@@ -429,11 +491,13 @@ def build_models_router(
             raise HTTPException(status_code=404, detail=f"no model {name}")
         if model.builtin:
             raise HTTPException(status_code=400, detail="built-in models cannot be removed")
+        # Keyring first, registry second — the mirror of add_model. Leaving an
+        # orphaned secret behind would outlive the thing it belonged to, and a
+        # crash between the two is only recoverable in this order: the model is
+        # still listed, so the user can retry the delete.
+        delete_key(model.key_ref)
         remaining = [m for m in load_user_models(settings.models_file) if m.get("name") != name]
         save_user_models(settings.models_file, remaining)
-        # Leaving an orphaned secret behind would outlive the thing it
-        # belonged to, so the keyring entry goes with the model.
-        delete_key(model.key_ref)
         prefs = load_model_prefs(settings.model_prefs_file)
         if prefs.get("default") == name:
             prefs.pop("default", None)

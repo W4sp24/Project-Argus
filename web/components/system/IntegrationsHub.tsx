@@ -146,7 +146,7 @@ export default function IntegrationsHub() {
     const answer = await confirm({
       label: `Remove ${server.name}`,
       message: `Remove the MCP server "${server.name}"?`,
-      detail: server.has_key ? "Its stored token is deleted with it." : undefined,
+      detail: server.key_state === "absent" ? undefined : "Its stored token is deleted with it.",
       confirmLabel: "REMOVE",
       tone: "danger",
     });
@@ -209,7 +209,10 @@ export default function IntegrationsHub() {
                 }
                 chips={[
                   ...server.tools,
-                  ...(server.has_key ? ["token in keyring"] : []),
+                  // "unknown" earns its own chip: a silent absence reads as
+                  // "your token is gone" when the keyring merely would not open.
+                  ...(server.key_state === "present" ? ["token in keyring"] : []),
+                  ...(server.key_state === "unknown" ? ["keyring unreadable"] : []),
                 ]}
                 actions={
                   <Button variant="quiet" onClick={() => void removeServer(server)}>
