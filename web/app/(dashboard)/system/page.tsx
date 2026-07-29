@@ -7,6 +7,7 @@ import IntegrationsHub from "@/components/system/IntegrationsHub";
 import LocalModelBrowser from "@/components/system/LocalModelBrowser";
 import ModelsPanel from "@/components/system/ModelsPanel";
 import SetupGuide from "@/components/system/SetupGuide";
+import UpdatesPanel from "@/components/system/UpdatesPanel";
 
 /** System mode (§12) — setup guide, health, integrations, usage, models.
  *
@@ -33,6 +34,8 @@ export default function SystemPage() {
             <LocalModelBrowser />
           </div>
           <div className="flex min-w-0 flex-col gap-4">
+            {/* Renders nothing in the browser build (no installer to update). */}
+            <UpdatesPanel />
             <DisplayPanel />
             <TokenUsage />
           </div>

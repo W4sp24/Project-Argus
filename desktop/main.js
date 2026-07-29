@@ -454,6 +454,7 @@ function registerIpc() {
 
   ipcMain.handle("doctor:run", () => runBackendCommand(["--doctor"]));
 
+  ipcMain.on("update:check", () => updater?.check());
   ipcMain.on("update:download", () => updater?.download());
   ipcMain.on("update:install", () => updater?.install());
 }
