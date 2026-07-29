@@ -19,6 +19,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fails in seconds instead of after a ~30 minute build. Release
+      # immutability freezes a release's assets the moment it is published, so
+      # an already-published tag can never have the installer attached to it --
+      # electron-builder only finds that out at upload time, right at the end.
+      # That is exactly how v0.2.0 shipped empty. A published tag is
+      # unrecoverable by design; the only way forward is a new version.
+      - name: Refuse to build over an already-published release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          state=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || echo absent)
+          case "$state" in
+            absent) echo "no release for $GITHUB_REF_NAME yet - a draft will be created" ;;
+            true)   echo "reusing the existing draft for $GITHUB_REF_NAME" ;;
+            *)      echo "::error title=release::$GITHUB_REF_NAME is already published, and an immutable release can never accept new assets. Tag a new version instead."
+                    exit 1 ;;
+          esac
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -125,14 +146,24 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '[.assets[].name] | join(", ")')
-          echo "attached: $assets"
-          for required in ".exe" "latest.yml"; do
-            case "$assets" in
-              *"$required"*) ;;
-              *) echo "::error title=release::no $required asset on $GITHUB_REF_NAME - refusing to publish"; exit 1 ;;
-            esac
-          done
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' > assets.txt
+          echo "attached:"; sed 's/^/  /' assets.txt
+
+          # Matched on a real suffix, not a substring: the blockmap is named
+          # "Argus-x64.exe.blockmap", so a `case *".exe"*` test passes even when
+          # the installer itself failed to upload -- publishing a release whose
+          # only real content is a delta map for a file that isn't there.
+          grep -qE '\.exe$' assets.txt || {
+            echo "::error title=release::no installer (*.exe) on $GITHUB_REF_NAME - refusing to publish"
+            exit 1
+          }
+          # Without latest.yml electron-updater cannot see the release at all,
+          # so every existing install stays silently on its current version.
+          grep -qx 'latest.yml' assets.txt || {
+            echo "::error title=release::no latest.yml on $GITHUB_REF_NAME - installed apps could not discover this update - refusing to publish"
+            exit 1
+          }
+
           gh release edit "$GITHUB_REF_NAME" --draft=false
           echo "published $GITHUB_REF_NAME"
 
