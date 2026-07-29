@@ -62,4 +62,11 @@ publish:
   - provider: github
     owner: W4sp24
     repo: Project-Argus
-    releaseType: release
+    # draft, not release: this repo has GitHub's release immutability enabled,
+    # which freezes a release's assets the moment it is published. Publishing
+    # first and uploading second -- what `releaseType: release` does -- means
+    # every asset upload comes back 422 "Cannot upload assets to an immutable
+    # release", which is how v0.2.0 shipped as an empty release. GitHub's
+    # prescribed order is draft -> attach assets -> publish, so the workflow
+    # un-drafts this once the installer and blockmap are both uploaded.
+    releaseType: draft
