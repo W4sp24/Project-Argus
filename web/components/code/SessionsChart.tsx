@@ -38,7 +38,7 @@ export default function SessionsChart() {
         <p className="text-sm text-ink-faint">Loading…</p>
       ) : (
         <>
-          <p className="font-mono text-[11px] text-ink-muted">{total} sessions · last 14 days</p>
+          <p className="font-mono text-label text-ink-muted">{total} sessions · last 14 days</p>
           <div className="mt-2">
             <MiniLineChart values={counts} labels={[shortDate(days[0]), shortDate(days[days.length - 1])]} />
           </div>

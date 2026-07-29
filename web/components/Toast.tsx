@@ -10,9 +10,14 @@ import {
   type ReactNode,
 } from "react";
 
+export type ToastTone = "ok" | "error";
+
 interface ToastState {
-  /** Show a single terminal-line toast. Replaces any visible toast (never stacks). */
-  show: (message: string) => void;
+  /**
+   * Show a terminal-line toast. Up to three stack; older ones drop off.
+   * `tone: "error"` colors it, announces it assertively, and holds it longer.
+   */
+  show: (message: string, options?: { tone?: ToastTone }) => void;
 }
 
 const ToastContext = createContext<ToastState | null>(null);
@@ -23,38 +28,69 @@ export function useToast(): ToastState {
   return state;
 }
 
-const DISMISS_MS = 3200;
+/** Failures get read time; confirmations do not need it. */
+const DISMISS_MS: Record<ToastTone, number> = { ok: 3200, error: 6000 };
+const MAX_VISIBLE = 3;
+
+interface Toast {
+  id: number;
+  message: string;
+  tone: ToastTone;
+}
 
 /**
- * Single fixed bottom-left terminal line `> message` (§5).
- * One at a time — a new message replaces the current one and restarts the
- * dismiss timer. The live region is always mounted so screen readers announce
- * message swaps politely.
+ * Fixed bottom-left terminal lines `> message` (§5).
+ *
+ * Two things changed from the original single-line version, both because
+ * failures were getting lost: toasts stack instead of replacing each other (a
+ * save failure could be erased by an unrelated success before it was read),
+ * and errors are visually and assistively distinct from confirmations (both
+ * used to render identically and announce politely).
  */
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toast, setToast] = useState<{ message: string; id: number } | null>(null);
-  const timer = useRef<number | undefined>(undefined);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const nextId = useRef(0);
+  const timers = useRef<number[]>([]);
 
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  useEffect(() => {
+    const pending = timers.current;
+    return () => pending.forEach((id) => window.clearTimeout(id));
+  }, []);
 
-  const show = useCallback((message: string) => {
-    window.clearTimeout(timer.current);
-    setToast((prev) => ({ message, id: (prev?.id ?? 0) + 1 }));
-    timer.current = window.setTimeout(() => setToast(null), DISMISS_MS);
+  const show = useCallback((message: string, options?: { tone?: ToastTone }) => {
+    const tone = options?.tone ?? "ok";
+    const id = (nextId.current += 1);
+    setToasts((prev) => [...prev, { id, message, tone }].slice(-MAX_VISIBLE));
+    const timer = window.setTimeout(() => {
+      setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, DISMISS_MS[tone]);
+    timers.current.push(timer);
   }, []);
 
   return (
     <ToastContext.Provider value={{ show }}>
       {children}
-      <div aria-live="polite" className="pointer-events-none fixed bottom-4 left-4 z-50">
-        {toast && (
+
+      {/* One always-mounted live region holding the visible stack. Mirroring
+          the text into a second sr-only region would announce more reliably,
+          but it puts every message in the DOM twice — which is a real cost to
+          anything reading the page, tests included. Errors carry role="alert"
+          instead, which screen readers treat as assertive. */}
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed bottom-4 left-4 z-50 flex flex-col gap-2"
+      >
+        {toasts.map((toast) => (
           <p
             key={toast.id}
-            className="animate-toast border border-line bg-panel px-3 py-2 font-mono text-xs text-ink"
+            role={toast.tone === "error" ? "alert" : "status"}
+            className={`animate-toast max-w-[26rem] border bg-panel px-3 py-2 font-mono text-label ${
+              toast.tone === "error" ? "border-danger text-danger" : "border-line text-ink"
+            }`}
           >
             {`> ${toast.message}`}
           </p>
-        )}
+        ))}
       </div>
     </ToastContext.Provider>
   );

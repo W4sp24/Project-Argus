@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/Toast";
+import Button from "@/components/ui/Button";
 import { useUi } from "@/lib/ui";
 
 const DEFAULT_SECONDS = 25 * 60;
@@ -71,24 +72,26 @@ export default function FocusTimer() {
   const engaged = running || remaining !== DEFAULT_SECONDS;
 
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
+    // Always mounted so `registerFocusStart` is live at every width — the
+    // palette's "start focus session" and the top bar's overflow menu both
+    // depend on it, and below md this component used not to exist at all, so
+    // both silently did nothing. Hidden until a session is actually engaged.
+    <div ref={rootRef} className={`relative ${engaged ? "" : "hidden md:block"}`}>
+      <Button
+        variant="quiet"
         aria-label="Focus timer"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className={`border border-line px-2 py-1 uppercase tracking-[0.12em] transition-colors hover:border-lineHi ${
-          engaged ? "text-[var(--ac)]" : "hover:text-ink-muted"
-        }`}
+        className={engaged ? "text-[var(--ac)] tabular-nums" : ""}
       >
         ◔ {engaged ? format(remaining) : "FOCUS"}
-      </button>
+      </Button>
 
       {open && (
         <div className="animate-palette absolute right-0 top-full z-40 mt-2 w-52 border border-line bg-panel p-4">
           <div className="mb-3 flex items-center gap-2">
             <p className="eyebrow">▍FOCUS</p>
-            <span className="border border-[#3d2f66] px-1 py-px font-mono text-[8px] uppercase tracking-[0.16em] text-[#8b7bc0]">
+            <span className="border border-[#3d2f66] px-1 py-px font-mono text-micro uppercase tracking-[0.16em] text-[#8b7bc0]">
               PREVIEW
             </span>
           </div>
@@ -99,7 +102,7 @@ export default function FocusTimer() {
             <button
               type="button"
               onClick={() => setRunning((value) => !value)}
-              className="flex-1 border border-line bg-[var(--ac-bg)] px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi"
+              className="flex-1 border border-line bg-[var(--ac-bg)] px-2 py-1.5 font-mono text-meta uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi"
             >
               {running ? "PAUSE" : "START"}
             </button>
@@ -109,12 +112,12 @@ export default function FocusTimer() {
                 setRunning(false);
                 setRemaining(DEFAULT_SECONDS);
               }}
-              className="flex-1 border border-line px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint transition-colors hover:border-lineHi hover:text-ink-muted"
+              className="flex-1 border border-line px-2 py-1.5 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint transition-colors hover:border-lineHi hover:text-ink-muted"
             >
               RESET
             </button>
           </div>
-          <p className="mt-3 font-mono text-[9.5px] leading-relaxed text-ink-faint">
+          <p className="mt-3 font-mono text-micro leading-relaxed text-ink-faint">
             local only — sessions aren&apos;t logged yet
           </p>
         </div>

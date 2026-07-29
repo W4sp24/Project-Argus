@@ -69,7 +69,7 @@ export default function Heatmap({ className = "" }: { className?: string }) {
       label="ACTIVITY.HEATMAP"
       className={className}
       headerRight={
-        <p className="font-mono text-[11px] text-ink-faint">
+        <p className="font-mono text-label text-ink-faint">
           {hover
             ? `${hover.date} · ${hover.tasks}t ${hover.notes}n ${hover.study}s ${hover.captures}c`
             : "hover a day"}
@@ -81,7 +81,7 @@ export default function Heatmap({ className = "" }: { className?: string }) {
           <button
             key={option}
             onClick={() => setMetric(option)}
-            className={`border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+            className={`border border-line px-2 py-1 font-mono text-meta uppercase tracking-wider transition-colors ${
               metric === option
                 ? "bg-[var(--ac-bg)] text-[var(--ac)]"
                 : "text-ink-faint hover:border-lineHi hover:text-ink-muted"
@@ -127,25 +127,25 @@ export default function Heatmap({ className = "" }: { className?: string }) {
 
         <div className="flex shrink-0 flex-col gap-3 border-line lg:w-44 lg:border-l lg:pl-5">
           <div>
-            <p className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-faint">streak</p>
+            <p className="font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">streak</p>
             <p className="font-mono text-lg font-semibold text-ink-bright">{streak}d</p>
           </div>
           <div>
-            <p className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-faint">this week</p>
+            <p className="font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">this week</p>
             <p className="font-mono text-lg font-semibold text-ink-bright">{weekTotal}</p>
           </div>
           <div>
-            <p className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-faint">best day</p>
-            <p className="font-mono text-[11px] text-ink-muted">
+            <p className="font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">best day</p>
+            <p className="font-mono text-label text-ink-muted">
               {best ? `${best.date} · ${countFor(best, metric)}` : "—"}
             </p>
           </div>
           <div className="flex items-center gap-1 pt-1">
-            <span className="font-mono text-[9.5px] text-ink-faint">less</span>
+            <span className="font-mono text-micro text-ink-faint">less</span>
             {RAMP.map((color, i) => (
               <span key={i} className="h-2.5 w-2.5" style={{ background: color }} />
             ))}
-            <span className="font-mono text-[9.5px] text-ink-faint">more</span>
+            <span className="font-mono text-micro text-ink-faint">more</span>
           </div>
         </div>
       </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
+import Button from "@/components/ui/Button";
 import { fetcher } from "@/lib/api";
 import { useChat } from "@/lib/chat";
 import { useSelectedModel } from "@/lib/models";
@@ -28,7 +29,7 @@ function renderWithCitations(text: string, vaultName: string) {
       <a
         key={i}
         href={`obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(path)}`}
-        className="animate-msg-in mx-0.5 inline-block border border-line bg-[var(--ac-bg)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--ac)] transition-colors hover:border-lineHi"
+        className="animate-msg-in mx-0.5 inline-block border border-line bg-[var(--ac-bg)] px-1.5 py-0.5 font-mono text-label text-[var(--ac)] transition-colors hover:border-lineHi"
         title={`Open ${path} in Obsidian`}
       >
         ⌗ {path.split("/").pop()}
@@ -51,7 +52,7 @@ function Orb({ size = "h-6 w-6" }: { size?: string }) {
 
 function Pending() {
   return (
-    <span className="font-mono text-[12px] text-ink-muted" aria-label="Argus is thinking">
+    <span className="font-mono text-label text-ink-muted" aria-label="Argus is thinking">
       processing_query
       <span className="animate-blink text-[var(--ac)]">▊</span>
     </span>
@@ -99,7 +100,7 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
                     key={example}
                     type="button"
                     onClick={() => send(example)}
-                    className="border border-line bg-panel px-3.5 py-2 text-[13px] text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+                    className="border border-line bg-panel px-3.5 py-2 text-body text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
                   >
                     {example}
                   </button>
@@ -114,7 +115,7 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
             <div key={i} className="animate-msg-in flex justify-end">
               <div
                 className={`max-w-[85%] border border-lineHi bg-[var(--ac-bg)] px-3.5 py-2.5 leading-relaxed text-ink ${
-                  compact ? "text-[13px]" : "text-[14.5px]"
+                  compact ? "text-body" : "text-lead"
                 }`}
               >
                 <span className="whitespace-pre-wrap">{message.text}</span>
@@ -122,7 +123,7 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
             </div>
           ) : compact ? (
             <div key={i} className="animate-msg-in flex justify-start">
-              <div className="max-w-[85%] border border-line bg-void px-3.5 py-2.5 text-[13px] leading-relaxed text-ink-muted">
+              <div className="max-w-[85%] border border-line bg-void px-3.5 py-2.5 text-body leading-relaxed text-ink-muted">
                 {message.pending ? (
                   <Pending />
                 ) : (
@@ -136,13 +137,13 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
             <div key={i} className="animate-msg-in flex gap-3">
               <Orb />
               <div className="min-w-0 flex-1">
-                <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
+                <p className="mb-1 font-mono text-meta uppercase tracking-[0.14em] text-ink-faint">
                   ARGUS · {model}
                 </p>
                 {message.pending ? (
                   <Pending />
                 ) : (
-                  <p className="whitespace-pre-wrap font-body text-[14.5px] leading-[1.7] text-ink">
+                  <p className="whitespace-pre-wrap font-body text-lead leading-[1.7] text-ink">
                     {renderWithCitations(message.text, vaultName)}
                   </p>
                 )}
@@ -170,17 +171,20 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             placeholder={busy ? "Argus is answering…" : "Ask your vault"}
+            aria-label="Ask your vault"
             disabled={busy}
-            className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-sm placeholder:text-ink-faint focus:border-lineHi focus:outline-none disabled:opacity-50"
+            className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi disabled:opacity-50"
           />
-          <button
+          <Button
             type="submit"
+            size="md"
+            variant="primary"
             aria-label="Send"
             disabled={busy || !input.trim()}
-            className="shrink-0 border border-line bg-[var(--ac-bg)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
+            className="shrink-0"
           >
             SEND
-          </button>
+          </Button>
         </div>
       </form>
     </div>

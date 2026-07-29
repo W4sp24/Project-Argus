@@ -51,7 +51,7 @@ export default function MiniLineChart({
         />
       </svg>
       {labels && labels.length > 0 && (
-        <div className="mt-1 flex justify-between font-mono text-[9.5px] text-ink-faint">
+        <div className="mt-1 flex justify-between font-mono text-micro text-ink-faint">
           {labels.map((label, i) => (
             <span key={i}>{label}</span>
           ))}

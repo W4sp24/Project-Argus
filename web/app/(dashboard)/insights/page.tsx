@@ -124,7 +124,7 @@ export default function InsightsPage() {
               { label: "FILES CHANGED · 14D", value: filesChanged },
             ].map((stat) => (
               <Panel key={stat.label} className="flex flex-col justify-center">
-                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
+                <p className="font-mono text-meta uppercase tracking-[0.18em] text-ink-faint">
                   {stat.label}
                 </p>
                 <p className="mt-1 font-body text-3xl font-semibold text-ink">{stat.value}</p>
@@ -145,7 +145,7 @@ export default function InsightsPage() {
 
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-1">
             <Panel className="flex flex-col justify-center">
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
+              <p className="font-mono text-meta uppercase tracking-[0.18em] text-ink-faint">
                 STUDY STREAK
               </p>
               <p className="mt-1 font-body text-3xl font-semibold text-ink">
@@ -154,7 +154,7 @@ export default function InsightsPage() {
               </p>
             </Panel>
             <Panel className="flex flex-col justify-center">
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-faint">
+              <p className="font-mono text-meta uppercase tracking-[0.18em] text-ink-faint">
                 OVERDUE OPEN
               </p>
               <p className="mt-1 font-body text-3xl font-semibold text-ink">
@@ -175,7 +175,7 @@ export default function InsightsPage() {
             </p>
           ) : (
             <>
-              <div className="mb-2 flex gap-4 font-mono text-[10px] uppercase tracking-[0.18em]">
+              <div className="mb-2 flex gap-4 font-mono text-meta uppercase tracking-[0.18em]">
                 <span className="flex items-center gap-1.5 text-ink-muted">
                   <span className="h-2 w-2 rounded-sm" style={{ background: SERIES.violet }} />
                   events
@@ -209,7 +209,7 @@ export default function InsightsPage() {
             </p>
           ) : (
             <>
-              <div className="mb-2 flex flex-wrap gap-4 font-mono text-[10px] uppercase tracking-[0.18em]">
+              <div className="mb-2 flex flex-wrap gap-4 font-mono text-meta uppercase tracking-[0.18em]">
                 {(insights?.study.courses ?? []).map((course, i) => (
                   <span key={course.course} className="flex items-center gap-1.5 text-ink-muted">
                     <span

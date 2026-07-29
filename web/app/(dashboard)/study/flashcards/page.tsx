@@ -9,7 +9,7 @@ export default function FlashcardsPage() {
     <>
       <StudyStatusLine title="Flashcards" />
       <StudyTabs />
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid gap-4 lg:grid-cols-shell">
         <Flashcards />
       </div>
     </>

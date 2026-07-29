@@ -1,8 +1,11 @@
 """Argus command-line interface.
 
-Currently one command: ``argus init <path>`` — create a new vault from the
-bundled template, git-init it (groundwork for invariant I2: the writer commits
-the vault before every apply), and record ``VAULT_PATH`` in ``.env``.
+``argus init <path>`` creates a new vault from the bundled template, git-inits
+it (groundwork for invariant I2: the writer commits the vault before every
+apply), and records ``VAULT_PATH`` in ``.env``. ``reindex``/``watch`` maintain
+the RAG index, ``connect`` stores connector credentials, ``doctor`` checks the
+install, ``web`` serves the dashboard, and ``mcp-server`` exposes the vault
+read-only to an external coding agent.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from backend.config import DEFAULT_ENV_FILE, parse_env_file
+from backend.core.config import DEFAULT_ENV_FILE, parse_env_file
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "vault-template"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -132,9 +135,7 @@ def run_web(port: int, backend_port: int, force_build: bool) -> int:
         [sys.executable, "-m", "uvicorn", "backend.main:app", "--port", str(backend_port)],
         cwd=WEB_DIR.parent,
     )
-    frontend = subprocess.Popen(
-        [npm, "run", "start", "--", "-p", str(port)], cwd=WEB_DIR
-    )
+    frontend = subprocess.Popen([npm, "run", "start", "--", "-p", str(port)], cwd=WEB_DIR)
     print(f"Argus running: http://localhost:{port} (backend :{backend_port}) — Ctrl-C to stop")
     try:
         while backend.poll() is None and frontend.poll() is None:
@@ -182,6 +183,13 @@ def main(argv: list[str] | None = None) -> int:
     web_parser.add_argument("--backend-port", type=int, default=8000)
     web_parser.add_argument("--build", action="store_true", help="force a rebuild first")
 
+    mcp_parser = subparsers.add_parser(
+        "mcp-server", help="expose your vault to a coding agent over MCP (read-only)"
+    )
+    mcp_parser.add_argument(
+        "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -195,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command in ("reindex", "watch"):
-        from backend.config import Settings
+        from backend.core.config import Settings
         from backend.rag.index import VaultIndex
 
         settings = Settings.load(args.env_file)
@@ -217,8 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "doctor":
-        from backend.config import ConfigError, Settings
-        from backend.doctor import run_checks
+        from backend.core.config import ConfigError, Settings
+        from backend.features.system.doctor import run_checks
 
         settings = Settings.load(args.env_file)
         try:
@@ -247,6 +255,27 @@ def main(argv: list[str] | None = None) -> int:
 
             todoist.connect(args.token)
             print("Todoist connected — token stored in the OS keyring.")
+        return 0
+
+    if args.command == "mcp-server":
+        import asyncio
+
+        from backend.agent.mcp_server import serve_stdio
+        from backend.core.config import ConfigError, Settings
+
+        settings = Settings.load(args.env_file)
+        try:
+            _ = settings.vault_path  # raises ConfigError when VAULT_PATH is unset
+        except ConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        # stdout is the MCP transport here, so every human-readable line must
+        # go to stderr or it corrupts the protocol stream.
+        print(f"Argus MCP server on stdio — vault {settings.vault_path}", file=sys.stderr)
+        try:
+            asyncio.run(serve_stdio(settings))
+        except KeyboardInterrupt:
+            return 130
         return 0
 
     if args.command == "web":

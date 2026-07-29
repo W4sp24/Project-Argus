@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import ModelSelect from "@/components/ModelSelect";
+import { EngineTrigger } from "@/components/EnginePicker";
 import ChatPanel from "@/components/chat/ChatPanel";
 import { useSelectedModel } from "@/lib/models";
 
@@ -21,19 +21,19 @@ export default function ChatPage() {
         <button
           type="button"
           onClick={() => router.back()}
-          className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint transition-colors hover:text-ink-bright"
+          className="font-mono text-label uppercase tracking-[0.14em] text-ink-faint transition-colors hover:text-ink-bright"
         >
           ← BACK
         </button>
         <p className="eyebrow">▍ARGUS.CHAT</p>
         <div className="ml-auto">
-          <ModelSelect />
+          <EngineTrigger />
         </div>
       </header>
 
       <ChatPanel variant="full" />
 
-      <p className="border-t border-line pt-2 text-center font-mono text-[10px] tracking-[0.08em] text-ink-faint">
+      <p className="border-t border-line pt-2 text-center font-mono text-meta tracking-[0.08em] text-ink-faint">
         ◈ {model} · local index · 99-Private/ and #no-ai never leave your machine
       </p>
     </div>

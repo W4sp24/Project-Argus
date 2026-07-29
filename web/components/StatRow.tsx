@@ -14,7 +14,7 @@ function Tile({ href, label, value, unit }: StatItem) {
       prefetch={true}
       className="flex min-w-0 flex-col gap-1.5 border border-line bg-panel px-4 py-3 transition-colors hover:border-lineHi"
     >
-      <span className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-faint">{label}</span>
+      <span className="font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">{label}</span>
       <span className="font-mono text-2xl font-semibold text-ink-bright">
         {value}
         {unit && <span className="ml-1 text-sm font-normal text-ink-muted">{unit}</span>}

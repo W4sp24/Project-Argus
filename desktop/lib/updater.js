@@ -44,7 +44,19 @@ function initUpdater({ send, beforeInstall }) {
     send({ type: "error", message: String(error?.message ?? error) });
   });
 
+  /**
+   * Failures still reach the renderer: electron-updater emits `error` before
+   * rejecting, so the catch here only keeps the rejection from going unhandled.
+   *
+   * The unpacked case is the exception -- checkForUpdates() resolves null
+   * without emitting anything, which would leave SYSTEM's CHECK NOW button
+   * looking broken every time it is pressed during development.
+   */
   function check() {
+    if (!autoUpdater.isUpdaterActive()) {
+      send({ type: "error", message: "updates are disabled in an unpackaged build" });
+      return;
+    }
     autoUpdater.checkForUpdates().catch((error) => log.warn("update check failed:", error));
   }
 

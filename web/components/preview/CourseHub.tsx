@@ -69,7 +69,7 @@ export function CourseChat({ code }: { code: string }) {
                 <button
                   key={suggestion}
                   onClick={() => send(suggestion)}
-                  className="border border-line px-3 py-1.5 text-[12.5px] text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+                  className="border border-line px-3 py-1.5 text-label text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
                 >
                   {suggestion}
                 </button>
@@ -81,7 +81,7 @@ export function CourseChat({ code }: { code: string }) {
             {messages.map((message, i) => (
               <div key={i} className={message.role === "user" ? "self-end text-right" : "self-start"}>
                 <div
-                  className={`inline-block max-w-[85%] border px-3 py-2 text-[13.5px] ${
+                  className={`inline-block max-w-[85%] border px-3 py-2 text-body ${
                     message.role === "user" ? "border-lineHi bg-[var(--ac-bg)] text-ink" : "border-line bg-void text-ink"
                   }`}
                 >
@@ -90,7 +90,7 @@ export function CourseChat({ code }: { code: string }) {
                 {message.citations && (
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {message.citations.map((citation) => (
-                      <span key={citation} className="font-mono text-[10px] text-[var(--ac)]">
+                      <span key={citation} className="font-mono text-meta text-[var(--ac)]">
                         {citation}
                       </span>
                     ))}
@@ -100,7 +100,7 @@ export function CourseChat({ code }: { code: string }) {
             ))}
             {pendingReply && (
               <div className="self-start">
-                <div className="inline-block max-w-[85%] border border-line bg-void px-3 py-2 text-[13.5px] text-ink">
+                <div className="inline-block max-w-[85%] border border-line bg-void px-3 py-2 text-body text-ink">
                   {output}
                   {!done && <span className="animate-blink text-[var(--ac)]">▊</span>}
                 </div>
@@ -120,12 +120,12 @@ export function CourseChat({ code }: { code: string }) {
           value={input}
           onChange={(event) => setInput(event.target.value)}
           placeholder={`ask ${code} · grounded in 0 selected sources`}
-          className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-[13px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+          className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
         />
         <button
           type="submit"
           disabled={!input.trim()}
-          className="shrink-0 border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+          className="shrink-0 border border-line px-3 py-2 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
         >
           SEND
         </button>
@@ -160,42 +160,42 @@ export function CourseStudio({ code }: { code: string }) {
       <div className="flex flex-col gap-2">
         <button
           onClick={() => generate("study guide")}
-          className="border border-line px-3 py-2 text-left font-mono text-[11px] uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+          className="border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
         >
           study guide
         </button>
         <button
           onClick={() => generate("flashcard deck")}
-          className="border border-line px-3 py-2 text-left font-mono text-[11px] uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+          className="border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
         >
           flashcard deck
         </button>
         <button
           onClick={() => generate("practice exam", "/study/exam")}
-          className="border border-line px-3 py-2 text-left font-mono text-[11px] uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+          className="border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
         >
           practice exam
         </button>
         <button
           onClick={() => generate("weak topics")}
-          className="border border-line px-3 py-2 text-left font-mono text-[11px] uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+          className="border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
         >
           weak topics
         </button>
       </div>
 
       <div className="mt-4 border-t border-line pt-3">
-        <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">generated</p>
+        <p className="mb-2 font-mono text-meta uppercase tracking-[0.16em] text-ink-faint">generated</p>
         <ul className="space-y-1.5">
           {GENERATED_MOCK.map((item) => (
-            <li key={item.label} className="flex items-center justify-between gap-2 text-[12px]">
+            <li key={item.label} className="flex items-center justify-between gap-2 text-label">
               <span className="min-w-0 truncate text-ink-muted">{item.label}</span>
-              <span className="shrink-0 font-mono text-[10px] text-ink-faint">{item.date}</span>
+              <span className="shrink-0 font-mono text-meta text-ink-faint">{item.date}</span>
             </li>
           ))}
         </ul>
       </div>
-      <p className="mt-3 font-mono text-[10px] text-ink-faint">{`for ${code} · preview only`}</p>
+      <p className="mt-3 font-mono text-meta text-ink-faint">{`for ${code} · preview only`}</p>
     </Panel>
   );
 }

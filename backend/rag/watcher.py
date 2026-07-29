@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from backend.rag.index import VaultIndex
-from backend.rag.paths import is_indexable
+from backend.vault.paths import is_indexable
 
 DEBOUNCE_SECONDS = 2.0
 

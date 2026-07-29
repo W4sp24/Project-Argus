@@ -37,11 +37,13 @@ contextBridge.exposeInMainWorld("argus", {
 
   // --- shell ---
   openExternal: (url) => ipcRenderer.invoke("shell:open", url),
+  pickIcon: () => ipcRenderer.invoke("icon:pick"),
   appVersion: () => ipcRenderer.invoke("app:version"),
 
   // --- events ---
   onBootStage: (cb) => subscribe("boot:stage", cb),
   onUpdate: (cb) => subscribe("update:event", cb),
+  checkForUpdates: () => ipcRenderer.send("update:check"),
   downloadUpdate: () => ipcRenderer.send("update:download"),
   installUpdate: () => ipcRenderer.send("update:install"),
 });

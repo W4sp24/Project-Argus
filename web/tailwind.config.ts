@@ -38,6 +38,35 @@ const config: Config = {
         body: ["var(--font-body)", "sans-serif"],
         mono: ["var(--font-mono)", "monospace"],
       },
+      // Type scale. Under `extend` on purpose: putting `fontSize` directly on
+      // `theme` wipes Tailwind's defaults, and ~80 call sites still use
+      // text-xs/sm/lg/3xl. Every token is rem so the whole UI tracks the root
+      // font-size in globals.css — which is a percentage, so the reader's own
+      // browser/OS font setting finally reaches this app.
+      //
+      // Each token carries a line-height. Before this, 21 elements in the
+      // entire app declared one; arbitrary `text-[Npx]` values inherit
+      // `normal`, which is why dense panels read as a wall.
+      fontSize: {
+        micro: ["0.6875rem", { lineHeight: "1.45" }], // 11px — badges, tags
+        meta: ["0.75rem", { lineHeight: "1.5" }], // 12px — eyebrows, stat labels
+        label: ["0.8125rem", { lineHeight: "1.5" }], // 13px — buttons, chrome
+        body: ["0.9375rem", { lineHeight: "1.6" }], // 15px — list rows, prose
+        lead: ["1.0625rem", { lineHeight: "1.5" }], // 17px — panel titles
+        title: ["1.375rem", { lineHeight: "1.3" }], // 22px — page headings
+        display: ["1.75rem", { lineHeight: "1.2" }], // 28px
+      },
+      spacing: {
+        // Right-hand rail on the two-column page grids. Was `340px` copy-pasted
+        // into 7 page files; rem so it scales with the root size.
+        rail: "21.25rem",
+      },
+      gridTemplateColumns: {
+        // The content + rail split shared by /dashboard, /study, /research,
+        // /code, /system and the two study sub-pages. Defined once here so the
+        // rail width is not seven independent literals that can drift.
+        shell: "minmax(0, 1fr) 21.25rem",
+      },
       keyframes: {
         rise: {
           from: { opacity: "0", transform: "translateY(8px)" },

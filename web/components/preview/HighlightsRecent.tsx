@@ -47,13 +47,14 @@ export default function HighlightsRecent({ onCount }: { onCount: (count: number)
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="paste a highlight…"
-          className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-ink-faint focus:outline-none"
+          aria-label="Add a highlight"
+          className="min-w-0 flex-1 bg-transparent text-body placeholder:text-ink-faint focus:outline-none"
         />
       </form>
       <ul className="divide-y divide-line">
         {highlights.map((h) => (
           <li key={h.id} className="group flex items-start gap-2 py-2">
-            <span className="min-w-0 flex-1 text-[13px] leading-relaxed text-ink-muted">{h.text}</span>
+            <span className="min-w-0 flex-1 text-body leading-relaxed text-ink-muted">{h.text}</span>
             <button
               type="button"
               aria-label="Delete highlight"

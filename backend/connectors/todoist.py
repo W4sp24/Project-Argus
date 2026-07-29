@@ -6,7 +6,7 @@ Setup: Todoist → Settings → Integrations → Developer → API token, then
 
 from __future__ import annotations
 
-from backend.tasks.parser import TaskItem
+from backend.vault.tasks import TaskItem
 
 KEYRING_SERVICE = "argus-todoist"
 KEYRING_USER = "token"
@@ -18,11 +18,24 @@ def _stored_token() -> str | None:
     return keyring.get_password(KEYRING_SERVICE, KEYRING_USER)
 
 
-def configured() -> bool:
+def connection_state() -> str:
+    """"present" | "absent" | "unknown" — see :mod:`backend.agent.credentials`.
+
+    An unreadable keyring is not a missing token; saying so would tell the user
+    to re-run ``argus connect todoist`` with a token they already stored.
+    """
+    from backend.agent.credentials import KEY_ABSENT, KEY_PRESENT, KEY_UNKNOWN
+
     try:
-        return _stored_token() is not None
-    except Exception:
-        return False
+        return KEY_PRESENT if _stored_token() is not None else KEY_ABSENT
+    except Exception:  # noqa: BLE001 - keyring backends raise many types
+        return KEY_UNKNOWN
+
+
+def configured() -> bool:
+    from backend.agent.credentials import KEY_PRESENT
+
+    return connection_state() == KEY_PRESENT
 
 
 def connect(token: str) -> None:
@@ -32,6 +45,16 @@ def connect(token: str) -> None:
     if not token.strip():
         raise ValueError("empty Todoist token")
     keyring.set_password(KEYRING_SERVICE, KEYRING_USER, token.strip())
+
+
+def disconnect() -> None:
+    """Forget the stored token. Best-effort — already-absent is success."""
+    try:
+        import keyring
+
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
+    except Exception:  # noqa: BLE001 - already gone, or the keyring is unusable
+        pass
 
 
 def list_tasks(api=None) -> list[TaskItem]:

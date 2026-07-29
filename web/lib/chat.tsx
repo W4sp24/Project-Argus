@@ -44,7 +44,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const response = await apiFetch("/api/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instruction: instruction || "Plan my day" }),
+        // `/plan` runs on the same model the chat header shows (§7) — the
+        // selector would be misleading if planning quietly ignored it.
+        body: JSON.stringify({
+          instruction: instruction || "Plan my day",
+          model: selectedModel(),
+        }),
       });
       const payload = await response.json();
       const text = response.ok

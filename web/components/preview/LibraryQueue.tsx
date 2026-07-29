@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
+import Button from "@/components/ui/Button";
 import { FLAGS } from "@/lib/flags";
 import { useTypewriter } from "@/lib/useTypewriter";
 
@@ -110,22 +111,20 @@ export default function LibraryQueue({ onCounts }: { onCounts: (counts: LibraryC
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Paper title"
-          className="w-full border border-line bg-sunken px-3 py-2 text-[13px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+          aria-label="Paper title"
+          className="w-full border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi"
         />
         <div className="flex gap-2">
           <input
             value={meta}
             onChange={(e) => setMeta(e.target.value)}
             placeholder="authors · venue"
-            className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-[13px] placeholder:text-ink-faint focus:border-lineHi focus:outline-none"
+            aria-label="Authors and venue"
+            className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi"
           />
-          <button
-            type="submit"
-            disabled={!title.trim()}
-            className="shrink-0 border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
-          >
+          <Button type="submit" size="md" disabled={!title.trim()} className="shrink-0">
             + ADD PAPER
-          </button>
+          </Button>
         </div>
       </form>
 
@@ -134,27 +133,27 @@ export default function LibraryQueue({ onCounts }: { onCounts: (counts: LibraryC
           <li key={paper.id} className="group border border-line p-3 transition-colors hover:border-lineHi">
             <div className="flex items-start gap-2">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[13.5px] text-ink">{paper.title}</p>
+                <p className="truncate text-body text-ink">{paper.title}</p>
                 {paper.authorsVenue && (
-                  <p className="mt-0.5 truncate font-mono text-[10.5px] text-ink-faint">{paper.authorsVenue}</p>
+                  <p className="mt-0.5 truncate font-mono text-meta text-ink-faint">{paper.authorsVenue}</p>
                 )}
               </div>
               <button
                 type="button"
                 onClick={() => cycle(paper.id)}
                 aria-label={`Cycle status, currently ${paper.status}`}
-                className={`shrink-0 border px-1.5 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em] transition-colors ${STATUS_CLASS[paper.status]}`}
+                className={`shrink-0 border px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.12em] transition-colors ${STATUS_CLASS[paper.status]}`}
               >
                 {paper.status}
               </button>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
                 aria-label={`Delete ${paper.title}`}
                 onClick={() => remove(paper.id)}
-                className="hidden shrink-0 font-mono text-xs text-ink-faint hover:text-danger group-hover:inline"
+                className="shrink-0 opacity-0 transition-opacity hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
               >
                 ×
-              </button>
+              </Button>
             </div>
             <div className="mt-2 h-1 w-full bg-sunken">
               <div className="h-1 bg-[var(--ac)] transition-[width]" style={{ width: `${paper.progress}%` }} />
@@ -164,7 +163,9 @@ export default function LibraryQueue({ onCounts }: { onCounts: (counts: LibraryC
         {papers.length === 0 && <p className="text-sm text-ink-faint">Queue is empty.</p>}
       </ul>
 
-      <div
+      {/* A <button>, not a clickable <div> — see IngestPanel. */}
+      <button
+        type="button"
         onDragOver={(event) => {
           event.preventDefault();
           setDragOver(true);
@@ -176,20 +177,26 @@ export default function LibraryQueue({ onCounts }: { onCounts: (counts: LibraryC
           pickFile(event.dataTransfer.files?.[0]);
         }}
         onClick={() => inputRef.current?.click()}
-        className={`mt-4 cursor-pointer border border-dashed px-4 py-4 text-center transition-[border-color,background-color] ${
+        className={`mt-4 w-full cursor-pointer border border-dashed px-4 py-4 text-center transition-[border-color,background-color] ${
           dragOver ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
         }`}
       >
-        <p className="font-mono text-[11px] text-ink-muted">drop a paper PDF, or click to choose</p>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".pdf"
-          className="hidden"
-          onChange={(event) => pickFile(event.target.files?.[0])}
-        />
-        {ingestOutput && <p className="mt-2 font-mono text-[10.5px] text-ink-faint">{ingestOutput}</p>}
-      </div>
+        <span className="block font-mono text-label text-ink-muted">
+          drop a paper PDF, or click to choose
+        </span>
+        {ingestOutput && (
+          <span className="mt-2 block font-mono text-meta text-ink-faint">{ingestOutput}</span>
+        )}
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf"
+        aria-hidden
+        tabIndex={-1}
+        className="hidden"
+        onChange={(event) => pickFile(event.target.files?.[0])}
+      />
     </Panel>
   );
 }

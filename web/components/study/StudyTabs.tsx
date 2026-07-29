@@ -30,7 +30,7 @@ export default function StudyTabs() {
     <div
       role="tablist"
       aria-label="Study sections"
-      className="mb-6 flex border border-line font-mono text-[11px] uppercase tracking-[0.14em]"
+      className="mb-6 flex border border-line font-mono text-label uppercase tracking-[0.14em]"
     >
       {TABS.map((tab) => {
         const active = tab.match(pathname);

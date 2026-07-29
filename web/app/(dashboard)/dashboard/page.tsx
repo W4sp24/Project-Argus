@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import CliUsage from "@/components/CliUsage";
+import AgentUsage from "@/components/AgentUsage";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
 import ActivityFeed from "@/components/dashboard/ActivityFeed";
@@ -10,6 +10,7 @@ import Heatmap from "@/components/dashboard/Heatmap";
 import IngestPanel from "@/components/dashboard/IngestPanel";
 import InsightsChart from "@/components/dashboard/InsightsChart";
 import PlannerTimeline from "@/components/dashboard/PlannerTimeline";
+import QuickLinks from "@/components/dashboard/QuickLinks";
 import TasksPanel from "@/components/dashboard/TasksPanel";
 import { useDashboardStats } from "@/lib/useDashboardStats";
 import { useTypewriter } from "@/lib/useTypewriter";
@@ -39,7 +40,7 @@ export default function DashboardPage() {
     <>
       <header className="mb-8 animate-rise">
         <p className="eyebrow mb-2">{`// SYS.GENERAL :: ${formatToday()} :: vault OK · index OK · agent idle`}</p>
-        <h1 className="font-mono text-[23px] font-semibold tracking-tight text-ink-bright">
+        <h1 className="font-mono text-display font-semibold tracking-tight text-ink-bright">
           {greeting}
           <span className={`text-[var(--ac)] ${greetingDone ? "animate-blink" : ""}`}>▊</span>
         </h1>
@@ -50,7 +51,7 @@ export default function DashboardPage() {
 
         <Heatmap className="col-span-full" />
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid gap-4 lg:grid-cols-shell">
           <div className="flex min-w-0 flex-col gap-4">
             <PlannerTimeline />
             <TasksPanel />
@@ -60,14 +61,15 @@ export default function DashboardPage() {
           <div className="flex min-w-0 flex-col gap-4">
             {/* Chat moved to the ChatDrawer (TopBar CHAT / ⌘K), shared with /chat. */}
             <BriefingCard />
+            <QuickLinks />
             <TokenUsage />
-            <CliUsage />
+            <AgentUsage />
             <ActivityFeed />
             <InsightsChart />
           </div>
         </div>
 
-        <nav className="flex gap-5 border-t border-line pt-4 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
+        <nav className="flex gap-5 border-t border-line pt-4 font-mono text-label uppercase tracking-[0.14em] text-ink-faint">
           <Link href="/journal" className="transition-colors hover:text-ink-bright">
             → JOURNAL
           </Link>

@@ -48,8 +48,8 @@ export default function CourseSourcesPanel({ code }: { code: string }) {
   return (
     <Panel label={`SOURCES · ${selectedCount}/${sources.length} selected`}>
       {sources.length === 0 ? (
-        <p className="text-[12.5px] text-ink-faint">
-          No indexed files under <span className="font-mono text-[11px]">{prefix}</span> yet.
+        <p className="text-label text-ink-faint">
+          No indexed files under <span className="font-mono text-label">{prefix}</span> yet.
         </p>
       ) : (
         <ul className="space-y-1.5">
@@ -67,12 +67,12 @@ export default function CourseSourcesPanel({ code }: { code: string }) {
                 {selected.has(source.path) && "✓"}
               </button>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[12.5px] text-ink">{source.title}</p>
-                <p className="mt-0.5 font-mono text-[10px] text-ink-faint">
+                <p className="truncate text-label text-ink">{source.title}</p>
+                <p className="mt-0.5 font-mono text-meta text-ink-faint">
                   {source.folder || "/"} · {relativeTime(source.modified)}
                 </p>
               </div>
-              <span className="shrink-0 border border-line px-1 py-px font-mono text-[9px] text-ink-faint">
+              <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
                 {typeChip(source.path)}
               </span>
             </li>
@@ -81,8 +81,8 @@ export default function CourseSourcesPanel({ code }: { code: string }) {
       )}
 
       <div className="mt-3 border border-dashed border-line px-3 py-4 text-center">
-        <p className="font-mono text-[10.5px] text-ink-faint">
-          drop files to ingest <span className="text-[8px] uppercase tracking-[0.16em] text-[#8b7bc0]">[preview]</span>
+        <p className="font-mono text-meta text-ink-faint">
+          drop files to ingest <span className="text-micro uppercase tracking-[0.16em] text-[#8b7bc0]">[preview]</span>
         </p>
       </div>
     </Panel>

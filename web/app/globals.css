@@ -10,6 +10,38 @@
   --ac-bg: #171029;
 }
 
+/* Root scale. `100%` rather than a px value on purpose: pinning `font-size:
+   16px` here would override whatever the reader set in their browser or OS,
+   which is the exact accessibility failure the rem type scale exists to fix.
+   Every size token in tailwind.config.ts is rem, so this one declaration
+   scales the entire UI — type, padding, gaps, and the rail width alike.
+
+   The step-ups are for large displays: the app runs windowed at 1440x900 by
+   default (desktop/main.js) but is routinely maximized on 1440p and 4K panels,
+   where a fixed 16px base leaves everything looking stranded. */
+html {
+  font-size: 100%;
+}
+@media (min-width: 1600px) {
+  html {
+    font-size: 106.25%; /* 17px at a 16px browser default */
+  }
+}
+@media (min-width: 2000px) {
+  html {
+    font-size: 112.5%; /* 18px */
+  }
+}
+
+/* Manual override from /system → DISPLAY. Wins over the width steps above by
+   virtue of the attribute selector's higher specificity. */
+html[data-ui-scale="compact"] {
+  font-size: 93.75%; /* 15px */
+}
+html[data-ui-scale="large"] {
+  font-size: 112.5%; /* 18px */
+}
+
 /* Solid void background — no aurora, no radial gradients, no backdrop-filter
    anywhere (§10: performance > aesthetics). */
 body {
@@ -44,9 +76,30 @@ body {
   animation: msg-in 150ms ease-out both;
 }
 
+/* The one definition of how wide the app's content column is. Used by both the
+   top bar and the page container, which previously each carried their own
+   `max-w-6xl` and had to be kept in sync by hand.
+
+   rem, so it already widens as the root scale steps up; the extra breakpoints
+   stop a 1440p or 4K window from leaving a third of the screen empty. */
+.shell {
+  margin-inline: auto;
+  max-width: 72rem;
+}
+@media (min-width: 1600px) {
+  .shell {
+    max-width: 78rem;
+  }
+}
+@media (min-width: 2000px) {
+  .shell {
+    max-width: 84rem;
+  }
+}
+
 /* Mono eyebrow label. The `▍` prefix comes from Panel, not from this class. */
 .eyebrow {
-  @apply font-mono text-[10px] uppercase tracking-[0.18em];
+  @apply font-mono text-meta uppercase tracking-[0.18em];
   color: var(--ac);
 }
 

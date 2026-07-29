@@ -13,14 +13,31 @@ them.
 
 ## What users still have to install
 
-Two things genuinely cannot be bundled. The wizard **blocks** on both, on
-purpose — permitting them as warnings just moves the failure to the middle of
-someone's first chat turn, where it's far more confusing.
+**One** hard requirement, and a choice.
 
 | Prerequisite | Why | Without it |
 |---|---|---|
-| **[Claude Code](https://claude.com/code)**, signed in | `claude-agent-sdk` spawns the Claude Code CLI and authenticates with the user's own Claude subscription (invariant I5). There is no API-key fallback. | Chat, the planner, study generation and the morning briefing are all dead |
 | **[Git for Windows](https://git-scm.com/download/win)** | `backend/cli.py::_run_git` shells out to `git`; the writer snapshots the vault before every change (invariant I2) | Vault creation fails; no undo history |
+
+The wizard **blocks** on git, on purpose — permitting it as a warning just
+moves the failure to vault creation, where it's far more confusing.
+
+Then the user needs **one** way to run a model. `backend/agent/adapters.py`
+routes chat, the planner and study generation to any of these, chosen per
+model under **System → Models**:
+
+| Option | Cost | Privacy |
+|---|---|---|
+| **[Ollama](https://ollama.com/download)** on the same PC | free | notes never leave the machine |
+| A hosted OpenAI-compatible API (Groq, Together, Fireworks, OpenRouter…) | pay-per-token | note excerpts sent to that provider |
+| An **Anthropic API key** | pay-per-token | note excerpts sent to Anthropic |
+| **[Claude Code](https://claude.com/code)**, signed in | existing subscription | note excerpts sent to Anthropic |
+
+None of these blocks setup. Claude Code used to — when `claude-agent-sdk` was
+the only engine, a missing CLI meant chat, the planner, study generation and
+the briefing were all dead. It is now one option among four, so blocking on it
+would refuse to install a perfectly workable setup. The wizard reports which
+are present and points at System for adding one afterwards.
 
 Each user also needs their **own** Obsidian vault — Argus is single-user and
 local-first. The wizard creates one from the bundled template if they don't

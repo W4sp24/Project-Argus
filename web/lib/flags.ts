@@ -9,9 +9,13 @@ export const FLAGS = {
   activeWork: "preview", // Code PR list (mock data)
   emailCapture: "enabled", // POST /api/ingest/email is wired (Phase H)
   tokenUsage: "enabled", // GET /api/usage is wired (Phase H)
-  localModels: "preview", // registration UI works; routing to ollama comes later
+  // Registration, routing, and the hardware-aware local picker are all wired:
+  // chat/planner/study run on Ollama, hosted OpenAI-compatible providers, the
+  // Anthropic API, or Claude Code, chosen per model in /system.
+  localModels: "enabled",
   // `+ ADD COURSE` renders the vault's course template client-side and creates
   // it for real via POST /api/note/create (backend/writer.py create_note).
   courseCreate: "enabled",
   courseHub: "preview", // /study/course/[code] — NotebookLM-style workspace, chat + studio are mock
+  quickLinks: "enabled", // GET/POST/PUT/DELETE /api/quick-links are wired
 } as const;

@@ -17,12 +17,12 @@ export default function ScoresHistoryPanel() {
   return (
     <Panel label="SCORES.HISTORY">
       {courses.length === 0 ? (
-        <p className="text-[13px] text-ink-faint">No graded attempts yet.</p>
+        <p className="text-body text-ink-faint">No graded attempts yet.</p>
       ) : (
         <div className="space-y-4">
           {courses.map((course) => (
             <div key={course.course} className="border-b border-line pb-3 last:border-b-0 last:pb-0">
-              <p className="mb-1.5 font-mono text-[10px] uppercase tracking-wide text-ink-faint">
+              <p className="mb-1.5 font-mono text-meta uppercase tracking-wide text-ink-faint">
                 {course.course}
               </p>
               {course.attempts.length >= 2 ? (
@@ -33,7 +33,7 @@ export default function ScoresHistoryPanel() {
               ) : (
                 <ul className="space-y-1">
                   {course.attempts.map((attempt) => (
-                    <li key={attempt.date} className="flex items-center justify-between font-mono text-[11px]">
+                    <li key={attempt.date} className="flex items-center justify-between font-mono text-label">
                       <span className="text-ink-faint">{attempt.date}</span>
                       <span className="text-ink-muted">{attempt.pct}%</span>
                     </li>

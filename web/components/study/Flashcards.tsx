@@ -105,7 +105,8 @@ export default function Flashcards() {
           <select
             value={genCourse}
             onChange={(event) => setGenCourse(event.target.value)}
-            className="border border-line bg-sunken px-2 py-1.5 font-mono text-[12px] text-ink focus:border-lineHi focus:outline-none"
+            aria-label="Course"
+            className="min-h-9 border border-line bg-sunken px-2 py-1.5 font-mono text-label text-ink focus:border-lineHi"
           >
             <option value="">select course…</option>
             {(courses ?? []).map((course) => (
@@ -117,14 +118,14 @@ export default function Flashcards() {
           <button
             type="submit"
             disabled={!genCourse || generating}
-            className="border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+            className="border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
           >
             {generating ? "PARSING…" : "+ GENERATE DECK"}
           </button>
         </form>
 
         {!decks || decks.length === 0 ? (
-          <p className="text-[13px] text-ink-faint">
+          <p className="text-body text-ink-faint">
             No decks yet — generate one above (needs `flashcards.md` with `Q::`/`A::` pairs in the
             course folder).
           </p>
@@ -138,8 +139,8 @@ export default function Flashcards() {
                     deck.id === deckId ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
                   }`}
                 >
-                  <span className="min-w-0 truncate text-[13px] text-ink">{deck.title}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-ink-faint">{deck.cards} cards</span>
+                  <span className="min-w-0 truncate text-body text-ink">{deck.title}</span>
+                  <span className="shrink-0 font-mono text-label text-ink-faint">{deck.cards} cards</span>
                 </button>
               </li>
             ))}
@@ -150,15 +151,15 @@ export default function Flashcards() {
       <Panel
         label="STUDY.SESSION"
         headerRight={
-          <span className="font-mono text-[10px] text-ink-faint">
+          <span className="font-mono text-meta text-ink-faint">
             {selectedDeck ? `${queue.length} due` : "0 due"}
           </span>
         }
       >
         {!selectedDeck ? (
-          <p className="text-[13px] text-ink-faint">Generate or select a deck to start a session.</p>
+          <p className="text-body text-ink-faint">Generate or select a deck to start a session.</p>
         ) : !current ? (
-          <p className="text-[13px] text-ink-faint">No cards due right now — check back later.</p>
+          <p className="text-body text-ink-faint">No cards due right now — check back later.</p>
         ) : (
           <>
             <div className="flip-card h-40">
@@ -174,7 +175,7 @@ export default function Flashcards() {
                   data-testid="flashcard-front"
                   onClick={() => setFlipped((value) => !value)}
                   aria-label={`Flashcard front: ${current.front}. Click to flip.`}
-                  className="flip-card-face flip-card-front flex w-full items-center justify-center border border-line bg-sunken p-4 text-center text-[15px] text-ink-bright transition-colors hover:border-lineHi"
+                  className="flip-card-face flip-card-front flex w-full items-center justify-center border border-line bg-sunken p-4 text-center text-lead text-ink-bright transition-colors hover:border-lineHi"
                 >
                   {current.front}
                 </button>
@@ -183,14 +184,14 @@ export default function Flashcards() {
                   data-testid="flashcard-back"
                   onClick={() => setFlipped((value) => !value)}
                   aria-label={`Flashcard back: ${current.back}. Click to flip.`}
-                  className="flip-card-face flip-card-back flex w-full items-center justify-center border border-[var(--ac)] bg-[var(--ac-bg)] p-4 text-center text-[15px] text-ink-bright"
+                  className="flip-card-face flip-card-back flex w-full items-center justify-center border border-[var(--ac)] bg-[var(--ac-bg)] p-4 text-center text-lead text-ink-bright"
                 >
                   {current.back}
                 </button>
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-4 gap-1.5 border-t border-line pt-4 font-mono text-[10px] uppercase tracking-[0.12em]">
+            <div className="mt-4 grid grid-cols-4 gap-1.5 border-t border-line pt-4 font-mono text-meta uppercase tracking-[0.12em]">
               {GRADES.map((g) => (
                 <button
                   key={g}

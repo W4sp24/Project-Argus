@@ -131,13 +131,19 @@ def _handshake(proc: subprocess.Popen) -> int | None:
     return None
 
 
-def _get(port: int, path: str, timeout: int = 60) -> tuple[int, str]:
+def _get(port: int, path: str, timeout: int = 60, limit: int = 400) -> tuple[int, str]:
+    """GET a path. ``limit`` caps the body read — raise it when parsing JSON.
+
+    The 400-byte default keeps failure output readable for checks that only
+    look at the status code. A truncated body is not valid JSON, so any check
+    that parses one must pass a limit large enough for the whole payload.
+    """
     url = f"http://127.0.0.1:{port}{path}"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            return response.status, response.read(400).decode("utf-8", "replace")
+            return response.status, response.read(limit).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(400).decode("utf-8", "replace")
+        return exc.code, exc.read(limit).decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001
         return 0, repr(exc)
 
@@ -152,6 +158,51 @@ def _post(port: int, path: str, timeout: int = 120) -> tuple[int, str]:
         return exc.code, exc.read(2000).decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001
         return 0, repr(exc)
+
+
+def _mcp_server_starts(target: Path) -> tuple[bool, str]:
+    """Does ``--mcp-server`` actually serve, or die on a missing import?
+
+    The bridge's ``mcp`` imports are all lazy and in-function, which PyInstaller
+    cannot see. Without ``collect_submodules("mcp")`` in the spec, the frozen
+    exe accepts the flag and then dies with ``ModuleNotFoundError: mcp`` — and
+    the only user who would ever find out is one following the README.
+
+    Probed with a real MCP ``initialize`` over stdio rather than by starting and
+    killing it, because a process that exits instantly on a bad import and one
+    that is quietly waiting for input look identical from the outside.
+    """
+    request = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "argus-smoke", "version": "0"},
+            },
+        }
+    )
+    proc = subprocess.Popen(
+        [*_base_cmd(target), "--mcp-server"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=_cwd_for(target),
+    )
+    try:
+        out, err = proc.communicate(input=request + "\n", timeout=180)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return False, "no response to initialize within 180s"
+    if "ModuleNotFoundError" in err:
+        # The exact failure the spec's hiddenimports exist to prevent.
+        return False, err.strip().splitlines()[-1][:200]
+    if '"result"' in out and "serverInfo" in out:
+        return True, "handshake ok"
+    return False, (err.strip() or out.strip() or "no handshake")[:200]
 
 
 def _watchdog_dies_with_parent(target: Path) -> bool:
@@ -251,6 +302,53 @@ def main() -> int:
         status, _ = _get(port, "/api/usage/cli?range=today")
         result.check("GET /api/usage/cli", status == 200, f"HTTP {status}")
 
+        # Routes added after the first frozen build shipped. A stale
+        # resources/backend answers 200 on everything above and 404 here, which
+        # is exactly how the packaged app came to pair a current dashboard with
+        # a day-old backend and show an empty usage panel. Every router mounted
+        # under the system router gets a check so that mismatch fails the build
+        # instead of reaching someone's install.
+        status, body = _get(port, "/api/usage/agents?range=today", limit=20_000)
+        result.check("GET /api/usage/agents", status == 200, f"HTTP {status}")
+        if status == 200:
+            try:
+                agents = [a["id"] for a in (json.loads(body).get("agents") or [])]
+            except (json.JSONDecodeError, TypeError, KeyError):
+                agents = []
+            for name in ("claude-code", "claude-subagents", "codex"):
+                present = name in agents
+                result.check(f"  agents:{name}", present, "present" if present else "MISSING")
+
+        status, _ = _get(port, "/api/usage/agents/formats")
+        result.check("GET /api/usage/agents/formats", status == 200, f"HTTP {status}")
+
+        status, _ = _get(port, "/api/integrations")
+        result.check("GET /api/integrations", status == 200, f"HTTP {status}")
+
+        # The model registry, and behind it the hardware probe. Worth its own
+        # check because backend/agent/hardware.py reaches for ctypes
+        # (GlobalMemoryStatusEx) and subprocess (nvidia-smi) -- exactly the
+        # kinds of runtime resolution that freezing breaks silently. A probe
+        # that returns None here would degrade the whole local-model picker to
+        # "unknown" in the packaged app while still answering 200.
+        status, body = _get(port, "/api/models/catalog", limit=20_000)
+        result.check("GET /api/models/catalog", status == 200, f"HTTP {status}")
+        if status == 200:
+            try:
+                payload = json.loads(body)
+            except (json.JSONDecodeError, TypeError):
+                payload = {}
+            models = payload.get("models") or []
+            result.check("  catalog:models listed", len(models) > 0, f"{len(models)} entries")
+            ram = (payload.get("hardware") or {}).get("ram_gb")
+            result.check("  catalog:RAM detected", bool(ram), f"{ram} GB")
+            verdicts = {entry.get("verdict") for entry in models}
+            result.check(
+                "  catalog:fit verdicts scored",
+                bool(verdicts) and verdicts != {"unknown"},
+                ", ".join(sorted(v for v in verdicts if v)),
+            )
+
         if not args.skip_heavy:
             # Forces chromadb + sentence-transformers + torch to actually load.
             status, body = _get(port, "/api/search?q=test", timeout=300)
@@ -263,6 +361,11 @@ def main() -> int:
     # backend a stand-in parent, force-kill that parent (no handlers run, just
     # like Task Manager "End task"), and require the backend to notice.
     result.check("parent-death watchdog", _watchdog_dies_with_parent(target))
+
+    # The MCP bridge, which the desktop build could not run at all until the
+    # --mcp-server flag and the spec's mcp hiddenimports landed together.
+    ok, detail = _mcp_server_starts(target)
+    result.check("--mcp-server serves over stdio", ok, detail)
 
     shutil.rmtree(workdir, ignore_errors=True)
 

@@ -46,7 +46,7 @@ export default function JournalPage() {
       <header className="mb-8 animate-rise">
         <div className="flex flex-wrap items-center gap-3">
           <p className="eyebrow">{`// JOURNAL`}</p>
-          <span className="border border-line bg-panel px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.15em] text-ink-faint">
+          <span className="border border-line bg-panel px-2.5 py-0.5 font-mono text-meta uppercase tracking-[0.15em] text-ink-faint">
             dev-owned · view only
           </span>
         </div>
@@ -96,7 +96,7 @@ export default function JournalPage() {
               }`}
             >
               <p className="truncate font-body text-sm font-medium">{project.title}</p>
-              <p className="mt-1 font-mono text-[11px] text-ink-faint">
+              <p className="mt-1 font-mono text-label text-ink-faint">
                 {project.sessions} session{project.sessions === 1 ? "" : "s"} ·{" "}
                 {project.open_threads} open thread{project.open_threads === 1 ? "" : "s"}
               </p>
@@ -121,7 +121,7 @@ export default function JournalPage() {
           )}
           {Object.entries(sessionsByDay).map(([day, daySessions]) => (
             <div key={day}>
-              <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-faint">
+              <p className="mb-2 font-mono text-label uppercase tracking-[0.18em] text-ink-faint">
                 {relativeDay(day)} · {day}
               </p>
               <div className="space-y-2">
@@ -136,17 +136,17 @@ export default function JournalPage() {
                     <span className="flex min-w-0 items-center gap-3">
                       <span className="truncate text-sm">{session.project}</span>
                       {session.branch && (
-                        <span className="hidden shrink-0 border border-line px-2 py-0.5 font-mono text-[11px] text-ink-muted sm:inline">
+                        <span className="hidden shrink-0 border border-line px-2 py-0.5 font-mono text-label text-ink-muted sm:inline">
                           {session.branch}
                         </span>
                       )}
                     </span>
                     <span className="flex shrink-0 items-center gap-3">
-                      <span className="font-mono text-[11px] text-ink-faint">
+                      <span className="font-mono text-label text-ink-faint">
                         {session.files} file{session.files === 1 ? "" : "s"}
                       </span>
                       <span
-                        className={`border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+                        className={`border px-2 py-0.5 font-mono text-meta uppercase tracking-wide ${
                           session.has_narrative
                             ? "border-[var(--ac)] text-[var(--ac)]"
                             : "border-line text-ink-faint"
@@ -164,10 +164,10 @@ export default function JournalPage() {
           {note && (
             <Panel label="NOTE" className="animate-rise">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                <p className="min-w-0 truncate font-mono text-[11px] text-ink-faint">{note.path}</p>
+                <p className="min-w-0 truncate font-mono text-label text-ink-faint">{note.path}</p>
                 <a
                   href={note.obsidian_uri}
-                  className="shrink-0 border border-line px-3 py-1 font-mono text-[11px] text-[var(--ac)] transition-colors hover:border-lineHi"
+                  className="shrink-0 border border-line px-3 py-1 font-mono text-label text-[var(--ac)] transition-colors hover:border-lineHi"
                 >
                   Open in Obsidian ↗
                 </a>

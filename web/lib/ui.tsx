@@ -26,6 +26,11 @@ interface UiState {
   setNoteOpen: (open: boolean) => void;
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
+  /** Engine picker (§7). One instance serves every trigger — top bar, chat
+   *  drawer, /chat, study header, course hub — since the model is one global
+   *  choice, not a per-surface one. */
+  enginePickerOpen: boolean;
+  setEnginePickerOpen: (open: boolean) => void;
   /** FocusTimer registers its start function on mount (null on unmount). */
   registerFocusStart: (fn: (() => void) | null) => void;
   /** Start a focus session if a FocusTimer is mounted; no-op otherwise. */
@@ -44,6 +49,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [enginePickerOpen, setEnginePickerOpen] = useState(false);
   const focusStart = useRef<(() => void) | null>(null);
 
   const toggleDrawer = useCallback(() => setDrawerOpen((open) => !open), []);
@@ -61,10 +67,20 @@ export function UiProvider({ children }: { children: ReactNode }) {
       setNoteOpen,
       paletteOpen,
       setPaletteOpen,
+      enginePickerOpen,
+      setEnginePickerOpen,
       registerFocusStart,
       startFocus,
     }),
-    [drawerOpen, noteOpen, paletteOpen, toggleDrawer, registerFocusStart, startFocus],
+    [
+      drawerOpen,
+      noteOpen,
+      paletteOpen,
+      enginePickerOpen,
+      toggleDrawer,
+      registerFocusStart,
+      startFocus,
+    ],
   );
 
   return <UiContext.Provider value={value}>{children}</UiContext.Provider>;

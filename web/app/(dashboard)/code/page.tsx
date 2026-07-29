@@ -1,6 +1,6 @@
 "use client";
 
-import CliUsage from "@/components/CliUsage";
+import AgentUsage from "@/components/AgentUsage";
 import ModeHeader from "@/components/ModeHeader";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
@@ -46,7 +46,7 @@ export default function CodePage() {
           ]}
         />
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid gap-4 lg:grid-cols-shell">
           <div className="flex min-w-0 flex-col gap-4">
             <ProjectsVault />
             <DevJournalPanel />
@@ -55,7 +55,7 @@ export default function CodePage() {
 
           <div className="flex min-w-0 flex-col gap-4">
             <TokenUsage />
-            <CliUsage />
+            <AgentUsage />
             <SessionsChart />
           </div>
         </div>

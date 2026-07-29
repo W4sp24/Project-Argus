@@ -86,6 +86,16 @@ hiddenimports += [
     "websockets.legacy",
 ]
 
+# --- mcp (the `--mcp-server` stdio bridge) ---------------------------------
+# backend/agent/mcp_server.py imports `mcp` lazily *inside* its functions
+# (`from mcp.server import Server`, `from mcp import types`, `from
+# mcp.server.stdio import stdio_server`), which is exactly the pattern static
+# analysis cannot see. collect_submodules("backend") bundles the module itself,
+# so without this the frozen exe accepts --mcp-server and then dies with
+# ModuleNotFoundError: mcp the moment a client connects.
+hiddenimports += collect_submodules("mcp")
+datas += safe_metadata("mcp")
+
 # --- fastapi / pydantic ----------------------------------------------------
 hiddenimports += collect_submodules("pydantic")
 datas += safe_metadata("pydantic") + safe_metadata("fastapi") + safe_metadata("starlette")
