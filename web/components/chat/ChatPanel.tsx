@@ -5,6 +5,7 @@ import useSWR from "swr";
 import Button from "@/components/ui/Button";
 import { fetcher } from "@/lib/api";
 import { useChat } from "@/lib/chat";
+import { renderWithCitations } from "@/lib/citations";
 import { useSelectedModel } from "@/lib/models";
 
 const EXAMPLES = [
@@ -12,31 +13,6 @@ const EXAMPLES = [
   "Summarize my recent daily notes.",
   "What's in my inbox folder?",
 ];
-
-/**
- * Split answer text into plain segments and [vault/path.md] citation chips.
- * NOTE: the ws frames carry no structured citations field ({delta|done|error}
- * only — backend/main.py ws_chat), so citations are parsed inline from the
- * answer text where the agent emits them as [path.md] references.
- */
-function renderWithCitations(text: string, vaultName: string) {
-  const parts = text.split(/(\[[^\[\]\n]+?\.(?:md|pdf|pptx|docx)(?:\s+(?:p\.|slide\s)?\d+)?\])/g);
-  return parts.map((part, i) => {
-    const match = part.match(/^\[([^\[\]]+?)(?:\s+(?:p\.|slide\s)?\d+)?\]$/);
-    if (!match) return <span key={i}>{part}</span>;
-    const path = match[1];
-    return (
-      <a
-        key={i}
-        href={`obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(path)}`}
-        className="animate-msg-in mx-0.5 inline-block border border-line bg-[var(--ac-bg)] px-1.5 py-0.5 font-mono text-label text-[var(--ac)] transition-colors hover:border-lineHi"
-        title={`Open ${path} in Obsidian`}
-      >
-        ⌗ {path.split("/").pop()}
-      </a>
-    );
-  });
-}
 
 /** Small accent circle — the assistant's avatar (§7). */
 function Orb({ size = "h-6 w-6" }: { size?: string }) {

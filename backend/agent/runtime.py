@@ -68,6 +68,7 @@ def build_vault_tools(
     index: VaultIndex,
     model_label: str = MODEL,
     ready: threading.Event | None = None,
+    course: str | None = None,
 ) -> list[ToolSpec]:
     """The read-only tool belt shared by chat, and re-exposed over MCP.
 
@@ -86,6 +87,14 @@ def build_vault_tools(
     loses the race, so the first question after opening chat would come back
     with no citations at all. ``None`` means nothing is warming (the MCP server
     and tests), so nothing waits.
+
+    ``course``, when given, is a *fixed* retrieval scope: every
+    ``search_vault`` call is filtered to it regardless of what the model
+    passes as its own ``course`` tool argument. This is how the Course Hub's
+    per-course chat (§4) stays scoped to the course the user opened, rather
+    than trusting the model to always remember and pass it. Global chat (the
+    dock, ``/chat``) passes ``None`` here, so it keeps the model's own
+    judgment call on when to filter by course.
     """
 
     async def _await_index() -> None:
@@ -102,13 +111,17 @@ def build_vault_tools(
         # seconds against a cold index. On the MCP stdio server that would stall
         # the whole event loop; in chat it would stall the deltas already
         # streaming to the browser.
+        # A fixed course (Course Hub) always wins over whatever the model
+        # itself passed — the user already scoped this whole conversation to
+        # one course by opening it from there.
+        effective_course = course or (str(args["course"]) if args.get("course") else None)
         hits = await asyncio.to_thread(
             retrieve,
             index,
             str(args["query"]),
             settings.vault_path,
             k=8,
-            course=str(args["course"]) if args.get("course") else None,
+            course=effective_course,
             taxonomy=settings.taxonomy,
         )
         if not hits:
@@ -243,8 +256,16 @@ class ChatAgent:
             raise RuntimeError(f"unknown model {model!r} — register it under /system first")
         return str(entry.get("model_id") or entry["name"])
 
-    async def stream_chat(self, message: str, model: str | None = None) -> AsyncIterator[str]:
-        """Yield text deltas for one user message, on whichever backend is chosen."""
+    async def stream_chat(
+        self, message: str, model: str | None = None, course: str | None = None
+    ) -> AsyncIterator[str]:
+        """Yield text deltas for one user message, on whichever backend is chosen.
+
+        ``course``, when given, fixes ``search_vault``'s retrieval scope to
+        one course — see :func:`build_vault_tools`. Passed by the Course Hub
+        chat frame (``backend.features.chat.router``); the global chat dock
+        omits it.
+        """
         from backend.telemetry.usage import record_result_usage
 
         resolved_model = self._resolve_model(model)
@@ -256,7 +277,11 @@ class ChatAgent:
             fallback_model=MODEL,
         )
         tools = build_vault_tools(
-            self._settings, self._index, model_label=resolved_model, ready=self._ready
+            self._settings,
+            self._index,
+            model_label=resolved_model,
+            ready=self._ready,
+            course=course,
         )
 
         recorded = False

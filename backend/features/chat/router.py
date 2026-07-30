@@ -17,6 +17,38 @@ from backend.core.config import Settings
 ChatRunner = Callable[[str], AsyncIterator[str]]
 
 
+def _call_runner(
+    runner: ChatRunner, message: str, model: str | None, course: str | None
+) -> AsyncIterator[str]:
+    """Call ``runner`` with the richest signature it accepts.
+
+    Two optional trailing keywords have landed independently: ``model`` (§7
+    model selection) and ``course`` (Course Hub scoping — forces
+    ``search_vault``'s course filter in ``backend.agent.runtime`` rather than
+    leaving it to the model's discretion). A runner that only knows one, or
+    neither (every single-argument test fake), must keep working untouched.
+    The ``TypeError`` this catches can only be a signature mismatch: it is
+    raised while the async-generator function object is being *created*, not
+    awaited, so no application code has run yet.
+    """
+    if model is not None and course is not None:
+        try:
+            return runner(message, model, course=course)
+        except TypeError:
+            pass
+    if course is not None:
+        try:
+            return runner(message, course=course)
+        except TypeError:
+            pass
+    if model is not None:
+        try:
+            return runner(message, model)
+        except TypeError:
+            pass
+    return runner(message)
+
+
 def _connected(websocket: WebSocket) -> bool:
     """Is this socket still writable?
 
@@ -47,9 +79,11 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
     async def ws_chat(websocket: WebSocket) -> None:
         """Bridge agent streaming deltas to the browser.
 
-        Frames in: {message, model?} — ``model`` (a registry name, §7) is
-        optional and flows through to runners that accept it; runners with
-        the legacy single-argument signature keep working.
+        Frames in: {message, model?, course?} — ``model`` (a registry name,
+        §7) and ``course`` (Course Hub scoping, forces the vault search to
+        one course rather than leaving it to the model) are both optional and
+        flow through to runners that accept them; runners with the legacy
+        single-argument signature keep working.
         Frames out: {type: "delta", text} ... {type: "done"} | {type: "error", detail}.
         """
         await websocket.accept()
@@ -59,17 +93,12 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
                 payload = await websocket.receive_json()
                 message = str(payload.get("message", "")).strip()
                 model = str(payload.get("model") or "").strip() or None
+                course = str(payload.get("course") or "").strip() or None
                 if not message:
                     await websocket.send_json({"type": "error", "detail": "empty message"})
                     continue
                 try:
-                    if model is not None:
-                        try:
-                            stream = runner(message, model)
-                        except TypeError:  # injected runner without model support
-                            stream = runner(message)
-                    else:
-                        stream = runner(message)
+                    stream = _call_runner(runner, message, model, course)
                     async for delta in stream:
                         await websocket.send_json({"type": "delta", "text": delta})
                     await websocket.send_json({"type": "done"})

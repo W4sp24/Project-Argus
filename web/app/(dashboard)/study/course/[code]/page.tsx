@@ -2,21 +2,22 @@
 
 import { useRouter } from "next/navigation";
 import { EngineTrigger } from "@/components/EnginePicker";
-import { CourseChat, CourseStudio } from "@/components/preview/CourseHub";
+import { CourseChat, CourseStudio } from "@/components/study/CourseHub";
 import CourseSourcesPanel from "@/components/study/CourseSourcesPanel";
 import { useStudyCourses } from "@/lib/api";
 
 /**
- * Course Hub (§4 Course Hub, `[PREVIEW]`) — NotebookLM-style 3-pane workspace
- * opened via a course row's `HUB →`. This is deliberately NOT part of the
+ * Course Hub (§4 Course Hub) — NotebookLM-style 3-pane workspace opened via a
+ * course row's `HUB →`. This is deliberately NOT part of the
  * OVERVIEW | FLASHCARDS | PRACTICE EXAM sub-nav triad (no <StudyTabs/> here)
  * — it's a separate fullscreen workspace with its own back-button header,
  * matching the spec's Course Hub section which never mentions the tab row.
  *
- * Only the SOURCES rail is real data (`GET /api/notes`, filtered to
- * `15-Courses/<CODE>/`); the course title comes from the real
- * `GET /api/study/courses` list. Chat and STUDIO are mock (§8
- * flags.courseHub) — see components/preview/CourseHub.tsx.
+ * Every pane is real data now (§8 flags.courseHub: enabled): SOURCES from
+ * `GET /api/study/courses/<code>/sources`, chat over `/ws/chat` with the
+ * course forced into the retrieval filter (backend/agent/runtime.py), and
+ * STUDIO's generate buttons + "generated" list hitting the same endpoints
+ * `CoursesPanel`/`Flashcards` use — see components/study/CourseHub.tsx.
  */
 export default function CourseHubPage({ params }: { params: { code: string } }) {
   const router = useRouter();
@@ -40,9 +41,6 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
             {course?.title ?? "Unknown course"}
           </p>
         </div>
-        <span className="border border-[#3d2f66] px-1 py-px font-mono text-micro uppercase tracking-[0.16em] text-[#8b7bc0]">
-          PREVIEW
-        </span>
         {/* Was a disabled button with `claude-sonnet-5` baked into it, which
             misreported the model the moment anything else was selected. */}
         <div className="ml-auto">
