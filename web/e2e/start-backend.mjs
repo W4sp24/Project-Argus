@@ -42,7 +42,25 @@ fs.writeFileSync(
   "utf-8",
 );
 
+// CS000 no longer ships as a sample course (backend/cli.py stopped copying
+// it into fresh vaults — that permanent demo content was the reported
+// "study still retains sample data after it is deleted" bug). study.spec.ts
+// still exercises a real course end to end though, so the e2e vault grows
+// its own CS000 here instead of inheriting one from the template.
+fs.mkdirSync(path.join(vault, "15-Courses", "CS000"), { recursive: true });
+fs.writeFileSync(
+  path.join(vault, "15-Courses", "CS000", "course.md"),
+  `---\ntype: course\ncode: CS000\ntitle: Sample Course\ncreated: "${localToday()}"\ntags: [course]\nstatus: active\n---\n\n# CS000 — Sample Course\n`,
+  "utf-8",
+);
+
 execFileSync(python, [path.join(here, "seed_suggestion.py"), vault], {
+  cwd: root,
+  stdio: "inherit",
+});
+
+// Deterministic flashcard deck (no model call) — see seed_flashcards.py.
+execFileSync(python, [path.join(here, "seed_flashcards.py"), vault], {
   cwd: root,
   stdio: "inherit",
 });

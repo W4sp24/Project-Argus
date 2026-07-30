@@ -38,7 +38,10 @@ test("flashcard flip and grading advance the mock study session", async ({ page 
   await expect(inner).toHaveClass(/is-flipped/);
 
   await page.getByRole("button", { name: "GOOD" }).click();
-  await expect(page.getByText(/scheduled :: good in 3d/)).toBeVisible();
+  // Real wording (Flashcards.tsx): "scheduled :: <grade> — next due <date>" —
+  // the exact due date is FSRS-computed and locale-formatted, so only the
+  // fixed prefix is asserted.
+  await expect(page.getByText(/scheduled :: good — next due/)).toBeVisible();
 });
 
 test("course hub opens from a course row and links back", async ({ page }) => {
@@ -53,4 +56,27 @@ test("course hub opens from a course row and links back", async ({ page }) => {
 
   await page.getByRole("button", { name: "← BACK" }).click();
   await expect(page).toHaveURL(/\/study$/);
+});
+
+// Regression test for the reported bug: "Study … still retains sample data
+// after it is deleted." The × button used to only hide the row in local
+// React state — the course came right back on the next reload, route
+// change, or app restart. The reload below is the whole point of this test.
+test("deleting a course removes it permanently, even after a reload", async ({ page }) => {
+  await page.goto("/study");
+
+  await page.getByRole("button", { name: "+ ADD COURSE" }).click();
+  await page.getByLabel("Course code").fill("CS999");
+  await page.getByLabel("Course name").fill("Delete Me");
+  await page.getByRole("button", { name: "ADD", exact: true }).click();
+  await expect(page.getByText("CS999").first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Delete CS999" }).click();
+  const confirmDialog = page.getByRole("dialog", { name: "Delete CS999" });
+  await expect(confirmDialog).toBeVisible();
+  await confirmDialog.getByRole("button", { name: "DELETE" }).click();
+  await expect(page.getByText("CS999").first()).not.toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText("CS999").first()).not.toBeVisible();
 });
