@@ -138,8 +138,15 @@ def _planner_context(
     refresh_cache(conn, settings.vault_path)
     buckets = bucketed_tasks(conn, today=today)
 
-    events = [event.model_dump() for event in gcal.list_events(today)]
-    external = [task.model_dump() for task in todoist.list_tasks()]
+    gcal_events, gcal_error = gcal.list_events_safe(today)
+    todoist_tasks, todoist_error = todoist.list_tasks_safe()
+    events = [event.model_dump() for event in gcal_events]
+    external = [task.model_dump() for task in todoist_tasks]
+    connector_notes = [
+        f"{name}: {message}"
+        for name, message in (("gcal", gcal_error), ("todoist", todoist_error))
+        if message
+    ]
 
     sent_paths: list[str] = []
     review_queues: list[str] = []
@@ -163,6 +170,10 @@ def _planner_context(
         "todoist_tasks": external,
         "weak_topics_review_queues": review_queues,
         "dismissal_feedback": dismissal_feedback(conn),
+        # A connector down is not "the user has no tasks/events" — say so
+        # plainly so the model doesn't plan around data that simply failed
+        # to load.
+        "connector_notes": connector_notes,
     }
     return (
         f"Instruction from the user: {instruction}\n\n"

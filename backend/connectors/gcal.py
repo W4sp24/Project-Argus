@@ -19,6 +19,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.connectors import ConnectorUnavailable
+
 # Read events in P2; insert approved schedule blocks in P3 (writer-gated, I1).
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 ARGUS_COLOR_ID = "3"  # grape — Argus-created blocks are visually distinct
@@ -162,23 +164,40 @@ def insert_event(title: str, start: str, end: str, service=None) -> None:
 
 
 def list_events(day: date, service=None) -> list[CalendarEvent]:
-    """Events for one local day; [] when unconfigured. ``service`` injectable."""
-    service = service or _service()
+    """Events for one local day; [] when unconfigured. ``service`` injectable.
+
+    Raises `ConnectorUnavailable` when a token IS stored but the client
+    library can't be imported (a broken build), authentication/refresh fails,
+    or the API call itself fails (network outage, a Google outage) — see
+    `list_events_safe` for callers that must degrade instead of raise.
+    """
+    if service is None:
+        try:
+            service = _service()
+        except ImportError as exc:
+            raise ConnectorUnavailable(
+                f"Google Calendar client library is not installed: {exc}"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - refresh/auth failures are "unavailable" too
+            raise ConnectorUnavailable(f"Google Calendar authentication failed: {exc}") from exc
     if service is None:
         return []
     start = datetime.combine(day, time.min).astimezone()
     end = start + timedelta(days=1)
-    response = (
-        service.events()
-        .list(
-            calendarId="primary",
-            timeMin=start.isoformat(),
-            timeMax=end.isoformat(),
-            singleEvents=True,
-            orderBy="startTime",
+    try:
+        response = (
+            service.events()
+            .list(
+                calendarId="primary",
+                timeMin=start.isoformat(),
+                timeMax=end.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
         )
-        .execute()
-    )
+    except Exception as exc:  # noqa: BLE001 - any API/network failure is "unavailable"
+        raise ConnectorUnavailable(f"Google Calendar request failed: {exc}") from exc
     events: list[CalendarEvent] = []
     for item in response.get("items", []):
         start_raw = item.get("start", {})
@@ -193,3 +212,18 @@ def list_events(day: date, service=None) -> list[CalendarEvent]:
             )
         )
     return events
+
+
+def list_events_safe(day: date, service=None) -> tuple[list[CalendarEvent], str | None]:
+    """`list_events`, but for callers that must degrade rather than fail.
+
+    A calendar widget, the task board, or the planner must not take down the
+    whole dashboard because gcal is unreachable or a build is missing the
+    client library. Returns ``(events, None)`` on success and
+    ``([], message)`` when the connector is unavailable — ``message`` is
+    short and safe to show a user directly.
+    """
+    try:
+        return list_events(day, service), None
+    except ConnectorUnavailable as exc:
+        return [], str(exc)

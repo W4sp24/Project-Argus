@@ -16,7 +16,7 @@ from datetime import date
 
 import pytest
 
-from backend.connectors import gcal
+from backend.connectors import ConnectorUnavailable, gcal
 
 
 def test_list_events_unconfigured_does_not_import_google_libs(monkeypatch):
@@ -97,3 +97,87 @@ def test_service_imports_google_libs_only_once_a_token_exists(monkeypatch):
 
     with pytest.raises(ImportError):
         gcal._service()
+
+
+# --- ConnectorUnavailable containment --------------------------------------
+#
+# Before this fix, `list_events()` propagated any import or API/network
+# failure straight out of the connector: once gcal was connected, every
+# caller (`/api/agenda`, `/api/insights`, the briefing, the planner) started
+# 500ing the moment a token expired or Google was unreachable. See
+# `backend.connectors.ConnectorUnavailable`.
+
+
+class _FakeExecute:
+    def __init__(self, payload=None, error=None):
+        self._payload = payload
+        self._error = error
+
+    def execute(self):
+        if self._error is not None:
+            raise self._error
+        return self._payload
+
+
+class _FakeEvents:
+    def __init__(self, execute: _FakeExecute) -> None:
+        self._execute = execute
+
+    def list(self, **kwargs):  # noqa: ANN003 - matches the google client's shape
+        return self._execute
+
+
+class _FakeService:
+    def __init__(self, execute: _FakeExecute) -> None:
+        self._execute = execute
+
+    def events(self):
+        return _FakeEvents(self._execute)
+
+
+def test_list_events_maps_injected_fake_service():
+    """An injected ``service`` is used as-is; behaviour beyond exception
+    translation must not change."""
+    payload = {
+        "items": [
+            {
+                "summary": "Standup",
+                "start": {"dateTime": "2026-08-01T09:00:00"},
+                "end": {"dateTime": "2026-08-01T09:15:00"},
+            }
+        ]
+    }
+    service = _FakeService(_FakeExecute(payload=payload))
+
+    events = gcal.list_events(date(2026, 8, 1), service=service)
+
+    assert len(events) == 1
+    assert events[0].title == "Standup"
+    assert events[0].start == "2026-08-01T09:00:00"
+
+
+def test_list_events_wraps_api_failure_in_connector_unavailable():
+    """The API call itself fails (network/auth) — must not be a bare 500."""
+    service = _FakeService(_FakeExecute(error=RuntimeError("503 backend error")))
+
+    with pytest.raises(ConnectorUnavailable):
+        gcal.list_events(date(2026, 8, 1), service=service)
+
+
+def test_list_events_safe_returns_message_instead_of_raising():
+    service = _FakeService(_FakeExecute(error=RuntimeError("503 backend error")))
+
+    events, message = gcal.list_events_safe(date(2026, 8, 1), service=service)
+
+    assert events == []
+    assert message is not None and "Google Calendar" in message
+
+
+def test_list_events_safe_returns_events_and_no_message_on_success():
+    payload = {"items": []}
+    service = _FakeService(_FakeExecute(payload=payload))
+
+    events, message = gcal.list_events_safe(date(2026, 8, 1), service=service)
+
+    assert events == []
+    assert message is None

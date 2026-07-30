@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.connectors import ConnectorUnavailable
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
 from backend.main import create_app
@@ -94,3 +95,74 @@ def test_capture_goes_through_writer_only(
 
 def test_capture_rejects_empty(client: TestClient) -> None:
     assert client.post("/api/capture", json={"text": "   "}).status_code == 422
+
+
+# --- connector failure containment -----------------------------------------
+#
+# Before this fix, an uncaught `todoist.list_tasks()` / `gcal.list_events()`
+# failure took down `/api/agenda` and `/api/tasks` with a bare 500 the moment
+# a connected connector couldn't answer (expired token, network outage). Both
+# endpoints must now degrade to 200 — the failure is reported via
+# `connector_errors` on the agenda response, and via `/api/integrations` for
+# the task board (whose shape must stay exactly `dict[str, list[TaskItem]]`).
+
+
+def _reject(*_args, **_kwargs):
+    # What the real `list_tasks`/`list_events` raise once a token is stored
+    # but the API rejects it or the client library is missing — see
+    # backend.connectors.ConnectorUnavailable.
+    raise ConnectorUnavailable("401 Unauthorized")
+
+
+def test_agenda_returns_200_with_connector_errors_when_todoist_fails(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.connectors import gcal, todoist
+
+    monkeypatch.setattr(gcal, "list_events", lambda day, service=None: [])
+    monkeypatch.setattr(gcal, "configured", lambda: False)
+    monkeypatch.setattr(todoist, "list_tasks", _reject)
+    monkeypatch.setattr(todoist, "configured", lambda: True)
+
+    client = TestClient(create_app(Settings(_vault_path=vault)))
+    response = client.get("/api/agenda")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "todoist" in payload["connector_errors"]
+    assert "Vault task due today" in [task["text"] for task in payload["tasks"]]
+
+
+def test_agenda_returns_200_with_connector_errors_when_gcal_fails(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.connectors import gcal, todoist
+
+    monkeypatch.setattr(gcal, "list_events", _reject)
+    monkeypatch.setattr(gcal, "configured", lambda: True)
+    monkeypatch.setattr(todoist, "list_tasks", lambda api=None: [])
+    monkeypatch.setattr(todoist, "configured", lambda: False)
+
+    client = TestClient(create_app(Settings(_vault_path=vault)))
+    response = client.get("/api/agenda")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "gcal" in payload["connector_errors"]
+    assert payload["events"] == []
+
+
+def test_tasks_board_returns_200_with_unchanged_shape_when_todoist_fails(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.connectors import todoist
+
+    monkeypatch.setattr(todoist, "list_tasks", _reject)
+
+    client = TestClient(create_app(Settings(_vault_path=vault)))
+    response = client.get("/api/tasks")
+
+    assert response.status_code == 200
+    board = response.json()
+    assert set(board.keys()) == {"overdue", "today", "week", "someday"}
+    assert "Vault task due today" in [task["text"] for task in board["today"]]

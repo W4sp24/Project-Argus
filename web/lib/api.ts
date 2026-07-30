@@ -429,8 +429,12 @@ export function deleteCustomAgent(id: string) {
   );
 }
 
-/** `needs-credentials`: a prerequisite file is missing, not just the consent. */
-export type ConnectorStatus = "wired" | "not-connected" | "needs-credentials";
+/**
+ * `needs-credentials`: a prerequisite file is missing, not just the consent.
+ * `failing`: a credential IS stored but the connector can't actually answer
+ * right now (e.g. this build is missing the client library) — see `error`.
+ */
+export type ConnectorStatus = "wired" | "not-connected" | "needs-credentials" | "failing";
 
 export interface ConnectorInfo {
   id: string;
@@ -438,6 +442,8 @@ export interface ConnectorInfo {
   status: ConnectorStatus;
   detail: string;
   can_connect: boolean;
+  /** Set only when status === "failing". */
+  error?: string | null;
 }
 
 export interface McpServerInfo {

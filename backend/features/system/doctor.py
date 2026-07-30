@@ -10,6 +10,7 @@ import uuid
 
 from pydantic import BaseModel
 
+from backend.connectors import client_library_importable
 from backend.core.config import Settings
 
 REQUIRED_TABLES = {
@@ -158,25 +159,6 @@ def _check_ollama() -> Check:
     )
 
 
-def _client_library_importable(module_name: str) -> bool:
-    """Can a connector's client library actually be imported right now?
-
-    Only ever called from inside :func:`_check_connector`, once we already
-    know no token is stored -- never at module scope -- so this adds no import
-    cost to the common case. Catches ``Exception`` broadly, not just
-    ``ImportError``: a frozen build can fail with ``OSError`` on a missing DLL
-    rather than a clean ``ModuleNotFoundError``, same as
-    ``--selftest-imports`` in ``desktop/backend/argus_server.py``.
-    """
-    import importlib
-
-    try:
-        importlib.import_module(module_name)
-        return True
-    except Exception:  # noqa: BLE001 - any failure means "not usable"
-        return False
-
-
 def _check_connector(name: str) -> Check:
     from backend.agent.credentials import KEY_PRESENT, KEY_UNKNOWN
 
@@ -211,7 +193,7 @@ def _check_connector(name: str) -> Check:
         # release.yml's `pip install -e ".[rag,gcal]"` and the spec's
         # required_metadata() section). That is a broken build, not a user
         # configuration choice, so it is FAIL, not WARN.
-        if not _client_library_importable(client_module):
+        if not client_library_importable(client_module):
             return Check(name=name, status="FAIL", detail=missing_detail)
         return Check(name=name, status="WARN", detail=f"not connected — {hint}")
     except Exception as exc:

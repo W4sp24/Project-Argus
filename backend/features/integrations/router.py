@@ -34,7 +34,7 @@ from backend.agent.credentials import (
     key_state,
     store_key,
 )
-from backend.connectors import gcal, todoist
+from backend.connectors import client_library_importable, gcal, todoist
 from backend.core.config import Settings
 from backend.core.jsonstore import save_json
 from backend.features.integrations import store
@@ -51,11 +51,14 @@ class ConnectorInfo(BaseModel):
 
     id: str
     name: str
-    #: "wired" | "not-connected" | "needs-credentials"
+    #: "wired" | "not-connected" | "needs-credentials" | "failing"
     status: str
     detail: str
     #: Whether the UI can offer a connect flow (vs an informational row).
     can_connect: bool = True
+    #: Set only when status == "failing" — why the stored credential can't
+    #: actually be used right now.
+    error: str | None = None
 
 
 class McpServerInfo(BaseModel):
@@ -171,34 +174,72 @@ def build_integrations_router(
         return settings.gcal_legacy_credentials_file
 
     def _connectors() -> list[ConnectorInfo]:
+        """Live connector state for the hub.
+
+        "wired" today means only "a keyring entry exists," which is not the
+        same as "actually works" — a build shipped without the client
+        library still reports a token as connected. The only signal checked
+        here for that is whether the client library imports: cheap and
+        local, unlike a live round-trip to Todoist/Google, which this
+        endpoint (fetched on every Integrations page load) must not do.
+        """
         gcal_ready = gcal.configured()
         has_client = _credentials_path().is_file()
+        gcal_failing = gcal_ready and not client_library_importable("google_auth_oauthlib.flow")
+        gcal_error = (
+            "this build shipped without Google Calendar support — update Argus"
+            if gcal_failing
+            else None
+        )
+
+        todoist_ready = todoist.configured()
+        todoist_failing = todoist_ready and not client_library_importable(
+            "todoist_api_python.api"
+        )
+        todoist_error = (
+            "this build shipped without Todoist support — update Argus"
+            if todoist_failing
+            else None
+        )
+
         return [
             ConnectorInfo(
                 id="gcal",
                 name="Google Calendar",
-                status="wired"
-                if gcal_ready
-                else ("not-connected" if has_client else "needs-credentials"),
-                detail=(
-                    "merged into PLANNER.TIMELINE"
+                status=(
+                    "failing"
+                    if gcal_failing
+                    else "wired"
                     if gcal_ready
-                    else (
-                        "OAuth client saved — finish the browser consent to connect"
-                        if has_client
-                        else "needs a Desktop OAuth client from Google Cloud Console"
+                    else ("not-connected" if has_client else "needs-credentials")
+                ),
+                detail=(
+                    gcal_error
+                    or (
+                        "merged into PLANNER.TIMELINE"
+                        if gcal_ready
+                        else (
+                            "OAuth client saved — finish the browser consent to connect"
+                            if has_client
+                            else "needs a Desktop OAuth client from Google Cloud Console"
+                        )
                     )
                 ),
+                error=gcal_error,
             ),
             ConnectorInfo(
                 id="todoist",
                 name="Todoist",
-                status="wired" if todoist.configured() else "not-connected",
-                detail=(
-                    "merged into TASKS.DUE"
-                    if todoist.configured()
-                    else "needs a personal API token"
+                status=(
+                    "failing"
+                    if todoist_failing
+                    else ("wired" if todoist_ready else "not-connected")
                 ),
+                detail=(
+                    todoist_error
+                    or ("merged into TASKS.DUE" if todoist_ready else "needs a personal API token")
+                ),
+                error=todoist_error,
             ),
         ]
 
@@ -231,23 +272,37 @@ def build_integrations_router(
         if not token:
             raise HTTPException(status_code=422, detail="empty Todoist token")
 
-        verified = ""
         try:
             from todoist_api_python.api import TodoistAPI
+        except ImportError as exc:
+            # todoist-api-python is a hard dependency now — an ImportError here
+            # means this build is broken, not that the client is an optional
+            # extra. Storing the token anyway is exactly what let a broken
+            # build report success and then take the agenda, task board, and
+            # planner down the moment someone connected. Mirrors the gcal 501
+            # below: a frozen build can't `pip install` its way out, so only
+            # the dev/source case gets that advice.
+            if getattr(sys, "frozen", False):
+                detail = (
+                    "This build of Argus shipped without Todoist support "
+                    "— update Argus to a version that includes it."
+                )
+            else:
+                detail = (
+                    f"Todoist support is not installed in this build ({exc}). "
+                    "Install the todoist-api-python dependency."
+                )
+            raise HTTPException(status_code=501, detail=detail) from exc
 
+        try:
             todoist.list_tasks(TodoistAPI(token))
-            verified = " and verified"
-        except ImportError:
-            # The Todoist client is an optional dependency; without it the token
-            # is still worth storing, but say plainly that nothing was checked.
-            verified = " (not verified — the Todoist client library is not installed)"
         except Exception as exc:  # noqa: BLE001 - a rejected token is normal here
             raise HTTPException(
                 status_code=422, detail=f"Todoist rejected that token: {exc}"
             ) from exc
 
         todoist.connect(token)
-        return ConnectResult(ok=True, detail=f"Todoist connected{verified}")
+        return ConnectResult(ok=True, detail="Todoist connected and verified")
 
     @router.post("/integrations/gcal/credentials", response_model=ConnectResult)
     def upload_gcal_credentials(request: GcalCredentialsRequest) -> ConnectResult:
