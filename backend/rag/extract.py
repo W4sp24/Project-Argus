@@ -6,11 +6,14 @@ answers can cite "file p.N" / "slide N" (invariant I6).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import frontmatter
+
+logger = logging.getLogger("argus.rag")
 
 NO_AI_TAG = "no-ai"
 
@@ -33,10 +36,9 @@ def _is_private(post: frontmatter.Post) -> bool:
 
 
 def _extract_markdown(file_path: Path) -> list[Block]:
-    try:
-        post = frontmatter.load(file_path)
-    except Exception:
-        return []
+    # No try/except here: extract_blocks already wraps every extractor call in
+    # one, so failures are logged and collected in exactly one place.
+    post = frontmatter.load(file_path)
     if _is_private(post):
         return []  # I3: tagged notes never enter the pipeline
     if not post.content.strip():
@@ -88,12 +90,22 @@ _EXTRACTORS = {
 }
 
 
-def extract_blocks(file_path: Path) -> list[Block]:
-    """Extract text blocks from a supported file; unsupported types yield []."""
+def extract_blocks(file_path: Path, *, errors: list[str] | None = None) -> list[Block]:
+    """Extract text blocks from a supported file; unsupported types yield [].
+
+    ``errors``, when given, receives one message on failure. The empty-list
+    return is unchanged either way — a single unreadable file must never break
+    a caller that extracts many (e.g. a full reindex) — but a caller that
+    wants to know *why* a file came back empty (rather than assume it was
+    legitimately blank) can pass a list and inspect it afterward.
+    """
     extractor = _EXTRACTORS.get(file_path.suffix.lower())
     if extractor is None:
         return []
     try:
         return extractor(file_path)
-    except Exception:
-        return []  # a single unreadable file must never break indexing
+    except Exception as exc:
+        logger.warning("failed to extract %s: %s", file_path, exc)
+        if errors is not None:
+            errors.append(str(exc))
+        return []
