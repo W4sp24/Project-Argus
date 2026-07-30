@@ -52,7 +52,9 @@ def build_review_router(settings: Settings, planner: PlannerRunner) -> APIRouter
     def approve(suggestion_id: int) -> Suggestion:
         conn = db()
         try:
-            return apply_suggestion(conn, settings.vault_path, suggestion_id)
+            return apply_suggestion(
+                conn, settings.vault_path, suggestion_id, taxonomy=settings.taxonomy
+            )
         except WriterError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         finally:

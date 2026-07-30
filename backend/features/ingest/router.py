@@ -22,7 +22,6 @@ from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.vault import suggestions as queue
 from backend.vault.writer import (
-    INGEST_FILES_DIR,
     WriterError,
     WriterForbidden,
     archive_email,
@@ -168,7 +167,11 @@ def build_ingest_router(settings: Settings, generator: Generator, index_factory:
             )
         try:
             rel_path = save_ingest_file(
-                settings.vault_path, target or INGEST_FILES_DIR, name, await file.read()
+                settings.vault_path,
+                target or settings.taxonomy.ingest_files,
+                name,
+                await file.read(),
+                taxonomy=settings.taxonomy,
             )
         except WriterForbidden as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -197,6 +200,7 @@ def build_ingest_router(settings: Settings, generator: Generator, index_factory:
                 subject=parsed["subject"],
                 sender=parsed["sender"],
                 email_date=parsed["date"],
+                taxonomy=settings.taxonomy,
             )
         except WriterError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

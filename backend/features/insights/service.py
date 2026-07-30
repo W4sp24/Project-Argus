@@ -18,7 +18,6 @@ from pydantic import BaseModel
 
 from backend.connectors import gcal
 from backend.core.config import Settings
-from backend.vault.paths import EXCLUDED_TOP_DIRS
 from backend.vault.tasks import refresh_cache
 
 DONE_DATE_RE = re.compile(r"✅\s*(\d{4}-\d{2}-\d{2})")
@@ -48,10 +47,11 @@ class InsightsSummary(BaseModel):
 
 
 def _completions_by_day(settings: Settings) -> dict[str, int]:
+    excluded_top_dirs = settings.taxonomy.excluded_top_dirs
     counts: dict[str, int] = {}
     for file_path in settings.vault_path.rglob("*.md"):
         relative = file_path.relative_to(settings.vault_path)
-        if any(part in EXCLUDED_TOP_DIRS for part in relative.parts):
+        if any(part in excluded_top_dirs for part in relative.parts):
             continue
         try:
             text = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -107,7 +107,7 @@ def insights_summary(
     settings: Settings, conn: sqlite3.Connection, today: date | None = None
 ) -> InsightsSummary:
     today = today or date.today()
-    refresh_cache(conn, settings.vault_path)
+    refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
 
     completions = _completions_by_day(settings)
     window = [(today - timedelta(days=i)).isoformat() for i in range(TREND_DAYS - 1, -1, -1)]
@@ -162,6 +162,7 @@ class HeatmapResponse(BaseModel):
 
 def _note_touches_by_day(settings: Settings) -> dict[str, int]:
     """Notes created/edited per day, from the vault's git history (I2 keeps it rich)."""
+    excluded_top_dirs = settings.taxonomy.excluded_top_dirs
     result = subprocess.run(
         ["git", "log", f"--since={HEATMAP_DAYS + 1} days ago", "--date=short",
          "--pretty=format:@%ad", "--name-only"],
@@ -177,7 +178,7 @@ def _note_touches_by_day(settings: Settings) -> dict[str, int]:
         if not line or day is None:
             continue
         path = PurePosixPath(line)
-        if path.suffix != ".md" or any(part in EXCLUDED_TOP_DIRS for part in path.parts):
+        if path.suffix != ".md" or any(part in excluded_top_dirs for part in path.parts):
             continue
         counts[day] = counts.get(day, 0) + 1
     return counts
@@ -185,7 +186,7 @@ def _note_touches_by_day(settings: Settings) -> dict[str, int]:
 
 def _captures_by_day(settings: Settings) -> dict[str, int]:
     counts: dict[str, int] = {}
-    inbox = settings.vault_path / "00-Inbox"
+    inbox = settings.vault_path / settings.taxonomy.inbox
     if inbox.is_dir():
         for note in inbox.glob("*.md"):
             try:

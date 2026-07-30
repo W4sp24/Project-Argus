@@ -26,6 +26,7 @@ from backend.agent.adapters import (
     text_result,
 )
 from backend.core.config import Settings
+from backend.core.taxonomy import Taxonomy
 from backend.rag.index import VaultIndex
 from backend.telemetry.audit import log_prompt
 from backend.vault.paths import is_indexable
@@ -39,6 +40,19 @@ DISALLOWED_TOOLS = ("Bash", "Write", "Edit")  # read-only agent (P1)
 # Generous: a cold embedding-model load is ~20s, and proceeding early means a
 # failed search rather than a slow one.
 WARM_TIMEOUT_SECONDS = 90.0
+
+
+def _load_system_prompt(taxonomy: Taxonomy) -> str:
+    """``chat.md`` with the taxonomy's folder names templated in.
+
+    The prompt tells the model which folder is off-limits (I3); if the
+    taxonomy is configurable, a prompt naming the wrong folder would actively
+    mislead the model into thinking a *different* (possibly non-private)
+    folder is the protected one. Simple string substitution, not str.format,
+    so the markdown's own braces (none today, but future-proof) are never at
+    risk of a KeyError.
+    """
+    return PROMPT_PATH.read_text(encoding="utf-8").replace("{{PRIVATE_DIR}}", taxonomy.private)
 
 
 def _tool_text(payload: Any) -> dict[str, Any]:
@@ -92,6 +106,7 @@ def build_vault_tools(
             settings.vault_path,
             k=8,
             course=str(args["course"]) if args.get("course") else None,
+            taxonomy=settings.taxonomy,
         )
         if not hits:
             return _tool_text({"results": [], "note": "no matches in the vault"})
@@ -119,7 +134,7 @@ def build_vault_tools(
 
     async def read_note(args: dict[str, Any]) -> dict[str, Any]:
         rel_path = str(args["path"]).replace("\\", "/")
-        if not is_indexable(rel_path):
+        if not is_indexable(rel_path, taxonomy=settings.taxonomy):
             return _tool_text("error: that path is not readable")
         file_path = settings.vault_path / rel_path
         if not file_path.is_file():
@@ -134,7 +149,7 @@ def build_vault_tools(
         conn = connect(settings.db_path)
         try:
             init_schema(conn)
-            refresh_cache(conn, settings.vault_path)
+            refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn, today=date.today())
         finally:
             conn.close()
@@ -185,7 +200,7 @@ class ChatAgent:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._index = VaultIndex(settings.db_path.parent / "chroma")
+        self._index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
         # Set when warming finishes, so vault searches can wait rather than
         # race the still-initializing chroma client. See build_vault_tools.
         self._ready = threading.Event()
@@ -240,7 +255,7 @@ class ChatAgent:
         recorded = False
         try:
             async for event in adapter.run(
-                system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
+                system_prompt=_load_system_prompt(self._settings.taxonomy),
                 user_message=message,
                 tools=tools,
                 max_turns=MAX_TURNS,

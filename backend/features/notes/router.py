@@ -47,12 +47,12 @@ def build_notes_router(settings: Settings) -> APIRouter:
 
     @router.get("/notes", response_model=list[NoteInfo])
     def notes() -> list[NoteInfo]:
-        return list_notes(settings.vault_path)
+        return list_notes(settings.vault_path, taxonomy=settings.taxonomy)
 
     @router.get("/note", response_model=NoteContent)
     def get_note(path: str) -> NoteContent:
         try:
-            resolved = guard_user_path(settings.vault_path, path)
+            resolved = guard_user_path(settings.vault_path, path, taxonomy=settings.taxonomy)
         except WriterError as exc:
             raise_http(exc)
         if not resolved.is_file():
@@ -62,7 +62,9 @@ def build_notes_router(settings: Settings) -> APIRouter:
     @router.post("/note/create", response_model=NoteContent, status_code=201)
     def create_note(request: NoteCreate) -> NoteContent:
         try:
-            rel_path = writer.create_note(settings.vault_path, request.path, request.content)
+            rel_path = writer.create_note(
+                settings.vault_path, request.path, request.content, taxonomy=settings.taxonomy
+            )
         except WriterError as exc:
             raise_http(exc)
         return NoteContent(path=rel_path, content=request.content)
@@ -71,12 +73,16 @@ def build_notes_router(settings: Settings) -> APIRouter:
     def put_note(request: NoteUpdate) -> NoteContent:
         try:
             writer.update_note(
-                settings.vault_path, request.path, request.expected_content, request.new_content
+                settings.vault_path,
+                request.path,
+                request.expected_content,
+                request.new_content,
+                taxonomy=settings.taxonomy,
             )
         except WriterConflict as exc:
-            current = guard_user_path(settings.vault_path, request.path).read_text(
-                encoding="utf-8"
-            )
+            current = guard_user_path(
+                settings.vault_path, request.path, taxonomy=settings.taxonomy
+            ).read_text(encoding="utf-8")
             raise_http(exc, current_content=current)
         except WriterError as exc:
             raise_http(exc)
@@ -85,7 +91,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
     @router.delete("/note")
     def remove_note(path: str) -> dict:
         try:
-            writer.delete_note(settings.vault_path, path)
+            writer.delete_note(settings.vault_path, path, taxonomy=settings.taxonomy)
         except WriterError as exc:
             raise_http(exc)
         return {"path": path}

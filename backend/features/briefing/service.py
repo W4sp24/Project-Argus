@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from backend.connectors import gcal
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.vault.tasks import TaskItem, bucketed_tasks, parse_task_line, refresh_cache
 
 logger = logging.getLogger(__name__)
@@ -44,8 +45,11 @@ class BriefingData(BaseModel):
     weak_topics: list[str]
 
 
-def _yesterday_unfinished(vault_path: Path, today: date) -> list[str]:
-    note = vault_path / "10-Daily" / f"{(today - timedelta(days=1)).isoformat()}.md"
+def _yesterday_unfinished(
+    vault_path: Path, today: date, *, taxonomy: Taxonomy | None = None
+) -> list[str]:
+    tax = taxonomy or active_taxonomy()
+    note = vault_path / tax.daily / f"{(today - timedelta(days=1)).isoformat()}.md"
     if not note.is_file():
         return []
     unfinished = []
@@ -66,9 +70,10 @@ def _exam_countdowns(buckets: dict[str, list[TaskItem]], today: date) -> list[di
     return sorted(countdowns, key=lambda item: item["days_left"])
 
 
-def _weak_topics(vault_path: Path) -> list[str]:
+def _weak_topics(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[str]:
+    tax = taxonomy or active_taxonomy()
     topics = []
-    for queue_file in sorted(vault_path.glob("15-Courses/*/study/review-queue.md")):
+    for queue_file in sorted(vault_path.glob(tax.review_queue_glob)):
         for line in queue_file.read_text(encoding="utf-8").splitlines():
             match = UNCHECKED_RE.match(line)
             if match:
@@ -79,7 +84,8 @@ def _weak_topics(vault_path: Path) -> list[str]:
 def briefing_data(settings: Settings, conn: sqlite3.Connection, today: date) -> BriefingData:
     """Assemble the day's facts. Connectors degrade to empty when unconfigured."""
     vault = settings.vault_path
-    refresh_cache(conn, vault)
+    tax = settings.taxonomy
+    refresh_cache(conn, vault, taxonomy=tax)
     buckets = bucketed_tasks(conn, today=today)
     events, _gcal_error = gcal.list_events_safe(today)
     return BriefingData(
@@ -87,9 +93,9 @@ def briefing_data(settings: Settings, conn: sqlite3.Connection, today: date) -> 
         events=events,
         due_today=buckets["today"],
         overdue=buckets["overdue"],
-        yesterday_unfinished=_yesterday_unfinished(vault, today),
+        yesterday_unfinished=_yesterday_unfinished(vault, today, taxonomy=tax),
         exam_countdowns=_exam_countdowns(buckets, today),
-        weak_topics=_weak_topics(vault),
+        weak_topics=_weak_topics(vault, taxonomy=tax),
     )
 
 
@@ -197,10 +203,12 @@ def compose_briefing(
             # Audited only on success, and against the model that actually ran.
             # Logging before the call claimed opus had read these paths even
             # when the composer never started.
-            yesterday_note = f"10-Daily/{(resolved_today - timedelta(days=1)).isoformat()}.md"
+            yesterday_note = (
+                f"{settings.taxonomy.daily}/{(resolved_today - timedelta(days=1)).isoformat()}.md"
+            )
             queue_paths = [
                 path.relative_to(settings.vault_path).as_posix()
-                for path in settings.vault_path.glob("15-Courses/*/study/review-queue.md")
+                for path in settings.vault_path.glob(settings.taxonomy.review_queue_glob)
             ]
             log_prompt_conn(
                 conn, "briefing", settings.default_model, [yesterday_note, *queue_paths]

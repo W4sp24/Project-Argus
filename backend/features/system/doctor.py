@@ -90,6 +90,42 @@ def _check_chroma(settings: Settings) -> Check:
     )
 
 
+def _check_taxonomy(settings: Settings) -> Check:
+    """Which configured taxonomy folders are missing from this vault.
+
+    WARN, never FAIL: a brand-new or partially-populated vault legitimately
+    lacks some (or all) of these folders — the writer creates them lazily on
+    first use — so their absence must never read as "broken install" to
+    someone who has only just pointed Argus at a vault.
+    """
+    vault = settings.vault_path
+    tax = settings.taxonomy
+    named = {
+        "inbox": tax.inbox,
+        "daily": tax.daily,
+        "courses": tax.courses,
+        "projects": tax.projects,
+        "areas": tax.areas,
+        "people": tax.people,
+        "reference": tax.reference,
+        "journal": tax.journal,
+        "private": tax.private,
+    }
+    missing = [
+        f"{label} ({folder}/)" for label, folder in named.items() if not (vault / folder).is_dir()
+    ]
+    if not missing:
+        return Check(name="taxonomy", status="OK", detail="all configured folders exist")
+    return Check(
+        name="taxonomy",
+        status="WARN",
+        detail=(
+            "not yet created (fine for a new/partial vault, or a taxonomy just changed): "
+            + ", ".join(missing)
+        ),
+    )
+
+
 def _check_config_files(settings: Settings) -> Check:
     """Did any registry fail to parse and get quarantined?
 
@@ -215,6 +251,9 @@ def run_checks(settings: Settings) -> list[Check]:
         _check_config_files(settings)
         if vault_ok
         else Check(name="config-files", status="WARN", detail="skipped — vault missing"),
+        _check_taxonomy(settings)
+        if vault_ok
+        else Check(name="taxonomy", status="WARN", detail="skipped — vault missing"),
         _check_keyring(),
         _check_ollama(),
         _check_connector("gcal"),

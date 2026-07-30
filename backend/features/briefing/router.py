@@ -21,7 +21,7 @@ class BriefingResponse(BaseModel):
 
 def read_briefing_section(settings: Settings, today: str) -> str | None:
     """Extract the ``## Briefing`` section body from today's daily note."""
-    note = settings.vault_path / "10-Daily" / f"{today}.md"
+    note = settings.vault_path / settings.taxonomy.daily / f"{today}.md"
     if not note.is_file():
         return None
     lines = note.read_text(encoding="utf-8").splitlines()
@@ -43,7 +43,7 @@ def build_briefing_router(settings: Settings, composer: Composer | None) -> APIR
             markdown = compose_briefing(settings, conn, composer=composer)
         finally:
             conn.close()
-        path = write_briefing(settings.vault_path, markdown)
+        path = write_briefing(settings.vault_path, markdown, taxonomy=settings.taxonomy)
         return BriefingResponse(date=date.today().isoformat(), path=path, markdown=markdown)
 
     @router.get("/briefing", response_model=BriefingResponse)
@@ -52,6 +52,8 @@ def build_briefing_router(settings: Settings, composer: Composer | None) -> APIR
         markdown = read_briefing_section(settings, today)
         if markdown is None:
             raise HTTPException(status_code=404, detail="no briefing yet today")
-        return BriefingResponse(date=today, path=f"10-Daily/{today}.md", markdown=markdown)
+        return BriefingResponse(
+            date=today, path=f"{settings.taxonomy.daily}/{today}.md", markdown=markdown
+        )
 
     return router

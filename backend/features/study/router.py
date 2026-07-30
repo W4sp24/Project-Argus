@@ -78,11 +78,13 @@ def build_study_router(
 
     @router.get("/courses", response_model=list[CourseInfo])
     def list_courses() -> list[CourseInfo]:
-        return courses(settings.vault_path)
+        return courses(settings.vault_path, taxonomy=settings.taxonomy)
 
     @router.post("/upload")
     async def upload(course: Annotated[str, Form()], file: UploadFile) -> dict[str, str]:
-        course_dir = settings.vault_path / "15-Courses" / SAFE_NAME_RE.sub("", course)
+        course_dir = settings.vault_path / settings.taxonomy.course_dir(
+            SAFE_NAME_RE.sub("", course)
+        )
         if not course_dir.is_dir():
             raise HTTPException(status_code=404, detail=f"no course folder {course}")
         name = SAFE_NAME_RE.sub("_", file.filename or "upload.bin")
@@ -128,6 +130,7 @@ def build_study_router(
                 corpus,
                 request.course,
                 request.scope,
+                taxonomy=settings.taxonomy,
             )
         except StudyError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -147,6 +150,7 @@ def build_study_router(
                 request.topics,
                 request.n,
                 request.difficulty,
+                taxonomy=settings.taxonomy,
             )
         except StudyError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -200,7 +204,9 @@ def build_study_router(
     def attempt(exam_id: int, request: AttemptRequest) -> AttemptResult:
         conn = db()
         try:
-            return grade_attempt(conn, settings.vault_path, exam_id, request.answers)
+            return grade_attempt(
+                conn, settings.vault_path, exam_id, request.answers, taxonomy=settings.taxonomy
+            )
         except StudyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         finally:

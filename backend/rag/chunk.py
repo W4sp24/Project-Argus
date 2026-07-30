@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.extract import Block
 
 TARGET_WORDS = 260  # ~350 tokens
@@ -18,7 +19,10 @@ OVERLAP_WORDS = 40  # ~50 tokens
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 DATE_IN_NAME_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
-COURSES_DIR = "15-Courses"
+
+# Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
+# settings.taxonomy.courses / active_taxonomy().courses.
+COURSES_DIR = Taxonomy().courses
 
 
 @dataclass
@@ -69,9 +73,9 @@ def _note_date(front: dict[str, Any], rel_path: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _course_of(rel_path: str) -> str | None:
+def _course_of(rel_path: str, courses_dir: str) -> str | None:
     parts = rel_path.split("/")
-    if len(parts) >= 2 and parts[0] == COURSES_DIR:
+    if len(parts) >= 2 and parts[0] == courses_dir:
         return parts[1]
     return None
 
@@ -87,8 +91,11 @@ def _title_of(front: dict[str, Any], text: str, rel_path: str) -> str:
     return rel_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
 
-def chunk_blocks(blocks: list[Block], rel_path: str) -> list[Chunk]:
+def chunk_blocks(
+    blocks: list[Block], rel_path: str, *, taxonomy: Taxonomy | None = None
+) -> list[Chunk]:
     """Chunk extracted blocks for one vault-relative file path."""
+    tax = taxonomy or active_taxonomy()
     chunks: list[Chunk] = []
     for block in blocks:
         front = block.meta.get("frontmatter", {}) or {}
@@ -101,7 +108,7 @@ def chunk_blocks(blocks: list[Block], rel_path: str) -> list[Chunk]:
             "date": _note_date(front, rel_path) or "",
             "tags": ",".join(str(tag) for tag in tags),
             "wikilinks": ",".join(dict.fromkeys(WIKILINK_RE.findall(block.text))),
-            "course": _course_of(rel_path) or "",
+            "course": _course_of(rel_path, tax.courses) or "",
         }
         for key in ("page", "slide"):
             if key in block.meta:

@@ -8,13 +8,16 @@ from typing import Any
 import frontmatter
 from pydantic import BaseModel
 
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.index import VaultIndex
 
-COURSES_DIR = "15-Courses"
+# Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
+# settings.taxonomy.courses / active_taxonomy().courses.
+COURSES_DIR = Taxonomy().courses
 
 
 class CourseInfo(BaseModel):
-    """One course folder under 15-Courses/."""
+    """One course folder under the taxonomy's courses dir."""
 
     code: str
     title: str
@@ -23,9 +26,10 @@ class CourseInfo(BaseModel):
     notes: int
 
 
-def courses(vault_path: Path) -> list[CourseInfo]:
+def courses(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[CourseInfo]:
     """All courses that have a course.md hub note."""
-    root = vault_path / COURSES_DIR
+    tax = taxonomy or active_taxonomy()
+    root = vault_path / tax.courses
     found: list[CourseInfo] = []
     if not root.is_dir():
         return found
@@ -42,7 +46,7 @@ def courses(vault_path: Path) -> list[CourseInfo]:
             CourseInfo(
                 code=course_dir.name,
                 title=title,
-                path=f"{COURSES_DIR}/{course_dir.name}/course.md",
+                path=f"{tax.courses}/{course_dir.name}/course.md",
                 materials=sum(1 for _ in (course_dir / "materials").glob("*") if _.is_file())
                 if (course_dir / "materials").is_dir()
                 else 0,

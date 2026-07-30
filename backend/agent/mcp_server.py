@@ -49,7 +49,7 @@ def read_only_tools(settings: Settings) -> list[ToolSpec]:
     from backend.agent.runtime import build_vault_tools
     from backend.rag.index import VaultIndex
 
-    index = VaultIndex(settings.db_path.parent / "chroma")
+    index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
     ready = threading.Event()
 
     def warm() -> None:

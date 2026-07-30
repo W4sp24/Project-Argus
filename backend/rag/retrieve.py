@@ -1,7 +1,7 @@
 """Hybrid retrieval: vector + BM25 -> RRF -> recency boost -> link expansion.
 
-Daily-life context favors this week over last year, so chunks from
-``10-Daily/`` and ``00-Inbox/`` decay with age. Retrieved chunks that link to
+Daily-life context favors this week over last year, so chunks from the
+taxonomy's daily and inbox dirs decay with age. Retrieved chunks that link to
 other notes pull along one hop of context (the linked note's title line).
 """
 
@@ -12,22 +12,26 @@ import re
 from datetime import date
 from pathlib import Path
 
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.index import VaultIndex
 
 RRF_K = 60
 POOL_SIZE = 20
-RECENCY_HALF_DIRS = ("10-Daily/", "00-Inbox/")
 RECENCY_TAU_DAYS = 45.0
 TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+# Deprecated for 0.3 — bound to Taxonomy()'s defaults; prefer
+# settings.taxonomy.recency_dirs / active_taxonomy().recency_dirs.
+RECENCY_HALF_DIRS = Taxonomy().recency_dirs
 
 
 def _tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
 
 
-def _recency_multiplier(meta: dict, today: date) -> float:
+def _recency_multiplier(meta: dict, today: date, recency_dirs: tuple[str, ...]) -> float:
     path = str(meta.get("path", ""))
-    if not path.startswith(RECENCY_HALF_DIRS):
+    if not path.startswith(recency_dirs):
         return 1.0
     raw_date = str(meta.get("date") or "")
     try:
@@ -47,7 +51,7 @@ def _passes_filters(meta: dict, course: str | None, tags: list[str] | None) -> b
     return True
 
 
-def _expand_wikilinks(hits: list[dict], vault_path: Path) -> list[dict]:
+def _expand_wikilinks(hits: list[dict], vault_path: Path, taxonomy: Taxonomy) -> list[dict]:
     """Append one-hop context: the title line of each linked note."""
     seen: set[str] = set()
     extras: list[dict] = []
@@ -61,7 +65,7 @@ def _expand_wikilinks(hits: list[dict], vault_path: Path) -> list[dict]:
                 rel = candidate.relative_to(vault_path).as_posix()
                 from backend.vault.paths import is_indexable
 
-                if not is_indexable(rel):
+                if not is_indexable(rel, taxonomy=taxonomy):
                     continue
                 first_line = ""
                 for line in candidate.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -89,8 +93,11 @@ def retrieve(
     tags: list[str] | None = None,
     expand_links: bool = True,
     today: date | None = None,
+    *,
+    taxonomy: Taxonomy | None = None,
 ) -> list[dict]:
     """Top-k chunks for a query: [{text, meta, score}], best first."""
+    tax = taxonomy or active_taxonomy()
     today = today or date.today()
 
     vector_hits = index.query(query, n_results=POOL_SIZE)
@@ -122,10 +129,10 @@ def retrieve(
             {
                 "text": hit["text"],
                 "meta": hit["meta"],
-                "score": rrf * _recency_multiplier(hit["meta"], today),
+                "score": rrf * _recency_multiplier(hit["meta"], today, tax.recency_dirs),
             }
         )
     scored.sort(key=lambda hit: hit["score"], reverse=True)
     top = scored[:k]
 
-    return _expand_wikilinks(top, vault_path) if expand_links else top
+    return _expand_wikilinks(top, vault_path, tax) if expand_links else top
