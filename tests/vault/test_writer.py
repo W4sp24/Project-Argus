@@ -77,6 +77,25 @@ def test_capture_requires_git_vault(tmp_path: Path) -> None:
         append_capture(bare, "hello")
 
 
+def test_snapshot_without_the_git_binary_is_a_writer_error(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing git *binary* must not escape as a 500.
+
+    ``check=False`` covers git exiting non-zero; it does nothing for git not
+    being on PATH at all, which raises FileNotFoundError out of subprocess and
+    used to surface as an opaque 500 from every write route.
+    """
+
+    def _no_git(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError(2, "The system cannot find the file specified", "git")
+
+    monkeypatch.setattr(subprocess, "run", _no_git)
+
+    with pytest.raises(WriterError, match="git is not on PATH"):
+        append_capture(vault, "hello")
+
+
 WRITE_CALL_RE = re.compile(r"\.write_text\(|\.writelines\(|open\([^)]*[\"'][wa][\"']")
 # cli.py is the vault *installer* (creates the template before any user data
 # exists); study/ may create new files under 15-Courses/*/study/ (I1 exemption).

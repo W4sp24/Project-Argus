@@ -82,11 +82,37 @@ def _extract_docx(file_path: Path) -> list[Block]:
     return [Block(text="\n".join(paragraphs), meta={})]
 
 
+def _extract_eml(file_path: Path) -> list[Block]:
+    """One block per email: headers worth searching, then the plain body.
+
+    The ingest route has accepted ``.eml`` since it was written, but there was
+    no extractor for it -- so a dropped email was saved to the vault and then
+    indexed to zero chunks, surfacing as "saved -- indexing unavailable". The
+    subject and sender are prepended to the block text because searching for
+    who a mail was from is at least as common as searching its body.
+    """
+    from backend.rag.email import parse_email
+
+    parsed = parse_email(file_path.read_text(encoding="utf-8", errors="replace"))
+    body = str(parsed.get("body") or "").strip()
+    header_lines = [
+        f"{label}: {parsed[key]}"
+        for label, key in (("Subject", "subject"), ("From", "sender"), ("Date", "date"))
+        if parsed.get(key)
+    ]
+    text = "\n".join([*header_lines, "", body]).strip() if header_lines else body
+    if not text:
+        return []
+    meta = {key: parsed[key] for key in ("subject", "sender", "date") if parsed.get(key)}
+    return [Block(text=text, meta=meta)]
+
+
 _EXTRACTORS = {
     ".md": _extract_markdown,
     ".pdf": _extract_pdf,
     ".pptx": _extract_pptx,
     ".docx": _extract_docx,
+    ".eml": _extract_eml,
 }
 
 

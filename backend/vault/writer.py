@@ -57,17 +57,28 @@ def _git_snapshot(vault_path: Path, reason: str) -> None:
         raise WriterError(
             f"vault {vault_path} is not a git repository — run `git init` there first (I2)"
         )
-    subprocess.run(
-        ["git", "add", "-A"], cwd=vault_path, capture_output=True, text=True, check=False
-    )
-    # --allow-empty: the snapshot marks the pre-apply point even on a clean tree.
-    subprocess.run(
-        ["git", "commit", "--allow-empty", "-m", f"argus: pre-apply snapshot ({reason})"],
-        cwd=vault_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # FileNotFoundError, not a git error: subprocess raises it when the *binary*
+    # is absent from PATH, and it is not caught by check=False. Uncaught it
+    # escaped as a 500 from every write route -- an opaque failure for what is
+    # really a missing prerequisite. As a WriterError it reaches the user as the
+    # 422 the routes already map WriterError to, saying what to install.
+    try:
+        subprocess.run(
+            ["git", "add", "-A"], cwd=vault_path, capture_output=True, text=True, check=False
+        )
+        # --allow-empty: the snapshot marks the pre-apply point even on a clean tree.
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", f"argus: pre-apply snapshot ({reason})"],
+            cwd=vault_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise WriterError(
+            "git is not on PATH — Argus needs it to snapshot the vault before "
+            "each write so the change is undoable (I2). Install git and restart."
+        ) from exc
 
 
 def guard_user_path(
