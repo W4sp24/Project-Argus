@@ -184,6 +184,16 @@ class Taxonomy:
     def preferences_note(self) -> str:
         return f"{self.areas}/assistant-preferences.md"
 
+    @property
+    def papers_dir(self) -> str:
+        """Research mode's reading queue: one note per paper (redesign §4)."""
+        return f"{self.areas}/papers"
+
+    @property
+    def paper_highlights_note(self) -> str:
+        """The single running highlights log Research mode appends to."""
+        return f"{self.papers_dir}/highlights.md"
+
     def seed_folders(self) -> list[str]:
         """Empty folders ``argus init`` creates — replaces the old ``cli.EMPTY_FOLDERS``.
 
