@@ -25,9 +25,14 @@ Differences from ``uvicorn backend.main:app`` (the dev path, unchanged):
   static analyser cannot see, which is the single most common way a frozen
   uvicorn dies at bind time. Naming them pins the imports.
 
-Also carries an ``--init`` branch so the onboarding wizard can create a vault
-without a second frozen binary. It delegates to ``backend.cli.init_vault`` --
-the same code path ``argus init`` uses -- rather than reimplementing it.
+Also carries the diagnostic branches so the onboarding wizard and the release
+smoke gate never need a second frozen binary: ``--init`` delegates to
+``backend.cli.init_vault`` -- the same code path ``argus init`` uses -- rather
+than reimplementing it; ``--doctor`` runs the same checks as ``argus doctor``;
+and ``--selftest-imports`` actually imports every lazily-loaded optional
+dependency (the gcal/todoist connectors, chromadb, mcp, ...) up front, so a
+build that is missing one of them fails here instead of the first time a real
+user clicks Connect.
 """
 
 from __future__ import annotations
@@ -111,6 +116,47 @@ def _cmd_doctor() -> int:
     return 0
 
 
+def _cmd_selftest_imports() -> int:
+    """Import every lazily-loaded optional dependency and report what failed.
+
+    Almost everything interesting in this app -- the gcal/todoist connectors,
+    chromadb, sentence-transformers, the mcp bridge -- is imported lazily,
+    deep inside a function, precisely so the base app works without them.
+    That is also exactly why a frozen build can be missing every one of them
+    and still look completely healthy: it answers /health, --doctor comes
+    back clean, and the only person who finds out is the user who clicks
+    Connect and gets a 501 with no pip to act on it. (v0.2.0 shipped exactly
+    like this: `pip install -e ".[rag]"` in CI never installed the `gcal`
+    extra, so google_auth_oauthlib was never bundled.) This flag imports the
+    whole set up front so a bad freeze fails in the smoke gate instead of in
+    someone's support message.
+    """
+    import importlib
+
+    modules = [
+        "google_auth_oauthlib.flow",
+        "googleapiclient.discovery",
+        "google.oauth2.credentials",
+        "google.auth.transport.requests",
+        "todoist_api_python.api",
+        "chromadb",
+        "sentence_transformers",
+        "keyring",
+        "mcp.server",
+        "fsrs",
+    ]
+    missing = []
+    for name in modules:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001 - a frozen build can fail with
+            # OSError on a missing DLL, not just ImportError, so this has to
+            # catch broadly to keep sweeping the rest of the list.
+            missing.append({"module": name, "error": str(exc)})
+    _emit({"ok": not missing, "missing": missing})
+    return 0 if not missing else 1
+
+
 def _cmd_serve(host: str, parent_pid: int) -> int:
     import uvicorn
 
@@ -178,6 +224,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--init", metavar="PATH", help="create a vault and exit")
     parser.add_argument("--doctor", action="store_true", help="print checks as JSON and exit")
     parser.add_argument(
+        "--selftest-imports",
+        action="store_true",
+        help="import every lazily-loaded optional dependency and report failures as JSON",
+    )
+    parser.add_argument(
         "--mcp-server",
         action="store_true",
         help="serve the vault's read-only tools over stdio (MCP) and exit",
@@ -195,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init(Path(args.init).expanduser())
     if args.doctor:
         return _cmd_doctor()
+    if args.selftest_imports:
+        return _cmd_selftest_imports()
     if args.mcp_server:
         return _cmd_mcp_server()
     parent_pid = args.parent_pid if args.parent_pid is not None else os.getppid()
