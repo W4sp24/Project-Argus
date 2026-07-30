@@ -8,7 +8,14 @@ from fastapi.testclient import TestClient
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.features.flashcards.store import due_cards, generate_deck, grade_card, parse_qa_pairs
+from backend.features.flashcards.store import (
+    FlashcardsError,
+    delete_deck,
+    due_cards,
+    generate_deck,
+    grade_card,
+    parse_qa_pairs,
+)
 from backend.main import create_app
 
 FLASHCARDS_MD = """\
@@ -117,6 +124,26 @@ def test_grading_again_shrinks_interval_relative_to_prior_good_grades(tmp_path: 
     again_interval = (datetime.fromisoformat(again_result.due_at) - now).total_seconds()
 
     assert again_interval < good_interval, "'again' must reset scheduling to a short interval"
+
+
+def test_delete_deck_removes_deck_and_its_reviews(tmp_path: Path, conn) -> None:
+    vault = _vault(tmp_path)
+    deck_id = generate_deck(vault, conn, "CS201")
+    card_id = due_cards(conn, deck_id)[0].id
+    grade_card(conn, deck_id, card_id, "good")
+
+    reviews_removed = delete_deck(conn, deck_id)
+
+    assert reviews_removed == 1
+    assert conn.execute(
+        "SELECT * FROM flashcard_decks WHERE id = ?", (deck_id,)
+    ).fetchone() is None
+    assert conn.execute("SELECT * FROM flashcard_reviews").fetchone() is None
+
+
+def test_delete_deck_missing_raises(conn) -> None:
+    with pytest.raises(FlashcardsError):
+        delete_deck(conn, 99999)
 
 
 def test_grade_card_nonexistent_card_raises(tmp_path: Path, conn) -> None:

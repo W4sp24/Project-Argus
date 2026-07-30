@@ -13,6 +13,7 @@ line changes) behind the approval gate.
 from __future__ import annotations
 
 import re
+import shutil
 import sqlite3
 import subprocess
 from collections.abc import Callable
@@ -469,6 +470,32 @@ def delete_note(vault_path: Path, rel_path: str, *, taxonomy: Taxonomy | None = 
     _git_snapshot(vault_path, f"delete note {rel_path}")
     note.unlink()
     _argus_log(vault_path, f"deleted note {rel_path}", taxonomy=tax)
+
+
+def delete_course_tree(vault_path: Path, code: str, *, taxonomy: Taxonomy | None = None) -> None:
+    """Delete an entire course folder (user-initiated); the pre-apply snapshot is the undo.
+
+    ``code`` must be a single path segment that resolves to a direct child of
+    the taxonomy's courses dir — nothing looser. This is the one writer
+    function that ``shutil.rmtree``s a whole subtree, so a traversal or
+    off-target ``code`` here doesn't corrupt one note, it deletes the wrong
+    directory wholesale; :func:`guard_user_path` alone (built for single
+    files) isn't a strict enough gate for that blast radius.
+    """
+    tax = taxonomy or active_taxonomy()
+    if not code or code != code.strip() or "/" in code or "\\" in code or ".." in code:
+        raise WriterForbidden(f"{code!r} is not a valid course code")
+    rel_path = tax.course_dir(code)
+    course_dir = guard_user_path(vault_path, rel_path, taxonomy=tax)
+    if course_dir.parent != (vault_path / tax.courses).resolve():
+        raise WriterForbidden(
+            f"{code!r} does not resolve to a direct child of {tax.courses}/ — refusing to delete"
+        )
+    if not course_dir.is_dir():
+        raise WriterMissing(f"{rel_path} does not exist")
+    _git_snapshot(vault_path, f"delete course {code}")
+    shutil.rmtree(course_dir)
+    _argus_log(vault_path, f"deleted course {rel_path}", taxonomy=tax)
 
 
 def apply_suggestion(

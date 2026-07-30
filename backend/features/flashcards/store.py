@@ -182,6 +182,25 @@ def list_decks(conn: sqlite3.Connection, course: str | None = None) -> list[Deck
     ]
 
 
+def delete_deck(conn: sqlite3.Connection, deck_id: int) -> int:
+    """Delete one deck and its reviews (children first). Returns reviews removed.
+
+    Mirrors ``backend/features/study/deletes.py::delete_exam`` — same
+    children-before-parent shape, since ``flashcard_reviews.deck_id``
+    references ``flashcard_decks`` and ``connect()`` runs with
+    ``PRAGMA foreign_keys=ON`` (no ``ON DELETE CASCADE`` on this table).
+    """
+    exists = conn.execute("SELECT 1 FROM flashcard_decks WHERE id = ?", (deck_id,)).fetchone()
+    if exists is None:
+        raise FlashcardsError(f"no flashcard deck {deck_id}")
+    reviews_removed = conn.execute(
+        "DELETE FROM flashcard_reviews WHERE deck_id = ?", (deck_id,)
+    ).rowcount
+    conn.execute("DELETE FROM flashcard_decks WHERE id = ?", (deck_id,))
+    conn.commit()
+    return reviews_removed
+
+
 def _parse_dt(value: str) -> datetime:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
