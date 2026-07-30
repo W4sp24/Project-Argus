@@ -32,6 +32,10 @@ class AgendaResponse(BaseModel):
     tasks: list[TaskItem]
     top_tasks: list[TaskItem]
     configured: dict[str, bool]
+    #: Populated only for connectors that failed this request (see
+    #: `backend.connectors.ConnectorUnavailable`); additive field, default
+    #: empty, so existing clients are unaffected.
+    connector_errors: dict[str, str] = {}
 
 
 class CaptureRequest(BaseModel):
@@ -75,17 +79,26 @@ def build_tasks_router(settings: Settings) -> APIRouter:
             conn.close()
 
         vault_today = buckets["overdue"] + buckets["today"]
-        external = [task for task in todoist.list_tasks() if not task.done]
+        todoist_tasks, todoist_error = todoist.list_tasks_safe()
+        external = [task for task in todoist_tasks if not task.done]
         due_external = [task for task in external if task.due and task.due <= target.isoformat()]
         day_tasks = vault_today + due_external
         top = day_tasks[:3] if day_tasks else buckets["week"][:3]
 
+        events, gcal_error = gcal.list_events_safe(target)
+        connector_errors: dict[str, str] = {}
+        if gcal_error:
+            connector_errors["gcal"] = gcal_error
+        if todoist_error:
+            connector_errors["todoist"] = todoist_error
+
         return AgendaResponse(
             date=target.isoformat(),
-            events=gcal.list_events(target),
+            events=events,
             tasks=day_tasks,
             top_tasks=top,
             configured={"gcal": gcal.configured(), "todoist": todoist.configured()},
+            connector_errors=connector_errors,
         )
 
     @router.get("/tasks")
@@ -97,7 +110,8 @@ def build_tasks_router(settings: Settings) -> APIRouter:
         finally:
             conn.close()
         today = date.today()
-        for task in todoist.list_tasks():
+        todoist_tasks, _todoist_error = todoist.list_tasks_safe()
+        for task in todoist_tasks:
             if not task.done:
                 buckets[bucket_of(task, today)].append(task)
         return buckets

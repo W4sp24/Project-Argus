@@ -81,9 +81,10 @@ def briefing_data(settings: Settings, conn: sqlite3.Connection, today: date) -> 
     vault = settings.vault_path
     refresh_cache(conn, vault)
     buckets = bucketed_tasks(conn, today=today)
+    events, _gcal_error = gcal.list_events_safe(today)
     return BriefingData(
         date=today.isoformat(),
-        events=gcal.list_events(today),
+        events=events,
         due_today=buckets["today"],
         overdue=buckets["overdue"],
         yesterday_unfinished=_yesterday_unfinished(vault, today),

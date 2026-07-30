@@ -64,7 +64,8 @@ def _completions_by_day(settings: Settings) -> dict[str, int]:
 
 def _event_hours(day: date) -> float:
     hours = 0.0
-    for event in gcal.list_events(day):
+    events, _gcal_error = gcal.list_events_safe(day)
+    for event in events:
         if event.all_day:
             continue
         try:

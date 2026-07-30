@@ -6,6 +6,7 @@ Setup: Todoist → Settings → Integrations → Developer → API token, then
 
 from __future__ import annotations
 
+from backend.connectors import ConnectorUnavailable
 from backend.vault.tasks import TaskItem
 
 KEYRING_SERVICE = "argus-todoist"
@@ -58,20 +59,34 @@ def disconnect() -> None:
 
 
 def list_tasks(api=None) -> list[TaskItem]:
-    """Open Todoist tasks mapped to Argus's task shape; [] when unconfigured."""
+    """Open Todoist tasks mapped to Argus's task shape; [] when unconfigured.
+
+    Raises `ConnectorUnavailable` when a token IS stored but the client
+    library can't be imported (a broken build) or the API call itself fails
+    (expired/rejected token, network outage, a Todoist outage) — see
+    `list_tasks_safe` for callers that must degrade instead of raise.
+    """
     if api is None:
         token = _stored_token()
         if token is None:
             return []
-        from todoist_api_python.api import TodoistAPI
+        try:
+            from todoist_api_python.api import TodoistAPI
+        except ImportError as exc:
+            raise ConnectorUnavailable(
+                f"Todoist client library is not installed: {exc}"
+            ) from exc
 
         api = TodoistAPI(token)
 
     priority_map = {4: "high", 3: "medium", 2: "low", 1: None}
     items: list[TaskItem] = []
-    results = api.get_tasks()
-    # todoist-api-python v3 returns a paginator of lists; v2 returns a flat list.
-    pages = results if isinstance(results, list) else list(results)
+    try:
+        results = api.get_tasks()
+        # todoist-api-python v3 returns a paginator of lists; v2 returns a flat list.
+        pages = results if isinstance(results, list) else list(results)
+    except Exception as exc:  # noqa: BLE001 - any API/network failure is "unavailable"
+        raise ConnectorUnavailable(f"Todoist request failed: {exc}") from exc
     flat = (
         pages if pages and not isinstance(pages[0], list) else [t for page in pages for t in page]
     )
@@ -87,3 +102,18 @@ def list_tasks(api=None) -> list[TaskItem]:
             )
         )
     return items
+
+
+def list_tasks_safe(api=None) -> tuple[list[TaskItem], str | None]:
+    """`list_tasks`, but for callers that must degrade rather than fail.
+
+    A calendar widget, the task board, or the planner must not take down the
+    whole dashboard because Todoist is unreachable or a build is missing the
+    client library. Returns ``(tasks, None)`` on success and ``([], message)``
+    when the connector is unavailable — ``message`` is short and safe to show
+    a user directly.
+    """
+    try:
+        return list_tasks(api), None
+    except ConnectorUnavailable as exc:
+        return [], str(exc)

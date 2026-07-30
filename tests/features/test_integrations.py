@@ -1,9 +1,11 @@
 """Tests for the integrations registry and /api/integrations."""
 
+import builtins
 import json
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.connectors import gcal, todoist
@@ -13,7 +15,6 @@ from backend.features.integrations import store
 from backend.features.integrations.mcp_client import McpProbeResult
 from backend.features.integrations.router import build_integrations_router
 from backend.main import create_app
-from fastapi import FastAPI
 
 
 @pytest.fixture()
@@ -112,10 +113,10 @@ def test_invalid_server_requests_are_rejected(settings: Settings) -> None:
     client = _client(settings, _ok_prober([]))
 
     assert client.post("/integrations/mcp", json={"name": "bad name!"}).status_code == 422
-    assert (
-        client.post("/integrations/mcp", json={"name": "ok", "transport": "carrier-pigeon"}).status_code
-        == 422
+    bad_transport = client.post(
+        "/integrations/mcp", json={"name": "ok", "transport": "carrier-pigeon"}
     )
+    assert bad_transport.status_code == 422
     # stdio with no command, and http with a non-URL.
     assert client.post("/integrations/mcp", json={"name": "ok"}).status_code == 422
     assert (
@@ -201,10 +202,8 @@ def test_gcal_credentials_are_saved_outside_the_vault(settings: Settings) -> Non
     client = _client(settings)
     payload = json.dumps({"installed": {"client_id": "x", "client_secret": "y"}})
 
-    assert (
-        client.post("/integrations/gcal/credentials", json={"credentials_json": payload}).status_code
-        == 200
-    )
+    saved = client.post("/integrations/gcal/credentials", json={"credentials_json": payload})
+    assert saved.status_code == 200
     assert settings.gcal_credentials_file.is_file()
     assert settings.gcal_credentials_file.parent.name == ".argus"
 
@@ -229,6 +228,7 @@ def test_gcal_connect_without_credentials_is_a_conflict(
 
 
 def test_todoist_connect_verifies_before_storing(settings: Settings, monkeypatch) -> None:
+    """A rejected token (bad credential, still-working build) is a 422, never stored."""
     stored: list[str] = []
     monkeypatch.setattr(todoist, "connect", lambda token: stored.append(token))
 
@@ -239,15 +239,54 @@ def test_todoist_connect_verifies_before_storing(settings: Settings, monkeypatch
     client = _client(settings)
 
     response = client.post("/integrations/todoist/connect", json={"token": "bad"})
-    # Without the optional client library installed the call cannot be verified,
-    # which is itself a valid outcome — but it must never be silently "connected".
-    if response.status_code == 422:
-        assert "rejected" in response.json()["detail"]
-        assert stored == [], "a rejected token is not stored"
-    else:
-        assert "not verified" in response.json()["detail"]
+    assert response.status_code == 422
+    assert "rejected" in response.json()["detail"]
+    assert stored == [], "a rejected token is not stored"
 
     assert client.post("/integrations/todoist/connect", json={"token": "  "}).status_code == 422
+
+
+def test_todoist_connect_with_missing_library_returns_501_and_stores_nothing(
+    settings: Settings, monkeypatch
+) -> None:
+    """todoist-api-python is a hard dependency now — a missing import means a broken
+    build, not an optional extra, so the token must never be stored (regression test
+    for the bug that made "Todoist connected (not verified...)" report ok=True)."""
+    stored: list[str] = []
+    monkeypatch.setattr(todoist, "connect", lambda token: stored.append(token))
+
+    real_import = builtins.__import__
+
+    def blocking_import(name, *args, **kwargs):
+        if name == "todoist_api_python" or name.startswith("todoist_api_python."):
+            raise ImportError(f"{name} is not installed (simulated broken build)")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocking_import)
+
+    client = _client(settings)
+    response = client.post("/integrations/todoist/connect", json={"token": "tok"})
+
+    assert response.status_code == 501
+    assert "Todoist" in response.json()["detail"]
+    assert stored == [], "an ImportError must never store the token"
+
+
+def test_connector_with_credential_but_no_library_reports_failing(
+    settings: Settings, monkeypatch
+) -> None:
+    """A stored token the build can't actually use is "failing", not "wired"."""
+    monkeypatch.setattr(todoist, "configured", lambda: True)
+    monkeypatch.setattr(
+        "backend.features.integrations.router.client_library_importable",
+        lambda module_name: False,
+    )
+
+    payload = _client(settings).get("/integrations").json()
+    by_id = {c["id"]: c for c in payload["connectors"]}
+
+    assert by_id["todoist"]["status"] == "failing"
+    assert by_id["todoist"]["error"]
 
 
 def test_disconnect_unknown_connector_is_404(settings: Settings) -> None:

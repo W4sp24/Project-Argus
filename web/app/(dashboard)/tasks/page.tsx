@@ -3,7 +3,7 @@
 import useSWR from "swr";
 import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
-import { fetcher } from "@/lib/api";
+import { fetcher, useIntegrations } from "@/lib/api";
 
 interface TaskItem {
   text: string;
@@ -25,6 +25,8 @@ const COLUMNS: { key: keyof Board; label: string; accent: string }[] = [
 
 export default function TasksPage() {
   const { data: board, error } = useSWR<Board>("/api/tasks", fetcher);
+  const { data: integrations } = useIntegrations();
+  const failing = integrations?.connectors.filter((c) => c.status === "failing") ?? [];
 
   return (
     <>
@@ -39,6 +41,12 @@ export default function TasksPage() {
           <span className="font-mono text-xs text-[var(--ac)]">
             uvicorn backend.main:app --port 8000
           </span>
+        </p>
+      )}
+      {failing.length > 0 && (
+        <p className="mb-4 border border-danger px-3 py-2 text-sm text-danger">
+          {failing.map((c) => `${c.name}: ${c.error ?? "not answering right now"}`).join(" · ")} —
+          this board may be missing tasks from it. See INTEGRATIONS.
         </p>
       )}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

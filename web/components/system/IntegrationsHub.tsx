@@ -41,6 +41,7 @@ const STATUS_STYLE: Record<string, string> = {
   "NEEDS SETUP": "border-amber-400 text-amber-400",
   MANUAL: "border-amber-400 text-amber-400",
   LOADING: "border-ink-faint text-ink-faint",
+  FAILING: "border-danger text-danger",
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -69,13 +70,11 @@ function Card({
   actions?: React.ReactNode;
 }) {
   const live = status === "WIRED";
+  const dotClass = status === "FAILING" ? "bg-danger" : live ? "bg-ok" : "bg-ink-faint";
   return (
     <div className="flex flex-col border border-line p-3 transition-colors hover:border-lineHi">
       <div className="flex items-center gap-2">
-        <span
-          aria-hidden
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${live ? "bg-ok" : "bg-ink-faint"}`}
-        />
+        <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
         <p className="min-w-0 flex-1 truncate font-mono text-label text-ink">{title}</p>
         <StatusBadge status={status} />
       </div>
@@ -104,6 +103,7 @@ const CONNECTOR_STATUS: Record<string, string> = {
   wired: "WIRED",
   "not-connected": "NOT CONNECTED",
   "needs-credentials": "NEEDS SETUP",
+  failing: "FAILING",
 };
 
 export default function IntegrationsHub() {
@@ -181,9 +181,13 @@ export default function IntegrationsHub() {
                   key={connector.id}
                   status={status}
                   title={connector.name}
-                  detail={connector.detail}
+                  detail={connector.error ?? connector.detail}
                   actions={
-                    status === "WIRED" ? (
+                    status === "WIRED" || status === "FAILING" ? (
+                      // A credential is stored either way — "failing" means the
+                      // build can't use it (missing client library), which
+                      // re-running the connect flow cannot fix. Disconnecting
+                      // is the only useful action until the build is updated.
                       <Button variant="quiet" onClick={() => void disconnect(connector)}>
                         DISCONNECT
                       </Button>
