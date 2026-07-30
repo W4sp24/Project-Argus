@@ -17,9 +17,13 @@ from backend.vault.writer import WriterConflict, WriterError, guard_user_path
 
 
 class VaultInfo(BaseModel):
-    """Vault identity for building obsidian:// deep links client-side."""
+    """Vault identity, plus taxonomy-derived paths the frontend must not
+    hardcode (see ``backend.core.taxonomy.Taxonomy`` — a literal ``30-Areas``
+    here would reintroduce the bug the configurable-taxonomy refactor fixed)."""
 
     name: str
+    papers_dir: str
+    highlights_path: str
 
 
 class NoteContent(BaseModel):
@@ -43,11 +47,20 @@ def build_notes_router(settings: Settings) -> APIRouter:
 
     @router.get("/vault", response_model=VaultInfo)
     def vault_info() -> VaultInfo:
-        return VaultInfo(name=settings.vault_path.name)
+        return VaultInfo(
+            name=settings.vault_path.name,
+            papers_dir=settings.taxonomy.papers_dir,
+            highlights_path=settings.taxonomy.paper_highlights_note,
+        )
 
-    @router.get("/notes", response_model=list[NoteInfo])
-    def notes() -> list[NoteInfo]:
-        return list_notes(settings.vault_path, taxonomy=settings.taxonomy)
+    @router.get("/notes", response_model=list[NoteInfo], response_model_exclude_none=True)
+    def notes(folder: str | None = None, fields: str | None = None) -> list[NoteInfo]:
+        """``folder``/``fields`` are optional (see ``list_notes``); omitting
+        both keeps this byte-identical to the pre-existing unfiltered listing."""
+        keys = [key.strip() for key in fields.split(",") if key.strip()] if fields else None
+        return list_notes(
+            settings.vault_path, taxonomy=settings.taxonomy, folder=folder, frontmatter_keys=keys
+        )
 
     @router.get("/note", response_model=NoteContent)
     def get_note(path: str) -> NoteContent:

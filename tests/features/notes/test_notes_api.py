@@ -127,3 +127,75 @@ def test_task_line_conflict_is_409(client):
         json={"path": "20-Projects/p.md", "line": 1, "old_line": "- [ ] something stale"},
     )
     assert response.status_code == 409
+
+
+# --- GET /api/notes: folder filter + frontmatter whitelist (research vault) --
+
+
+def test_notes_default_response_is_unchanged(client):
+    """Regression guard: the folder/fields params must be purely additive.
+
+    No caller of ``GET /api/notes`` passes them today (``useNotes()`` and
+    friends), so the default response must be byte-identical to before this
+    endpoint gained them — in particular, no stray ``frontmatter`` key.
+    """
+    api, _ = client
+    response = api.get("/api/notes")
+    assert response.status_code == 200
+    payload = response.json()
+    by_path = {note["path"]: note for note in payload}
+    assert set(by_path) == {"20-Projects/p.md", "00-Inbox/note.md"}
+    assert by_path["00-Inbox/note.md"]["title"] == "note"
+    assert by_path["00-Inbox/note.md"]["folder"] == "00-Inbox"
+    for note in payload:
+        assert "frontmatter" not in note, "frontmatter must be excluded, not null, by default"
+        assert set(note.keys()) == {"path", "title", "folder", "modified"}
+
+
+def test_notes_folder_filters_to_subtree(client):
+    api, vault = client
+    (vault / "30-Areas" / "papers").mkdir(parents=True)
+    (vault / "30-Areas" / "papers" / "a.md").write_text(
+        "---\ntype: paper\n---\n# A\n", encoding="utf-8"
+    )
+    (vault / "30-Areas" / "other.md").write_text("# not a paper\n", encoding="utf-8")
+
+    response = api.get("/api/notes", params={"folder": "30-Areas/papers"})
+    assert response.status_code == 200
+    paths = {note["path"] for note in response.json()}
+    assert paths == {"30-Areas/papers/a.md"}
+
+
+def test_notes_fields_whitelists_frontmatter(client):
+    api, vault = client
+    (vault / "30-Areas" / "papers").mkdir(parents=True)
+    (vault / "30-Areas" / "papers" / "a.md").write_text(
+        '---\ntype: paper\nstatus: reading\nprogress: 40\nsecret: nope\n---\n# A\n',
+        encoding="utf-8",
+    )
+
+    response = api.get(
+        "/api/notes",
+        params={"folder": "30-Areas/papers", "fields": "type,status,progress"},
+    )
+    assert response.status_code == 200
+    [note] = response.json()
+    assert note["frontmatter"] == {"type": "paper", "status": "reading", "progress": 40}
+    assert "secret" not in note["frontmatter"]
+
+
+def test_notes_fields_omitted_key_yields_no_frontmatter_entry(client):
+    """A note missing a requested key just doesn't carry that key — no error,
+    no null placeholder."""
+    api, vault = client
+    (vault / "30-Areas" / "papers").mkdir(parents=True)
+    (vault / "30-Areas" / "papers" / "a.md").write_text(
+        "---\ntype: paper\n---\n# A\n", encoding="utf-8"
+    )
+
+    response = api.get(
+        "/api/notes",
+        params={"folder": "30-Areas/papers", "fields": "type,status"},
+    )
+    [note] = response.json()
+    assert note["frontmatter"] == {"type": "paper"}
