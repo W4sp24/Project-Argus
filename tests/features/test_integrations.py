@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.connectors import gcal, todoist
+from backend.core import config
 from backend.core.config import Settings
 from backend.features.integrations import store
 from backend.features.integrations.mcp_client import McpProbeResult
@@ -212,8 +213,18 @@ def test_gcal_credentials_are_saved_outside_the_vault(settings: Settings) -> Non
     assert by_id["gcal"]["status"] == "not-connected"
 
 
-def test_gcal_connect_without_credentials_is_a_conflict(settings: Settings, monkeypatch) -> None:
-    monkeypatch.setattr(gcal, "CREDENTIALS_FILE", settings.vault_path / "absent.json")
+def test_gcal_connect_without_credentials_is_a_conflict(
+    settings: Settings, tmp_path: Path, monkeypatch
+) -> None:
+    """409 when neither the uploaded nor the legacy client file exists.
+
+    ``settings.gcal_credentials_file`` (the .argus/ upload path) is already
+    absent in a fresh vault; pin the legacy env-anchored fallback to an empty
+    tmp dir too, so this can't accidentally pass by finding a real
+    ``credentials.json`` sitting beside whatever ``.env`` the test runner's
+    CWD resolves to.
+    """
+    monkeypatch.setattr(config, "DEFAULT_ENV_FILE", tmp_path / ".env")
     assert _client(settings).post("/integrations/gcal/connect").status_code == 409
 
 
