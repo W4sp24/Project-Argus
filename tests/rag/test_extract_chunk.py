@@ -74,6 +74,38 @@ def test_pptx_extraction_keeps_slide_numbers(tmp_path: Path) -> None:
     assert "Hash tables" in blocks[0].text
 
 
+def test_eml_extraction_keeps_headers_and_body(tmp_path: Path) -> None:
+    """A dropped .eml must index, not save-then-yield-nothing.
+
+    The ingest route has always accepted .eml (ALLOWED_SUFFIXES) while there
+    was no extractor registered for it, so the file landed in the vault and
+    then produced zero chunks -- reported in the UI as "saved -- indexing
+    unavailable", which reads as a failure.
+    """
+    eml = tmp_path / "mail.eml"
+    eml.write_text(
+        "From: advisor@uni.edu\n"
+        "Subject: Thesis defence scheduling\n"
+        "Date: Mon, 20 Jul 2026 09:00:00 +0000\n"
+        "\n"
+        "Please confirm the room booking for the defence.\n",
+        encoding="utf-8",
+    )
+
+    blocks = extract_blocks(eml)
+
+    assert blocks, "no text extracted from .eml"
+    assert "Thesis defence scheduling" in blocks[0].text
+    assert "advisor@uni.edu" in blocks[0].text
+    assert "room booking" in blocks[0].text
+    assert blocks[0].meta["sender"] == "advisor@uni.edu"
+    assert blocks[0].meta["date"] == "2026-07-20"
+
+
+def test_eml_is_indexable() -> None:
+    assert is_indexable("00-Inbox/emails/2026-07-20-thesis.eml")
+
+
 def test_chunking_splits_headings_and_carries_metadata() -> None:
     text = "# Sorting\n\nIntro paragraph.\n\n## Quicksort\n\nPivot logic and [[Hoare]] scheme.\n"
     blocks = [Block(text=text, meta={"frontmatter": {"tags": ["cs"], "created": "2026-07-01"}})]

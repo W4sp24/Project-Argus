@@ -10,8 +10,8 @@ from backend.core.taxonomy import Taxonomy, active_taxonomy, set_active_taxonomy
 
 def test_defaults_match_v0_2_constants() -> None:
     """Pins every field to Argus 0.2's hardcoded names — the regression guard
-    for the whole refactor. If this test ever needs to change, the refactor
-    has broken byte-identical behaviour for existing installs."""
+    for the whole refactor. If a *folder* name here ever needs to change, the
+    refactor has broken byte-identical behaviour for existing installs."""
     tax = Taxonomy()
 
     assert tax.inbox == "00-Inbox"
@@ -23,7 +23,11 @@ def test_defaults_match_v0_2_constants() -> None:
     assert tax.reference == "50-Reference"
     assert tax.journal == "90-Meta"
     assert tax.private == "99-Private"
-    assert tax.indexable_suffixes == {".md", ".pdf", ".pptx", ".docx"}
+    # .eml is a deliberate addition to 0.2's set, not a refactor slip: the
+    # ingest route already accepted .eml while nothing could index it, so a
+    # dropped email saved and then yielded zero chunks. Widening the set is
+    # additive — it can only make more files searchable, never fewer.
+    assert tax.indexable_suffixes == {".md", ".pdf", ".pptx", ".docx", ".eml"}
 
 
 # --- derived properties ------------------------------------------------------

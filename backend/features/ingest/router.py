@@ -13,7 +13,6 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from email import message_from_string, policy
 from typing import Any
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile
@@ -21,6 +20,7 @@ from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.rag.email import parse_email
 from backend.vault import suggestions as queue
 from backend.vault.writer import (
     WriterError,
@@ -73,34 +73,11 @@ class EmailIngestResponse(BaseModel):
     archived_path: str
 
 
-def _parse_email(text: str) -> dict[str, Any]:
-    """Split raw pasted text / .eml content into headers + body (stdlib only)."""
-    message = message_from_string(text, policy=policy.default)
-    if not (message["From"] or message["Subject"] or message["Date"]):
-        return {"body": text, "subject": None, "sender": None, "date": None}
-    body = ""
-    try:
-        part = message.get_body(preferencelist=("plain",))
-        if part is not None:
-            body = part.get_content()
-    except Exception:
-        body = ""
-    if not body.strip():  # header-only paste or non-MIME body
-        body = message.get_payload() if isinstance(message.get_payload(), str) else text
-    email_date = None
-    try:
-        if message["Date"]:
-            from email.utils import parsedate_to_datetime
-
-            email_date = parsedate_to_datetime(message["Date"]).date().isoformat()
-    except Exception:
-        email_date = None
-    return {
-        "body": str(body),
-        "subject": str(message["Subject"]) if message["Subject"] else None,
-        "sender": str(message["From"]) if message["From"] else None,
-        "date": email_date,
-    }
+# Moved to backend/rag/email.py so the indexer and this route share one parser
+# -- an .eml is now both captured here and extracted for search, and two copies
+# would drift silently. Re-exported under the old private name so the existing
+# call sites and tests in this module keep working.
+_parse_email = parse_email
 
 
 def _fallback_extraction(parsed: dict[str, Any]) -> dict[str, Any]:

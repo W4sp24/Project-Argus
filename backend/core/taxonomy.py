@@ -45,7 +45,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-_DEFAULT_SUFFIXES = frozenset({".md", ".pdf", ".pptx", ".docx"})
+# .eml is here because the ingest route has always accepted it
+# (features/ingest/router.py ALLOWED_SUFFIXES) while rag/extract.py had no
+# extractor for it -- so a dropped email saved fine and then indexed to zero
+# chunks, which the UI reported as "saved -- indexing unavailable".
+_DEFAULT_SUFFIXES = frozenset({".md", ".pdf", ".pptx", ".docx", ".eml"})
 
 # field name -> its VAULT_*_DIR env key (backend/core/config.py:28-43 parses
 # the env file into a dict; from_env() below only ever reads that dict).
