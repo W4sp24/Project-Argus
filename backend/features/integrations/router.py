@@ -18,6 +18,7 @@ it into.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -156,16 +157,18 @@ def build_integrations_router(
     probe = mcp_prober or probe_server
 
     def _credentials_path() -> Path:
-        """The uploaded client file, falling back to the historical repo-root one.
+        """The uploaded client file, falling back to the legacy env-anchored one.
 
-        Existing setups put ``credentials.json`` beside the repo; a packaged
-        desktop install has no such place, so uploads land in ``.argus/``. The
-        fallback keeps anyone who already ran ``argus connect gcal`` working.
+        New uploads land in the vault's ``.argus/`` dir
+        (`Settings.gcal_credentials_file`) — a packaged desktop install has no
+        writable repo root to put them beside. The fallback,
+        `Settings.gcal_legacy_credentials_file`, keeps anyone who already
+        hand-placed a ``credentials.json`` next to the env file working.
         """
         uploaded = settings.gcal_credentials_file
         if uploaded.is_file():
             return uploaded
-        return gcal.CREDENTIALS_FILE
+        return settings.gcal_legacy_credentials_file
 
     def _connectors() -> list[ConnectorInfo]:
         gcal_ready = gcal.configured()
@@ -285,11 +288,20 @@ def build_integrations_router(
         try:
             gcal.connect(credentials, timeout_seconds=OAUTH_TIMEOUT_SECONDS)
         except ImportError as exc:
-            raise HTTPException(
-                status_code=501,
-                detail="Google Calendar support is not installed in this build "
-                f"({exc}). Install the google-auth-oauthlib extra.",
-            ) from exc
+            # A frozen build has no pip and no source tree — "install the
+            # extra" is not something that user can act on. Only the
+            # dev/source case, where it IS actionable, gets the pip advice.
+            if getattr(sys, "frozen", False):
+                detail = (
+                    "This build of Argus shipped without Google Calendar support "
+                    "— update Argus to a version that includes it."
+                )
+            else:
+                detail = (
+                    "Google Calendar support is not installed in this build "
+                    f"({exc}). Install the google-auth-oauthlib extra."
+                )
+            raise HTTPException(status_code=501, detail=detail) from exc
         except Exception as exc:  # noqa: BLE001 - the user sees why, not a 500
             raise HTTPException(status_code=422, detail=f"consent did not complete: {exc}") from exc
         return ConnectResult(ok=True, detail="Google Calendar connected")

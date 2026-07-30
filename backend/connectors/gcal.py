@@ -1,9 +1,14 @@
 """Google Calendar (read-only in P2).
 
 Setup is a human step: create a Desktop OAuth client in Google Cloud Console,
-save ``credentials.json`` in the repo root (gitignored), then run
-``argus connect gcal`` once to complete the browser consent flow. The token
-is stored in the OS keyring (invariant I4).
+then hand its JSON to Argus. The normal path is uploading it in-app
+(Settings > Integrations), which saves it to the vault's ``.argus/`` dir —
+see `Settings.gcal_credentials_file`. For existing setups, dropping a
+``credentials.json`` beside the env file (the repo root's ``.env`` in dev,
+the Electron shell's userData dir when packaged) still works — see
+`legacy_credentials_file`. Either way, run ``argus connect gcal`` once (or
+click Connect in-app) to complete the browser consent flow. The token is
+stored in the OS keyring (invariant I4).
 """
 
 from __future__ import annotations
@@ -17,9 +22,25 @@ from pydantic import BaseModel
 # Read events in P2; insert approved schedule blocks in P3 (writer-gated, I1).
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 ARGUS_COLOR_ID = "3"  # grape — Argus-created blocks are visually distinct
-CREDENTIALS_FILE = Path("credentials.json")
 KEYRING_SERVICE = "argus-gcal"
 KEYRING_USER = "token"
+
+
+def legacy_credentials_file() -> Path:
+    """Where a hand-placed ``credentials.json`` is still honored.
+
+    See `Settings.gcal_legacy_credentials_file` for why this is anchored to
+    the env file's directory rather than the process's current working
+    directory. `Settings` is imported lazily here, not at module scope: the
+    layering rule (README.md, "Project layout") puts `backend.core` below
+    `backend.connectors`, so a module-level import would be legal, but a
+    function-local one keeps this module importable standalone and avoids
+    paying for `Settings`'s own imports unless a caller actually needs the
+    legacy path.
+    """
+    from backend.core.config import Settings
+
+    return Settings().gcal_legacy_credentials_file
 
 
 class CalendarEvent(BaseModel):
@@ -61,9 +82,16 @@ def configured() -> bool:
 
 
 def connect(
-    credentials_file: Path = CREDENTIALS_FILE, timeout_seconds: float | None = None
+    credentials_file: Path | None = None, timeout_seconds: float | None = None
 ) -> None:
     """Run the one-time browser consent flow and store the token (I4).
+
+    ``credentials_file`` defaults to `legacy_credentials_file` when omitted
+    (as the CLI does) rather than a fixed module-level path — a mutable
+    default evaluated once at import time cannot pick up ``ARGUS_ENV_FILE``,
+    which is exactly what the packaged app relies on. Callers that already
+    know where the client file lives (the HTTP endpoint) pass it explicitly
+    and are unaffected.
 
     ``timeout_seconds`` bounds the wait for the browser redirect. The CLI
     leaves it None (a person at a terminal can take as long as they like); the
@@ -73,6 +101,7 @@ def connect(
     import keyring
     from google_auth_oauthlib.flow import InstalledAppFlow
 
+    credentials_file = credentials_file or legacy_credentials_file()
     if not credentials_file.is_file():
         raise FileNotFoundError(
             f"{credentials_file} not found — create a Desktop OAuth client in Google Cloud "
