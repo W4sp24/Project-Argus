@@ -54,6 +54,21 @@ def safe_metadata(name):
         return []
 
 
+def required_metadata(name):
+    """copy_metadata that does NOT tolerate an absent package.
+
+    Use this instead of safe_metadata() for anything the build must not ship
+    without -- i.e. a connector whose only failure mode, if it silently goes
+    missing, is a user clicking Connect against a dependency that was never
+    frozen in. safe_metadata() is for genuinely optional packages (mcp,
+    pydantic extras, etc.) where absence just means a feature degrades; here
+    absence means the release pipeline installed the wrong extras (see
+    release.yml's `pip install -e ".[rag,gcal]"`) and that has to fail the
+    build, not ship it.
+    """
+    return copy_metadata(name)
+
+
 # --- our own runtime data ---------------------------------------------------
 # backend/agent/runtime.py and planner.py read PROMPT_PATH via
 # Path(__file__).parent, which resolves inside _MEIPASS once frozen; cli.py's
@@ -111,6 +126,33 @@ hiddenimports += [
     "win32ctypes.pywin32",
 ]
 datas += safe_metadata("keyring")
+
+# --- google calendar / todoist clients --------------------------------------
+# Both connectors import their client libraries lazily and in-function --
+# google_auth_oauthlib inside gcal.py's connect() (backend/connectors/gcal.py:74)
+# and todoist_api_python inside todoist.py's list_tasks() (backend/connectors/
+# todoist.py:66) -- which is exactly the pattern static analysis cannot see.
+# Before this, CI's `pip install -e ".[rag]"` never installed the gcal extra
+# at all, so PyInstaller had nothing to collect and the frozen backend shipped
+# with neither connector importable; the keyring entry above already stores
+# both of their secrets, so this belongs right after it.
+#
+# required_metadata(), not safe_metadata(): a build missing this metadata is a
+# build that shipped without the connector, which must fail loudly here
+# rather than pass all 25 smoke checks and reach a user as an inexplicable 501.
+hiddenimports += collect_submodules("google_auth_oauthlib")
+hiddenimports += collect_submodules("google.auth")
+hiddenimports += collect_submodules("google.oauth2")
+hiddenimports += collect_submodules("googleapiclient")
+hiddenimports += collect_submodules("todoist_api_python")
+hiddenimports += ["google.auth.transport.requests"]
+datas += collect_data_files("googleapiclient")  # discovery_cache/documents/*.json
+datas += (
+    required_metadata("google-auth-oauthlib")
+    + required_metadata("google-api-python-client")
+    + required_metadata("google-auth")
+    + required_metadata("todoist-api-python")
+)
 
 # --- apscheduler -----------------------------------------------------------
 # APScheduler 3.x resolves triggers/executors via pkg_resources entry points.

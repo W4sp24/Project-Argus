@@ -158,6 +158,25 @@ def _check_ollama() -> Check:
     )
 
 
+def _client_library_importable(module_name: str) -> bool:
+    """Can a connector's client library actually be imported right now?
+
+    Only ever called from inside :func:`_check_connector`, once we already
+    know no token is stored -- never at module scope -- so this adds no import
+    cost to the common case. Catches ``Exception`` broadly, not just
+    ``ImportError``: a frozen build can fail with ``OSError`` on a missing DLL
+    rather than a clean ``ModuleNotFoundError``, same as
+    ``--selftest-imports`` in ``desktop/backend/argus_server.py``.
+    """
+    import importlib
+
+    try:
+        importlib.import_module(module_name)
+        return True
+    except Exception:  # noqa: BLE001 - any failure means "not usable"
+        return False
+
+
 def _check_connector(name: str) -> Check:
     from backend.agent.credentials import KEY_PRESENT, KEY_UNKNOWN
 
@@ -166,10 +185,14 @@ def _check_connector(name: str) -> Check:
             from backend.connectors import gcal as connector
 
             hint = "create OAuth credentials.json, then `argus connect gcal`"
+            client_module = "google_auth_oauthlib.flow"
+            missing_detail = "this build shipped without Google Calendar support — update Argus"
         else:
             from backend.connectors import todoist as connector
 
             hint = "`argus connect todoist <api-token>`"
+            client_module = "todoist_api_python.api"
+            missing_detail = "this build shipped without Todoist support — update Argus"
         state = connector.connection_state()
         if state == KEY_PRESENT:
             return Check(name=name, status="OK", detail="connected")
@@ -181,6 +204,15 @@ def _check_connector(name: str) -> Check:
                 status="WARN",
                 detail="cannot tell — the OS keyring is unreadable; see the keyring check",
             )
+        # No token stored. That is normally just an unconfigured connector
+        # (WARN — the user hasn't run `connect` yet), but if the client
+        # library itself is not importable, no amount of running `connect`
+        # will fix it: the build was frozen without the dependency (see
+        # release.yml's `pip install -e ".[rag,gcal]"` and the spec's
+        # required_metadata() section). That is a broken build, not a user
+        # configuration choice, so it is FAIL, not WARN.
+        if not _client_library_importable(client_module):
+            return Check(name=name, status="FAIL", detail=missing_detail)
         return Check(name=name, status="WARN", detail=f"not connected — {hint}")
     except Exception as exc:
         return Check(name=name, status="WARN", detail=str(exc))
