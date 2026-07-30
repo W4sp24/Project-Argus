@@ -5,15 +5,16 @@ import { useCallback, useState } from "react";
 import ModeHeader from "@/components/ModeHeader";
 import Panel from "@/components/Panel";
 import StatRow from "@/components/StatRow";
-import HighlightsRecent from "@/components/preview/HighlightsRecent";
-import LibraryQueue, { type LibraryCounts } from "@/components/preview/LibraryQueue";
+import HighlightsRecent from "@/components/research/HighlightsRecent";
+import LibraryQueue, { type LibraryCounts } from "@/components/research/LibraryQueue";
 import { useNotes } from "@/lib/api";
 
 /**
- * Research mode (§4) — LIBRARY.QUEUE + HIGHLIGHTS.RECENT are local-state
- * [PREVIEW] (see LibraryQueue.tsx for why: no create-note endpoint exists
- * yet). `notes` in the stat row is the one real number here: vault notes
- * already living under `30-Areas` via the real `/api/notes` listing.
+ * Research mode (§4) — LIBRARY.QUEUE + HIGHLIGHTS.RECENT are real vault
+ * persistence now (one note per paper, one running highlights log — see
+ * those components for the storage shape). `notes` in the stat row counts
+ * every non-private vault note under `30-Areas` via `/api/notes`, which
+ * includes the papers/highlights notes those two panels write.
  */
 export default function ResearchPage() {
   const [libraryCounts, setLibraryCounts] = useState<LibraryCounts>({ papers: 0, queued: 0, reading: 0 });

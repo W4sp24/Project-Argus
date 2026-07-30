@@ -3,7 +3,9 @@
 // uses hardcoded mock data, and MUST NOT call any backend write endpoint.
 export const FLAGS = {
   flashcards: "enabled", // POST /api/flashcards/decks + due/grade are wired (real FSRS)
-  library: "preview", // Research reading queue
+  // Research reading queue + highlights persist to the vault for real (one
+  // note per paper under <areas>/papers/, one running highlights.md).
+  library: "enabled",
   focusTimer: "preview",
   palette: "enabled", // pure client UI, safe to enable
   activeWork: "preview", // Code PR list (mock data)
