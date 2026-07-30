@@ -136,11 +136,19 @@ export default function AgentSelect({
       </button>
 
       {open && (
+        // `min-w-[16rem]`, not the old `min-w-[21rem]`: this panel also renders
+        // in the 340px dashboard/code rail (300px after padding), where a
+        // 336px-floor popover overflowed the panel outright. A viewport
+        // breakpoint can't restore a wider floor for the /system placement
+        // instead, because /system's full-width panel and the narrow rail
+        // both live on the same wide viewport — `sm:` can't tell them apart.
+        // `max-w-[calc(100vw-2rem)]` is the same narrow-window guard the
+        // engine picker dialog uses.
         <ul
           id={listId}
           role="listbox"
           aria-label="Agent"
-          className="animate-palette absolute left-0 top-full z-30 mt-1 max-h-[19rem] w-full min-w-[21rem] overflow-y-auto border border-lineHi bg-panel py-1 shadow-xl"
+          className="animate-palette absolute left-0 top-full z-30 mt-1 max-h-[19rem] w-full min-w-[16rem] max-w-[calc(100vw-2rem)] overflow-y-auto border border-lineHi bg-panel py-1 shadow-xl"
         >
           {options.map((option) => {
             const index = selectable.indexOf(option);

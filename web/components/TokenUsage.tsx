@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Panel from "@/components/Panel";
 import UsageAreaChart from "@/components/charts/UsageAreaChart";
+import SegmentedControl from "@/components/ui/SegmentedControl";
 import TokenComposition from "@/components/usage/TokenComposition";
 import { useUsage, type UsageRange } from "@/lib/api";
 import { COUNTERS, compactTokens } from "@/lib/agentPalette";
@@ -47,23 +48,7 @@ export default function TokenUsage() {
     <Panel
       label="ARGUS.USAGE"
       headerRight={
-        <div className="flex border border-line font-mono text-micro uppercase tracking-[0.14em]">
-          {VIEWS.map((option) => (
-            <button
-              key={option}
-              type="button"
-              onClick={() => setView(option)}
-              aria-pressed={view === option}
-              className={`border-l border-line px-1.5 py-1 first:border-l-0 transition-colors ${
-                view === option
-                  ? "bg-[var(--ac-bg)] text-[var(--ac)]"
-                  : "text-ink-faint hover:text-ink-muted"
-              }`}
-            >
-              {VIEW_LABEL[option]}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl options={VIEWS} value={view} onChange={setView} labels={VIEW_LABEL} />
       }
     >
       {isLoading && total === 0 ? (
