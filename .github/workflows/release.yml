@@ -61,7 +61,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[rag]"
+          # PyInstaller can only bundle what is importable at build time, so
+          # omitting `gcal` here is exactly how v0.2.0 shipped a backend with
+          # no google_auth_oauthlib -- the connector then failed for every
+          # user with an HTTP 501 telling them to `pip install` an extra into
+          # an app that has no pip.
+          pip install -e ".[rag,gcal]"
           pip install "pyinstaller==6.16.0" pyinstaller-hooks-contrib
 
       - name: Pre-fetch the embedding model

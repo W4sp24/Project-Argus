@@ -31,6 +31,11 @@ dependencies = [
     "python-multipart>=0.0.9",
     "apscheduler>=3.10",
     "fsrs>=6.0",
+    # backend/connectors/todoist.py:66 imports this unconditionally (inside
+    # list_tasks, but with no fallback), so it was never actually optional —
+    # it only worked because it had been hand-installed into a local .venv and
+    # was absent from every dependency list, including the frozen build.
+    "todoist-api-python>=3.0",
 ]
 
 [project.optional-dependencies]
