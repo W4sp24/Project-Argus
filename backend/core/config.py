@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from backend.core.model_registry import DEFAULT_MODELS, load_model_prefs, load_user_models
+from backend.core.taxonomy import Taxonomy, set_active_taxonomy
 
 # Repo-relative by default (dev, `argus web`, tests). The packaged desktop app
 # has no repo root, so the Electron shell points this at its own userData dir
@@ -49,15 +50,22 @@ class Settings:
 
     backend_port: int = DEFAULT_BACKEND_PORT
     _vault_path: Path | None = field(default=None, repr=False)
+    taxonomy: Taxonomy = field(default_factory=Taxonomy)
 
     @classmethod
     def load(cls, env_file: Path | None = None) -> Settings:
         """Load settings from ``env_file`` (default ``./.env``)."""
         values = parse_env_file(env_file or DEFAULT_ENV_FILE)
         vault_raw = values.get("VAULT_PATH")
+        taxonomy = Taxonomy.from_env(values)
+        # The process-level fallback for code that only has a vault_path, not
+        # a Settings, in scope (backend.core.taxonomy.active_taxonomy). See
+        # that module's docstring for the full tradeoff.
+        set_active_taxonomy(taxonomy)
         return cls(
             backend_port=int(values.get("BACKEND_PORT", DEFAULT_BACKEND_PORT)),
             _vault_path=Path(vault_raw) if vault_raw else None,
+            taxonomy=taxonomy,
         )
 
     @property
