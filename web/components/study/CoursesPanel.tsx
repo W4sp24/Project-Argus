@@ -6,16 +6,18 @@ import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
-import { ApiError, apiFetch, mutateJSON, useStudyCourses, useStudyExams } from "@/lib/api";
+import { ApiError, apiFetch, mutateJSON, useStudyCourses, useStudyExams, useVault } from "@/lib/api";
 import { selectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md"];
 const SAFE_CODE_RE = /^[A-Za-z0-9._-]+$/;
 
-/** Mirrors `vault-template/15-Courses/CS000/course.md`, interpolated with the
- *  submitted code/title and today's date (the template's `created: "{{date}}"`
- *  substitution normally done by the vault-init flow). */
+/** Mirrors the vault template's `CS000/course.md` (under the taxonomy's
+ *  courses dir — see `useVault().courses_dir`, never a hardcoded folder
+ *  name), interpolated with the submitted code/title and today's date (the
+ *  template's `created: "{{date}}"` substitution normally done by the
+ *  vault-init flow). */
 function renderCourseTemplate(code: string, title: string): string {
   const date = new Date().toISOString().slice(0, 10);
   return `---
@@ -45,7 +47,7 @@ status: active
 
 /**
  * COURSES (§4 Study Overview): lists real courses from `GET /api/study/courses`
- * (15-Courses/<CODE>/course.md hub notes). CRUD is honest about what the
+ * (`<courses_dir>/<CODE>/course.md` hub notes). CRUD is honest about what the
  * backend can actually do:
  *  - `+ FILES` and drag-drop upload real material to `POST /api/study/upload`
  *    (backend/study/api.py) — this endpoint exists and already worked in the
@@ -56,10 +58,13 @@ status: active
  *    call them out explicitly for this panel).
  *  - `+ ADD COURSE` renders the vault's course template with the submitted
  *    code/title and creates it for real via `POST /api/note/create`
- *    (backend/writer.py `create_note`), landing at `15-Courses/<CODE>/course.md`.
- *    A 409 (code already exists) surfaces as a clear toast instead of a
- *    generic failure; success re-fetches `GET /api/study/courses` so the new
- *    course appears from the vault, not from local mock state.
+ *    (backend/writer.py `create_note`), landing at
+ *    `<courses_dir>/<CODE>/course.md` — `courses_dir` from `GET /api/vault`,
+ *    never a hardcoded folder name (that literal was the taxonomy-refactor
+ *    bug this branch is careful not to reintroduce). A 409 (code already
+ *    exists) surfaces as a clear toast instead of a generic failure; success
+ *    re-fetches `GET /api/study/courses` so the new course appears from the
+ *    vault, not from local mock state.
  *  - `×` really deletes the course now: `useConfirm()` gates it (same
  *    danger-tone confirm `AgentUsage.tsx`'s "STOP TRACKING" uses), then
  *    `DELETE /api/study/courses/<CODE>?purge=true` removes the vault folder
@@ -74,9 +79,15 @@ status: active
 export default function CoursesPanel() {
   const { data: courses, mutate: refreshCourses } = useStudyCourses();
   const { mutate: refreshExams } = useStudyExams();
+  const { data: vault } = useVault();
   const weakTopics = useWeakTopics();
   const { show } = useToast();
   const { confirm, confirmDialog } = useConfirm();
+  // Taxonomy-derived — never hardcode the courses folder name (see corpus.py
+  // module docs). Used only for the ADD COURSE write path and copy shown to
+  // the user; a `courses` fallback is display-only and never sent anywhere
+  // before `vault` has loaded (addCourse guards on it directly).
+  const coursesDir = vault?.courses_dir;
 
   const [addCode, setAddCode] = useState("");
   const [addName, setAddName] = useState("");
@@ -155,8 +166,8 @@ export default function CoursesPanel() {
       label: `Delete ${code}`,
       message: `Delete course ${code}?`,
       detail:
-        `This removes 15-Courses/${code}/ from the vault (a git snapshot makes it undoable) ` +
-        "along with any exams and flashcard decks generated for it.",
+        `This removes ${coursesDir ?? "the course folder"}/${code}/ from the vault ` +
+        "(a git snapshot makes it undoable) along with any exams and flashcard decks generated for it.",
       confirmLabel: "DELETE",
       tone: "danger",
     });
@@ -179,10 +190,10 @@ export default function CoursesPanel() {
     event.preventDefault();
     const code = addCode.trim().toUpperCase();
     const title = addName.trim();
-    if (!code || !title || !SAFE_CODE_RE.test(code) || creating) return;
+    if (!code || !title || !SAFE_CODE_RE.test(code) || creating || !coursesDir) return;
 
     setCreating(true);
-    const path = `15-Courses/${code}/course.md`;
+    const path = `${coursesDir}/${code}/course.md`;
     try {
       await mutateJSON<{ path: string }>("/api/note/create", {
         path,
@@ -241,7 +252,7 @@ export default function CoursesPanel() {
             <Button
               type="submit"
               size="md"
-              disabled={!addCode.trim() || !addName.trim() || creating}
+              disabled={!addCode.trim() || !addName.trim() || creating || !coursesDir}
             >
               {creating ? "ADDING…" : "ADD"}
             </Button>
@@ -250,8 +261,9 @@ export default function CoursesPanel() {
 
         {visible.length === 0 && (
           <p className="text-body text-ink-faint">
-            No courses yet — create a folder like <span className="font-mono text-xs">15-Courses/CS201/</span>{" "}
-            with a <span className="font-mono text-xs">course.md</span> in your vault.
+            No courses yet — create a folder like{" "}
+            <span className="font-mono text-xs">{coursesDir ?? "…"}/CS201/</span> with a{" "}
+            <span className="font-mono text-xs">course.md</span> in your vault.
           </p>
         )}
 

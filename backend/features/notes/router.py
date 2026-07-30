@@ -24,6 +24,9 @@ class VaultInfo(BaseModel):
     name: str
     papers_dir: str
     highlights_path: str
+    # Same reasoning as papers_dir/highlights_path: Study mode's course
+    # folder must come from here, not a hardcoded `15-Courses` literal.
+    courses_dir: str
 
 
 class NoteContent(BaseModel):
@@ -51,6 +54,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
             name=settings.vault_path.name,
             papers_dir=settings.taxonomy.papers_dir,
             highlights_path=settings.taxonomy.paper_highlights_note,
+            courses_dir=settings.taxonomy.courses,
         )
 
     @router.get("/notes", response_model=list[NoteInfo], response_model_exclude_none=True)

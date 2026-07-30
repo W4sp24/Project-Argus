@@ -18,12 +18,19 @@ import { useNextExam, useWeakTopics } from "@/lib/useStudySignals";
 const MOCK_CARDS_DUE: number = 7;
 
 export default function StudyOverviewPage() {
-  const { data: courses } = useStudyCourses();
+  const { data: courses, mutate: refreshCourses } = useStudyCourses();
   const { data: exams } = useStudyExams();
   const { data: insights } = useInsights();
   const nextExam = useNextExam();
   const weakTopics = useWeakTopics();
   const [ingestCourse, setIngestCourse] = useState("");
+
+  // The upload target must be the course's real materials_path (from the
+  // API), never a hand-built `<courses_dir>/<code>` — that was the reported
+  // "ingesting files seems to not work" bug: a file uploaded to the course
+  // *root* saved fine, but courses() only counts files under materials/, so
+  // the row kept reading "0 materials" and GUIDE/EXAM stayed disabled.
+  const ingestTargetCourse = courses?.find((course) => course.code === ingestCourse);
 
   const stats: StatItem[] = [
     { href: "/study", label: "courses", value: courses?.length ?? "–" },
@@ -66,7 +73,10 @@ export default function StudyOverviewPage() {
                   </select>
                 </div>
               )}
-              <IngestPanel target={ingestCourse ? `15-Courses/${ingestCourse}` : undefined} />
+              <IngestPanel
+                target={ingestTargetCourse?.materials_path}
+                onUploaded={() => void refreshCourses()}
+              />
             </div>
           </div>
 

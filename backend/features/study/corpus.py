@@ -24,6 +24,14 @@ class CourseInfo(BaseModel):
     path: str
     materials: int
     notes: int
+    # Taxonomy-derived write targets the frontend must not hardcode (a
+    # literal `15-Courses/<code>` here would reintroduce the bug the
+    # configurable-taxonomy refactor fixed — see backend.core.taxonomy).
+    # Uploading to `materials_path` is what makes `materials` above move off
+    # zero; a caller that targets the course root instead saves the file
+    # somewhere `materials` never counts.
+    materials_path: str
+    notes_path: str
 
 
 def courses(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[CourseInfo]:
@@ -53,6 +61,8 @@ def courses(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[Cours
                 notes=sum(1 for _ in (course_dir / "notes").glob("*.md"))
                 if (course_dir / "notes").is_dir()
                 else 0,
+                materials_path=tax.course_materials(course_dir.name),
+                notes_path=tax.course_notes(course_dir.name),
             )
         )
     return found

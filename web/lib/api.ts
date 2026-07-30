@@ -117,6 +117,8 @@ export interface VaultInfo {
   papers_dir: string;
   /** The single running highlights log Research mode appends to. */
   highlights_path: string;
+  /** Where Study mode's course folders live — never hardcode `15-Courses`. */
+  courses_dir: string;
 }
 
 /** Vault identity — used to build `obsidian://` deep links client-side. */
@@ -262,9 +264,14 @@ export interface CourseInfo {
   path: string;
   materials: number;
   notes: number;
+  /** Taxonomy-derived write targets — upload here, never a hand-built path,
+   * or the upload lands somewhere `materials`/`notes` above never counts. */
+  materials_path: string;
+  notes_path: string;
 }
 
-/** Courses discovered under 15-Courses/ (each needs a course.md hub note). */
+/** Courses discovered under the taxonomy's courses dir (each needs a
+ * course.md hub note; see `useVault().courses_dir` for the folder itself). */
 export function useStudyCourses() {
   return useSWR<CourseInfo[]>("/api/study/courses", fetcher);
 }
@@ -847,7 +854,7 @@ export function useDueCards(deckId: number | null) {
   );
 }
 
-/** Parse `Q:: A::` pairs from `15-Courses/<CODE>/flashcards.md` into a new deck. */
+/** Parse `Q:: A::` pairs from the course's `flashcards.md` into a new deck. */
 export function generateFlashcardDeck(course: string) {
   return mutateJSON<FlashcardDeck>("/api/flashcards/decks", { course });
 }
