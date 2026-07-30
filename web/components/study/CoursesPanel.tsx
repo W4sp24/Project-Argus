@@ -5,6 +5,7 @@ import { useRef, useState, type DragEvent } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/useConfirm";
 import { ApiError, apiFetch, mutateJSON, useStudyCourses, useStudyExams } from "@/lib/api";
 import { selectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
@@ -59,18 +60,24 @@ status: active
  *    A 409 (code already exists) surfaces as a clear toast instead of a
  *    generic failure; success re-fetches `GET /api/study/courses` so the new
  *    course appears from the vault, not from local mock state.
- *  - `×` never deletes vault files (spec: "removes the course entry, never
- *    deletes vault files") — it hides the row locally and toasts that the
- *    vault folder is untouched, since courses are derived from vault folders
- *    and there is nothing safe to delete via the API.
+ *  - `×` really deletes the course now: `useConfirm()` gates it (same
+ *    danger-tone confirm `AgentUsage.tsx`'s "STOP TRACKING" uses), then
+ *    `DELETE /api/study/courses/<CODE>?purge=true` removes the vault folder
+ *    (git-snapshotted first, backend/vault/writer.py `delete_course_tree`)
+ *    *and* the course's `exams`/`attempts`/`flashcard_decks`/`flashcard_reviews`
+ *    rows (backend/features/study/deletes.py) in one call, then revalidates
+ *    both `useStudyCourses()` and `useStudyExams()`. Previously this only
+ *    ever set local `hidden` state — the row came back on the next reload,
+ *    route change, or app restart, which was the reported "still retains
+ *    sample data after it is deleted" bug.
  */
 export default function CoursesPanel() {
   const { data: courses, mutate: refreshCourses } = useStudyCourses();
   const { mutate: refreshExams } = useStudyExams();
   const weakTopics = useWeakTopics();
   const { show } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
 
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [addCode, setAddCode] = useState("");
   const [addName, setAddName] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
@@ -80,7 +87,7 @@ export default function CoursesPanel() {
   const [dragOverCourse, setDragOverCourse] = useState<string | null>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const visible = (courses ?? []).filter((course) => !hidden.has(course.code));
+  const visible = courses ?? [];
 
   function isAcceptedFile(file: File) {
     const name = file.name.toLowerCase();
@@ -143,9 +150,29 @@ export default function CoursesPanel() {
     setBusyAction(null);
   }
 
-  function hideCourse(code: string) {
-    setHidden((prev) => new Set(prev).add(code));
-    show(`hidden :: ${code} — 15-Courses/${code}/ is untouched in the vault`);
+  async function removeCourse(code: string) {
+    const answer = await confirm({
+      label: `Delete ${code}`,
+      message: `Delete course ${code}?`,
+      detail:
+        `This removes 15-Courses/${code}/ from the vault (a git snapshot makes it undoable) ` +
+        "along with any exams and flashcard decks generated for it.",
+      confirmLabel: "DELETE",
+      tone: "danger",
+    });
+    if (answer === null) return;
+    try {
+      await mutateJSON(
+        `/api/study/courses/${encodeURIComponent(code)}?purge=true`,
+        undefined,
+        "DELETE",
+      );
+      show(`course :: ${code} deleted`);
+      refreshCourses();
+      refreshExams();
+    } catch (error) {
+      show(`course :: delete failed — ${error instanceof Error ? error.message : "backend offline?"}`);
+    }
   }
 
   async function addCourse(event: React.FormEvent) {
@@ -178,148 +205,151 @@ export default function CoursesPanel() {
   }
 
   return (
-    <Panel
-      label="COURSES"
-      headerRight={
-        <Button
-          variant="ghost"
-          aria-expanded={showAddForm}
-          onClick={() => setShowAddForm((v) => !v)}
-          className="hover:text-[var(--ac)]"
-        >
-          + ADD COURSE
-        </Button>
-      }
-    >
-      {showAddForm && (
-        <form
-          onSubmit={addCourse}
-          className="mb-4 flex flex-wrap items-center gap-2 border border-dashed border-line px-3 py-3"
-        >
-          <input
-            value={addCode}
-            onChange={(event) => setAddCode(event.target.value)}
-            placeholder="CODE (e.g. CS301)"
-            aria-label="Course code"
-            className="w-36 border border-line bg-sunken px-2 py-1.5 font-mono text-label placeholder:text-ink-faint focus:border-lineHi"
-          />
-          <input
-            value={addName}
-            onChange={(event) => setAddName(event.target.value)}
-            placeholder="Course name"
-            aria-label="Course name"
-            className="min-w-0 flex-1 border border-line bg-sunken px-2 py-1.5 text-body placeholder:text-ink-faint focus:border-lineHi"
-          />
+    <>
+      <Panel
+        label="COURSES"
+        headerRight={
           <Button
-            type="submit"
-            size="md"
-            disabled={!addCode.trim() || !addName.trim() || creating}
+            variant="ghost"
+            aria-expanded={showAddForm}
+            onClick={() => setShowAddForm((v) => !v)}
+            className="hover:text-[var(--ac)]"
           >
-            {creating ? "ADDING…" : "ADD"}
+            + ADD COURSE
           </Button>
-        </form>
-      )}
-
-      {visible.length === 0 && (
-        <p className="text-body text-ink-faint">
-          No courses yet — create a folder like <span className="font-mono text-xs">15-Courses/CS201/</span>{" "}
-          with a <span className="font-mono text-xs">course.md</span> in your vault.
-        </p>
-      )}
-
-      <div className="space-y-3">
-        {visible.map((course) => {
-          const chips = weakTopics.filter((topic) => topic.course === course.code).slice(0, 4);
-          return (
-            <div
-              key={course.code}
-              onDragOver={(event) => handleDragOver(course.code, event)}
-              onDragLeave={(event) => handleDragLeave(course.code, event)}
-              onDrop={(event) => handleDrop(course.code, event)}
-              className={`border p-3 transition-colors ${
-                dragOverCourse === course.code ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
-              }`}
+        }
+      >
+        {showAddForm && (
+          <form
+            onSubmit={addCourse}
+            className="mb-4 flex flex-wrap items-center gap-2 border border-dashed border-line px-3 py-3"
+          >
+            <input
+              value={addCode}
+              onChange={(event) => setAddCode(event.target.value)}
+              placeholder="CODE (e.g. CS301)"
+              aria-label="Course code"
+              className="w-36 border border-line bg-sunken px-2 py-1.5 font-mono text-label placeholder:text-ink-faint focus:border-lineHi"
+            />
+            <input
+              value={addName}
+              onChange={(event) => setAddName(event.target.value)}
+              placeholder="Course name"
+              aria-label="Course name"
+              className="min-w-0 flex-1 border border-line bg-sunken px-2 py-1.5 text-body placeholder:text-ink-faint focus:border-lineHi"
+            />
+            <Button
+              type="submit"
+              size="md"
+              disabled={!addCode.trim() || !addName.trim() || creating}
             >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="flex items-center gap-1.5 font-mono text-meta uppercase tracking-wide text-ink-faint">
-                    {course.code}
-                  </p>
-                  <p className="truncate text-lead font-medium text-ink-bright">{course.title}</p>
-                </div>
-                <button
-                  aria-label={`Remove ${course.code} from this list`}
-                  onClick={() => hideCourse(course.code)}
-                  className="shrink-0 font-mono text-xs text-ink-faint transition-colors hover:text-danger"
-                >
-                  ×
-                </button>
-              </div>
-              <p className="mt-1 font-mono text-label text-ink-faint">
-                {course.materials} material{course.materials === 1 ? "" : "s"} · {course.notes} note
-                {course.notes === 1 ? "" : "s"}
-                {dragOverCourse === course.code && <span className="ml-2 text-[var(--ac)]">— drop to upload</span>}
-              </p>
+              {creating ? "ADDING…" : "ADD"}
+            </Button>
+          </form>
+        )}
 
-              {chips.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {chips.map((chip) => (
-                    <span
-                      key={chip.topic}
-                      className="border border-line px-1.5 py-0.5 font-mono text-meta text-ink-muted"
-                    >
-                      {chip.topic}
-                    </span>
-                  ))}
-                </div>
-              )}
+        {visible.length === 0 && (
+          <p className="text-body text-ink-faint">
+            No courses yet — create a folder like <span className="font-mono text-xs">15-Courses/CS201/</span>{" "}
+            with a <span className="font-mono text-xs">course.md</span> in your vault.
+          </p>
+        )}
 
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <input
-                  ref={(el) => {
-                    fileInputs.current[course.code] = el;
-                  }}
-                  type="file"
-                  accept={ACCEPTED_EXTENSIONS.join(",")}
-                  className="hidden"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) upload(course.code, file);
-                    event.target.value = "";
-                  }}
-                />
-                <button
-                  onClick={() => fileInputs.current[course.code]?.click()}
-                  disabled={busyAction !== null}
-                  className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
-                >
-                  {busyAction === `upload-${course.code}` ? "UPLOADING…" : "+ FILES"}
-                </button>
-                <button
-                  onClick={() => generate("guide", course.code)}
-                  disabled={busyAction !== null || course.materials === 0}
-                  className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
-                >
-                  {busyAction === `guide-${course.code}` ? "WRITING…" : "GUIDE"}
-                </button>
-                <button
-                  onClick={() => generate("exam", course.code)}
-                  disabled={busyAction !== null || course.materials === 0}
-                  className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
-                >
-                  {busyAction === `exam-${course.code}` ? "GENERATING…" : "+ EXAM"}
-                </button>
-                <Link
-                  href={`/study/course/${encodeURIComponent(course.code)}`}
-                  className="ml-auto font-mono text-meta uppercase tracking-wide text-[var(--ac)] transition-colors hover:opacity-80"
-                >
-                  HUB →
-                </Link>
+        <div className="space-y-3">
+          {visible.map((course) => {
+            const chips = weakTopics.filter((topic) => topic.course === course.code).slice(0, 4);
+            return (
+              <div
+                key={course.code}
+                onDragOver={(event) => handleDragOver(course.code, event)}
+                onDragLeave={(event) => handleDragLeave(course.code, event)}
+                onDrop={(event) => handleDrop(course.code, event)}
+                className={`border p-3 transition-colors ${
+                  dragOverCourse === course.code ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-1.5 font-mono text-meta uppercase tracking-wide text-ink-faint">
+                      {course.code}
+                    </p>
+                    <p className="truncate text-lead font-medium text-ink-bright">{course.title}</p>
+                  </div>
+                  <button
+                    aria-label={`Delete ${course.code}`}
+                    onClick={() => void removeCourse(course.code)}
+                    className="shrink-0 font-mono text-xs text-ink-faint transition-colors hover:text-danger"
+                  >
+                    ×
+                  </button>
+                </div>
+                <p className="mt-1 font-mono text-label text-ink-faint">
+                  {course.materials} material{course.materials === 1 ? "" : "s"} · {course.notes} note
+                  {course.notes === 1 ? "" : "s"}
+                  {dragOverCourse === course.code && <span className="ml-2 text-[var(--ac)]">— drop to upload</span>}
+                </p>
+
+                {chips.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {chips.map((chip) => (
+                      <span
+                        key={chip.topic}
+                        className="border border-line px-1.5 py-0.5 font-mono text-meta text-ink-muted"
+                      >
+                        {chip.topic}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    ref={(el) => {
+                      fileInputs.current[course.code] = el;
+                    }}
+                    type="file"
+                    accept={ACCEPTED_EXTENSIONS.join(",")}
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) upload(course.code, file);
+                      event.target.value = "";
+                    }}
+                  />
+                  <button
+                    onClick={() => fileInputs.current[course.code]?.click()}
+                    disabled={busyAction !== null}
+                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                  >
+                    {busyAction === `upload-${course.code}` ? "UPLOADING…" : "+ FILES"}
+                  </button>
+                  <button
+                    onClick={() => generate("guide", course.code)}
+                    disabled={busyAction !== null || course.materials === 0}
+                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                  >
+                    {busyAction === `guide-${course.code}` ? "WRITING…" : "GUIDE"}
+                  </button>
+                  <button
+                    onClick={() => generate("exam", course.code)}
+                    disabled={busyAction !== null || course.materials === 0}
+                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                  >
+                    {busyAction === `exam-${course.code}` ? "GENERATING…" : "+ EXAM"}
+                  </button>
+                  <Link
+                    href={`/study/course/${encodeURIComponent(course.code)}`}
+                    className="ml-auto font-mono text-meta uppercase tracking-wide text-[var(--ac)] transition-colors hover:opacity-80"
+                  >
+                    HUB →
+                  </Link>
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-    </Panel>
+            );
+          })}
+        </div>
+      </Panel>
+      {confirmDialog}
+    </>
   );
 }
