@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.index import VaultIndex
 from backend.vault.paths import is_indexable
 
@@ -20,13 +21,16 @@ DEBOUNCE_SECONDS = 2.0
 class DebounceQueue:
     """Collects changed paths and flushes those quiet for DEBOUNCE_SECONDS."""
 
-    def __init__(self, debounce: float = DEBOUNCE_SECONDS) -> None:
+    def __init__(
+        self, debounce: float = DEBOUNCE_SECONDS, *, taxonomy: Taxonomy | None = None
+    ) -> None:
         self._debounce = debounce
+        self._taxonomy = taxonomy or active_taxonomy()
         self._pending: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def push(self, rel_path: str) -> None:
-        if not is_indexable(rel_path):
+        if not is_indexable(rel_path, taxonomy=self._taxonomy):
             return
         with self._lock:
             self._pending[rel_path] = time.monotonic()
@@ -46,12 +50,14 @@ def watch_vault(
     index: VaultIndex,
     on_update: Callable[[str, int], None] | None = None,
     stop_event: threading.Event | None = None,
+    *,
+    taxonomy: Taxonomy | None = None,
 ) -> None:
     """Blocking watch loop. Ctrl+C (or ``stop_event``) exits."""
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
     from watchdog.observers import Observer
 
-    queue = DebounceQueue()
+    queue = DebounceQueue(taxonomy=taxonomy or active_taxonomy())
 
     class Handler(FileSystemEventHandler):
         def on_any_event(self, event: FileSystemEvent) -> None:

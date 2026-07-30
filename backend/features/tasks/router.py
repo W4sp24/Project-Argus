@@ -73,7 +73,7 @@ def build_tasks_router(settings: Settings) -> APIRouter:
         target = date.fromisoformat(day) if day else date.today()
         conn = db()
         try:
-            refresh_cache(conn, settings.vault_path)
+            refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn, today=target)
         finally:
             conn.close()
@@ -105,7 +105,7 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     def tasks_board() -> dict[str, list[TaskItem]]:
         conn = db()
         try:
-            refresh_cache(conn, settings.vault_path)
+            refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn)
         finally:
             conn.close()
@@ -119,7 +119,9 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     @router.post("/capture", response_model=CaptureResponse)
     def capture(request: CaptureRequest) -> CaptureResponse:
         try:
-            return CaptureResponse(path=append_capture(settings.vault_path, request.text))
+            return CaptureResponse(
+                path=append_capture(settings.vault_path, request.text, taxonomy=settings.taxonomy)
+            )
         except WriterError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -127,7 +129,11 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     def toggle(request: TaskLineRef) -> NewLine:
         try:
             new_line = writer.toggle_task_line(
-                settings.vault_path, request.path, request.line, request.old_line
+                settings.vault_path,
+                request.path,
+                request.line,
+                request.old_line,
+                taxonomy=settings.taxonomy,
             )
         except WriterError as exc:
             raise_http(exc)
@@ -137,7 +143,12 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     def edit_line(request: TaskLineUpdate) -> NewLine:
         try:
             new_line = writer.update_task_line(
-                settings.vault_path, request.path, request.line, request.old_line, request.new_line
+                settings.vault_path,
+                request.path,
+                request.line,
+                request.old_line,
+                request.new_line,
+                taxonomy=settings.taxonomy,
             )
         except WriterError as exc:
             raise_http(exc)
@@ -147,7 +158,11 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     def drop_line(request: TaskLineRef) -> dict:
         try:
             writer.delete_task_line(
-                settings.vault_path, request.path, request.line, request.old_line
+                settings.vault_path,
+                request.path,
+                request.line,
+                request.old_line,
+                taxonomy=settings.taxonomy,
             )
         except WriterError as exc:
             raise_http(exc)

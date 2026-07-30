@@ -2,8 +2,9 @@
 
 Every question must cite a verbatim quote from the course corpus; questions
 whose citation cannot be verified are dropped (invariant I6). Exam files are
-NEW files under ``15-Courses/<C>/study/`` — the one direct-write exemption to
-the single-writer rule (I1).
+NEW files under each course's ``study/`` subfolder (see
+:mod:`backend.core.taxonomy`) — the one direct-write exemption to the
+single-writer rule (I1).
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 
 Generator = Callable[[str], Awaitable[str]]
 
@@ -183,11 +186,14 @@ async def generate_practice_exam(
     topics: str | None = None,
     n: int = 10,
     difficulty: str = "medium",
+    *,
+    taxonomy: Taxonomy | None = None,
 ) -> tuple[int, Exam, str]:
     """Generate, validate, persist, and write one practice exam.
 
     Returns (exam_id, exam, vault-relative exam path).
     """
+    tax = taxonomy or active_taxonomy()
     if not corpus:
         raise StudyError(f"no indexed material for course {course} — upload to materials/ first")
 
@@ -204,7 +210,7 @@ async def generate_practice_exam(
     if not exam.questions:
         raise StudyError(f"all {dropped} generated questions failed citation checks")
 
-    study_dir = vault_path / "15-Courses" / course / "study"
+    study_dir = vault_path / tax.course_study(course)
     study_dir.mkdir(parents=True, exist_ok=True)
     stamp = date.today().isoformat()
     base = f"exam-{stamp}-{len(exam.questions)}q"
@@ -220,4 +226,4 @@ async def generate_practice_exam(
         (course, exam.title, exam.model_dump_json()),
     )
     conn.commit()
-    return int(cursor.lastrowid), exam, f"15-Courses/{course}/study/{base}.md"
+    return int(cursor.lastrowid), exam, f"{tax.course_study(course)}/{base}.md"

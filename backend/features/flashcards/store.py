@@ -1,8 +1,8 @@
 """Flashcard decks parsed from the vault, scheduled with real FSRS.
 
 Decks are generated from ``Q:: A::`` pairs in a course's
-``15-Courses/<CODE>/flashcards.md`` note (mirrors ``backend/study/corpus.py``'s
-vault-relative course layout) and persisted as a JSON blob
+``<courses>/<CODE>/flashcards.md`` note (mirrors ``backend/features/study/corpus.py``'s
+vault-relative course layout, see :mod:`backend.core.taxonomy`) and persisted as a JSON blob
 (``flashcard_decks.cards_json``), the same JSON-blob-column shape
 ``backend/study/practice_exam.py`` uses for ``exams.questions_json``.
 
@@ -27,7 +27,11 @@ from fsrs import Card as FsrsCard
 from fsrs import Rating, Scheduler, State
 from pydantic import BaseModel
 
-COURSES_DIR = "15-Courses"
+from backend.core.taxonomy import Taxonomy, active_taxonomy
+
+# Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
+# settings.taxonomy.courses / active_taxonomy().courses.
+COURSES_DIR = Taxonomy().courses
 
 GRADE_TO_RATING: dict[str, Rating] = {
     "again": Rating.Again,
@@ -107,17 +111,20 @@ def parse_qa_pairs(text: str) -> list[tuple[str, str]]:
     return pairs
 
 
-def _flashcards_path(vault_path: Path, course: str) -> Path:
-    return vault_path / COURSES_DIR / course / "flashcards.md"
+def _flashcards_path(vault_path: Path, course: str, *, taxonomy: Taxonomy | None = None) -> Path:
+    tax = taxonomy or active_taxonomy()
+    return vault_path / tax.courses / course / "flashcards.md"
 
 
-def generate_deck(vault_path: Path, conn: sqlite3.Connection, course: str) -> int:
+def generate_deck(
+    vault_path: Path, conn: sqlite3.Connection, course: str, *, taxonomy: Taxonomy | None = None
+) -> int:
     """Parse ``flashcards.md`` for ``course`` and persist a new deck.
 
     Returns the new ``flashcard_decks.id``. Raises :class:`FlashcardsError`
     if the file is missing or has no valid ``Q:: A::`` pairs.
     """
-    path = _flashcards_path(vault_path, course)
+    path = _flashcards_path(vault_path, course, taxonomy=taxonomy)
     if not path.is_file():
         raise FlashcardsError(f"no flashcards.md for course {course}")
     pairs = parse_qa_pairs(path.read_text(encoding="utf-8"))

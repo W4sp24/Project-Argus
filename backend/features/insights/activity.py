@@ -8,7 +8,6 @@ from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.vault.notes import list_notes
-from backend.vault.paths import EXCLUDED_TOP_DIRS
 
 
 class ActivityEvent(BaseModel):
@@ -38,8 +37,8 @@ def recent_activity(
 
     notes = [
         note
-        for note in list_notes(settings.vault_path)
-        if note.path.split("/", 1)[0] not in EXCLUDED_TOP_DIRS
+        for note in list_notes(settings.vault_path, taxonomy=settings.taxonomy)
+        if note.path.split("/", 1)[0] not in settings.taxonomy.excluded_top_dirs
     ][:limit]
     for note in notes:
         events.append(

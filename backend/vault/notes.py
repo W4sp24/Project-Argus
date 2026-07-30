@@ -1,8 +1,9 @@
 """Read-only vault note listing.
 
 Walks the vault for markdown files, resolving a human title for each. The
-privacy boundary starts here: ``99-Private/`` and app/internal folders are
-never surfaced (invariant I3).
+privacy boundary starts here: the taxonomy's private/journal dirs (see
+:mod:`backend.core.taxonomy`) and app/internal folders are never surfaced
+(invariant I3).
 """
 
 from __future__ import annotations
@@ -13,7 +14,12 @@ from pathlib import Path
 import frontmatter
 from pydantic import BaseModel
 
-EXCLUDED_DIRS = {".obsidian", ".argus", ".git", ".trash", "99-Private"}
+from backend.core.taxonomy import Taxonomy, active_taxonomy
+
+# Deprecated for 0.3 — bound to Taxonomy()'s defaults; prefer settings.taxonomy
+# / active_taxonomy(). Kept so a straggler importing this name directly still
+# resolves, at the cost of not reflecting a custom taxonomy.
+EXCLUDED_DIRS = Taxonomy().excluded_top_dirs
 
 
 class NoteInfo(BaseModel):
@@ -25,8 +31,8 @@ class NoteInfo(BaseModel):
     modified: str
 
 
-def _is_excluded(relative: Path) -> bool:
-    return any(part in EXCLUDED_DIRS for part in relative.parts)
+def _is_excluded(relative: Path, excluded_dirs: frozenset[str]) -> bool:
+    return any(part in excluded_dirs for part in relative.parts)
 
 
 def _resolve_title(file_path: Path) -> str:
@@ -44,12 +50,14 @@ def _resolve_title(file_path: Path) -> str:
     return file_path.stem
 
 
-def list_notes(vault_path: Path) -> list[NoteInfo]:
+def list_notes(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[NoteInfo]:
     """All non-private markdown notes in the vault, newest first."""
+    tax = taxonomy or active_taxonomy()
+    excluded_dirs = tax.excluded_top_dirs
     notes: list[NoteInfo] = []
     for file_path in vault_path.rglob("*.md"):
         relative = file_path.relative_to(vault_path)
-        if _is_excluded(relative):
+        if _is_excluded(relative, excluded_dirs):
             continue
         modified = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC).isoformat()
         notes.append(

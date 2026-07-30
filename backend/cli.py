@@ -19,21 +19,10 @@ from datetime import date
 from pathlib import Path
 
 from backend.core.config import DEFAULT_ENV_FILE, parse_env_file
+from backend.core.taxonomy import Taxonomy
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "vault-template"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-EMPTY_FOLDERS = [
-    "00-Inbox",
-    "10-Daily",
-    "15-Courses/CS000/notes",
-    "15-Courses/CS000/materials",
-    "15-Courses/CS000/study",
-    "20-Projects",
-    "30-Areas",
-    "40-People",
-    "50-Reference",
-    "99-Private",
-]
 
 
 class InitError(RuntimeError):
@@ -76,14 +65,20 @@ def _write_env(env_file: Path, vault_path: Path) -> None:
 
 
 def init_vault(dest: Path, env_file: Path = DEFAULT_ENV_FILE) -> Path:
-    """Create a new vault at ``dest`` from the template and register it."""
+    """Create a new vault at ``dest`` from the template and register it.
+
+    Seed folders come from ``env_file``'s taxonomy, if it already has one
+    (e.g. someone set ``VAULT_INBOX_DIR`` etc. before running ``argus init``)
+    — otherwise the defaults, identical to every pre-taxonomy vault.
+    """
     if dest.exists() and any(dest.iterdir()):
         raise InitError(f"{dest} already exists and is not empty; refusing to overwrite.")
     if not TEMPLATE_DIR.is_dir():
         raise InitError(f"vault template not found at {TEMPLATE_DIR}")
 
+    taxonomy = Taxonomy.from_env(parse_env_file(env_file))
     shutil.copytree(TEMPLATE_DIR, dest, dirs_exist_ok=True)
-    for folder in EMPTY_FOLDERS:
+    for folder in taxonomy.seed_folders():
         (dest / folder).mkdir(parents=True, exist_ok=True)
 
     today = date.today().isoformat()
@@ -207,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         from backend.rag.index import VaultIndex
 
         settings = Settings.load(args.env_file)
-        index = VaultIndex(settings.db_path.parent / "chroma")
+        index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
 
         if args.command == "reindex":
             counts = index.reindex_all(settings.vault_path)
@@ -221,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
             settings.vault_path,
             index,
             on_update=lambda rel, count: print(f"  reindexed {rel} ({count} chunks)"),
+            taxonomy=settings.taxonomy,
         )
         return 0
 

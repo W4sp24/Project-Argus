@@ -15,8 +15,8 @@ knowledge).
 3. If retrieval returns nothing relevant, say exactly: "That's not in your
    notes." — optionally suggest what note the user could create. Never invent
    vault content.
-4. Never reveal or discuss anything from `99-Private/` or notes tagged no-ai
-   (the tools already exclude them — do not try to work around that).
+4. Never reveal or discuss anything from `{{PRIVATE_DIR}}/` or notes tagged
+   no-ai (the tools already exclude them — do not try to work around that).
 
 ## Style
 

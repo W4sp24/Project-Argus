@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from backend.connectors import ConnectorUnavailable
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
+from backend.core.taxonomy import Taxonomy
 from backend.main import create_app
 from backend.vault.tasks import TaskItem
 
@@ -79,9 +80,9 @@ def test_capture_goes_through_writer_only(
 
     real = tasks_api.append_capture
 
-    def spy(vault_path, text):
+    def spy(vault_path, text, **kwargs):
         calls.append(text)
-        return real(vault_path, text)
+        return real(vault_path, text, **kwargs)
 
     monkeypatch.setattr(tasks_api, "append_capture", spy)
 
@@ -91,6 +92,21 @@ def test_capture_goes_through_writer_only(
     assert calls == ["capture through writer"], "capture must route through backend.vault.writer"
     captured = vault / response.json()["path"]
     assert "capture through writer" in captured.read_text(encoding="utf-8")
+
+
+def test_capture_lands_in_a_renamed_inbox(vault: Path) -> None:
+    """The bug this branch fixes: quick capture must honour a custom taxonomy,
+    not always write into 00-Inbox/."""
+    settings = Settings(_vault_path=vault, taxonomy=Taxonomy(inbox="Quick Notes"))
+    client = TestClient(create_app(settings))
+
+    response = client.post("/api/capture", json={"text": "renamed inbox via the API"})
+
+    assert response.status_code == 200
+    path = response.json()["path"]
+    assert path.startswith("Quick Notes/")
+    assert (vault / path).is_file()
+    assert not (vault / "00-Inbox").exists()
 
 
 def test_capture_rejects_empty(client: TestClient) -> None:

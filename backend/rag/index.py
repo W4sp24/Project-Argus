@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.chunk import Chunk, chunk_blocks
 from backend.rag.extract import extract_blocks
 from backend.vault.paths import is_indexable
@@ -31,8 +32,9 @@ def _chunk_id(rel_path: str, index: int) -> str:
 class VaultIndex:
     """Persistent local index over one vault. Heavy deps load lazily."""
 
-    def __init__(self, db_dir: Path) -> None:
+    def __init__(self, db_dir: Path, *, taxonomy: Taxonomy | None = None) -> None:
         self._db_dir = db_dir
+        self._taxonomy = taxonomy or active_taxonomy()
         self._model: Any = None
         self._collection: Any = None
 
@@ -63,13 +65,13 @@ class VaultIndex:
 
     def upsert_file(self, vault_path: Path, rel_path: str) -> int:
         """(Re-)index one file; returns the number of chunks stored."""
-        if not is_indexable(rel_path):
+        if not is_indexable(rel_path, taxonomy=self._taxonomy):
             return 0
         self.delete_file(rel_path)
         file_path = vault_path / rel_path
         if not file_path.is_file():
             return 0
-        chunks = chunk_blocks(extract_blocks(file_path), rel_path)
+        chunks = chunk_blocks(extract_blocks(file_path), rel_path, taxonomy=self._taxonomy)
         if not chunks:
             return 0
         self.collection.add(
@@ -87,7 +89,7 @@ class VaultIndex:
             if not file_path.is_file():
                 continue
             rel_path = file_path.relative_to(vault_path).as_posix()
-            if not is_indexable(rel_path):
+            if not is_indexable(rel_path, taxonomy=self._taxonomy):
                 continue
             count = self.upsert_file(vault_path, rel_path)
             if count:

@@ -1,7 +1,8 @@
 """Dev-journal endpoints — read-only by contract (D1): no write routes exist.
 
-The journal zone (``90-Meta/``) is dev-owned: Claude Code writes it, Argus only
-reads it back for the dashboard's Journal page.
+The journal zone (the taxonomy's ``journal`` dir, ``90-Meta/`` by default) is
+dev-owned: Claude Code writes it, Argus only reads it back for the
+dashboard's Journal page.
 """
 
 from __future__ import annotations
@@ -25,16 +26,16 @@ def build_journal_router(settings: Settings) -> APIRouter:
 
     @router.get("/projects", response_model=list[JournalProject])
     def journal_projects() -> list[JournalProject]:
-        return list_projects(settings.vault_path)
+        return list_projects(settings.vault_path, taxonomy=settings.taxonomy)
 
     @router.get("/sessions", response_model=list[JournalSession])
     def journal_sessions(project: str | None = None) -> list[JournalSession]:
-        return list_sessions(settings.vault_path, project)
+        return list_sessions(settings.vault_path, project, taxonomy=settings.taxonomy)
 
     @router.get("/note", response_model=JournalNote)
     def journal_note(path: str) -> JournalNote:
         try:
-            note = read_note(settings.vault_path, path)
+            note = read_note(settings.vault_path, path, taxonomy=settings.taxonomy)
         except JournalPathError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if note is None:

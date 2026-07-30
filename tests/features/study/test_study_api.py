@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.core.config import Settings
+from backend.core.taxonomy import Taxonomy
 from backend.main import create_app
 
 CORPUS = [
@@ -80,6 +81,23 @@ def test_courses_listed(client: TestClient) -> None:
     payload = client.get("/api/study/courses").json()
     assert payload[0]["code"] == "CS201"
     assert payload[0]["title"] == "Algorithms"
+
+
+def test_course_discovery_honours_a_renamed_courses_dir(tmp_path: Path) -> None:
+    """The bug this branch fixes: a vault that doesn't call it 15-Courses/."""
+    vault = tmp_path / "vault"
+    (vault / "Classes" / "CS301" / "materials").mkdir(parents=True)
+    (vault / "Classes" / "CS301" / "course.md").write_text(
+        "---\ntitle: Data Structures\n---\n# CS301\n", encoding="utf-8"
+    )
+    settings = Settings(_vault_path=vault, taxonomy=Taxonomy(courses="Classes"))
+    client = TestClient(create_app(settings, generator=fake_generator, index_factory=FakeIndex))
+
+    payload = client.get("/api/study/courses").json()
+
+    assert payload[0]["code"] == "CS301"
+    assert payload[0]["title"] == "Data Structures"
+    assert payload[0]["path"] == "Classes/CS301/course.md"
 
 
 def test_upload_lands_in_materials(client: TestClient, tmp_path: Path) -> None:

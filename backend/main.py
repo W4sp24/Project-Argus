@@ -109,7 +109,7 @@ def create_app(
     def _default_index_factory() -> object:
         from backend.rag.index import VaultIndex
 
-        return VaultIndex(resolved.db_path.parent / "chroma")
+        return VaultIndex(resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy)
 
     def _default_generator(feature: str) -> Callable:
         """agent_generate bound to a feature label + db so usage rows attribute.

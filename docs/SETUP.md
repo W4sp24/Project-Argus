@@ -171,6 +171,44 @@ None of these are needed for Argus to work.
 
 ---
 
+## Using an existing vault with different folder names
+
+Argus organizes new vaults with nine top-level folders (`00-Inbox`,
+`10-Daily`, `15-Courses`, `20-Projects`, `30-Areas`, `40-People`,
+`50-Reference`, `90-Meta`, `99-Private`). If you already have an Obsidian
+vault with your own names for these — or no equivalent for some of them —
+you don't need to rename anything. Add the matching keys to your env file
+(the `.env` next to a source checkout, or the config file the desktop app
+already writes `VAULT_PATH` into) and Argus will read and write there instead:
+
+```
+VAULT_INBOX_DIR=Quick Notes
+VAULT_DAILY_DIR=Journal
+VAULT_COURSES_DIR=School
+VAULT_PROJECTS_DIR=Projects
+VAULT_AREAS_DIR=Areas
+VAULT_PEOPLE_DIR=People
+VAULT_REFERENCE_DIR=Reference
+VAULT_JOURNAL_DIR=Argus Journal
+VAULT_PRIVATE_DIR=Do Not Index
+VAULT_INDEXABLE_SUFFIXES=.md,.pdf,.pptx,.docx
+```
+
+Every key is optional and independent — set only the ones you need. Each
+value must be a plain folder name (no `/`, no `..`), and all nine must be
+different from each other; **`VAULT_PRIVATE_DIR` in particular is the folder
+Argus never indexes and never sends to any model**, so double-check it before
+saving. `argus doctor` (or **System → DOCTOR**) reports which configured
+folders don't exist in your vault yet — that's expected for a folder you
+haven't used, not a broken install.
+
+Two things this does **not** do: it does not move any of your existing files
+(create the folder yourself, or let Argus create it on first use), and if you
+change these keys on a vault Argus has already indexed, run `argus reindex`
+(or **System → REINDEX**) afterward so search and chat see the new locations.
+
+---
+
 ## Running from source
 
 For anyone comfortable with a terminal. Needs Python 3.12+, Node 18+, and git.
@@ -197,8 +235,9 @@ add a model. `argus doctor` checks the install at any time.
 ## What Argus sends where
 
 - Indexing and searching your notes happens entirely on your computer, always.
-- Anything in `99-Private/`, and any note tagged `#no-ai`, is never indexed and
-  never sent to any model.
+- Anything in your private folder (`99-Private/` unless you've renamed it —
+  see [above](#using-an-existing-vault-with-different-folder-names)), and any
+  note tagged `#no-ai`, is never indexed and never sent to any model.
 - With a **LOCAL** model, nothing at all leaves your computer.
 - With a **HOSTED** model, only the excerpts relevant to your question are sent
   to that provider — never your whole vault.

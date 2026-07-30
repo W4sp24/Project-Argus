@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import backend
+from backend.core.taxonomy import Taxonomy
 from backend.vault import writer
 from backend.vault.writer import (
     WriterConflict,
@@ -108,6 +109,30 @@ def test_guard_rejects_case_variants_of_protected_dirs(vault: Path):
     for bad in ("99-private/x.md", "90-META/sessions/x.md", "99-PRIVATE/y.md"):
         with pytest.raises(WriterForbidden):
             guard_user_path(vault, bad)
+
+
+def test_guard_protects_a_renamed_private_folder(vault: Path):
+    """I3 with a custom taxonomy: a vault that calls its private zone something
+    else entirely must still have that zone protected — and the *old* default
+    name must no longer be special once it isn't the configured one."""
+    custom = Taxonomy(private="Personal", journal="DevNotes")
+
+    with pytest.raises(WriterForbidden):
+        guard_user_path(vault, "Personal/diary.md", taxonomy=custom)
+
+    # The old hardcoded name is just an ordinary folder under this taxonomy.
+    resolved = guard_user_path(vault, "99-Private/not-special.md", taxonomy=custom)
+    assert resolved == (vault / "99-Private" / "not-special.md").resolve()
+
+
+def test_append_capture_lands_in_a_renamed_inbox(vault: Path):
+    custom = Taxonomy(inbox="Capture")
+
+    rel = append_capture(vault, "renamed inbox test", taxonomy=custom)
+
+    assert rel.startswith("Capture/")
+    assert (vault / rel).is_file()
+    assert not (vault / "00-Inbox").exists(), "must not also write the default inbox"
 
 
 def test_toggle_task_line_checks_and_stamps_done_date(vault: Path):

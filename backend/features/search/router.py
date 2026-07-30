@@ -48,7 +48,7 @@ def build_search_router(settings: Settings, index_factory: Any) -> APIRouter:
             from backend.rag.retrieve import retrieve
 
             index = index_factory()
-            hits = retrieve(index, query, settings.vault_path, k=8)
+            hits = retrieve(index, query, settings.vault_path, k=8, taxonomy=settings.taxonomy)
         except Exception:
             return []
         return [

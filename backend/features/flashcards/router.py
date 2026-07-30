@@ -49,7 +49,9 @@ def build_flashcards_router(settings: Settings) -> APIRouter:
     def create_deck(request: GenerateDeckRequest) -> DeckSummary:
         conn = db()
         try:
-            deck_id = generate_deck(settings.vault_path, conn, request.course)
+            deck_id = generate_deck(
+                settings.vault_path, conn, request.course, taxonomy=settings.taxonomy
+            )
             deck = load_deck(conn, deck_id)
         except FlashcardsError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

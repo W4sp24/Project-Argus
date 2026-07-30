@@ -32,7 +32,7 @@ def run_briefing_job(settings: Settings, composer: Composer | None = None) -> st
             markdown = compose_briefing(settings, conn, composer=composer)
         finally:
             conn.close()
-        path = write_briefing(settings.vault_path, markdown)
+        path = write_briefing(settings.vault_path, markdown, taxonomy=settings.taxonomy)
         logger.info("briefing written to %s", path)
         return path
     except Exception:
@@ -46,7 +46,7 @@ def run_refresh_job(settings: Settings) -> None:
         conn = connect(settings.db_path)
         init_schema(conn)
         try:
-            count = refresh_cache(conn, settings.vault_path)
+            count = refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
         finally:
             conn.close()
         logger.info("task cache refreshed (%d open tasks)", count)
