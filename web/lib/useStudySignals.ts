@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { fetcher, useNotes, useTasksBoard } from "@/lib/api";
+import { fetcher, useNotes, useTasksBoard, useVault } from "@/lib/api";
 
 const EXAM_KEYWORD_RE = /\b(exam|midterm|final|quiz)\b/i;
 
@@ -44,22 +44,27 @@ export interface WeakTopic {
   topic: string;
 }
 
-const REVIEW_QUEUE_RE = /^15-Courses\/([^/]+)\/study\/review-queue\.md$/;
-
 /**
  * Weak topics restyled from real data (§4 REVIEW.QUEUE): grade_attempt()
  * appends unchecked `- [ ] Review: {topic}` lines to
- * `15-Courses/<CODE>/study/review-queue.md` (backend/study/grader.py). No
+ * `<courses_dir>/<CODE>/study/review-queue.md` (backend/study/grader.py). No
  * endpoint aggregates these, so we find the review-queue notes via the real
  * `/api/notes` listing, then read each one's content via the real
  * `GET /api/note` and parse out the still-open topics. Read-only — never
- * writes.
+ * writes. `courses_dir` comes from `GET /api/vault` (never hardcoded —
+ * a literal `15-Courses` here would misreport every course's weak topics as
+ * soon as the taxonomy is reconfigured).
  */
 export function useWeakTopics(): WeakTopic[] {
+  const { data: vault } = useVault();
   const { data: notes } = useNotes();
-  const reviewPaths = (notes ?? [])
-    .filter((note) => REVIEW_QUEUE_RE.test(note.path))
-    .map((note) => note.path);
+  const coursesDir = vault?.courses_dir;
+  const reviewQueueRe = coursesDir
+    ? new RegExp(`^${coursesDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^/]+)/study/review-queue\\.md$`)
+    : null;
+  const reviewPaths = reviewQueueRe
+    ? (notes ?? []).filter((note) => reviewQueueRe.test(note.path)).map((note) => note.path)
+    : [];
 
   const key = reviewPaths.length > 0 ? ["study-weak-topics", ...reviewPaths] : null;
   const { data } = useSWR<WeakTopic[]>(key, async () => {
@@ -69,7 +74,7 @@ export function useWeakTopics(): WeakTopic[] {
     const seen = new Set<string>();
     const topics: WeakTopic[] = [];
     for (const note of contents) {
-      const match = REVIEW_QUEUE_RE.exec(note.path);
+      const match = reviewQueueRe?.exec(note.path);
       const course = match ? match[1] : "?";
       for (const line of note.content.split("\n")) {
         const topicMatch = /^- \[ \] Review: (.+)$/.exec(line.trim());

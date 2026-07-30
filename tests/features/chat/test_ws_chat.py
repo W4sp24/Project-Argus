@@ -64,6 +64,39 @@ def test_ws_chat_passes_model_to_model_aware_runner(tmp_path: Path) -> None:
     assert seen_models == ["claude-haiku", None]
 
 
+def test_ws_chat_passes_course_to_a_course_aware_runner(tmp_path: Path) -> None:
+    """Course Hub scoping (§4): the `course` frame field must reach the
+    runner, which is what forces `search_vault`'s filter in the real agent
+    (backend/agent/runtime.py — covered separately in tests/agent/test_runtime.py)."""
+    seen_courses: list[str | None] = []
+
+    async def course_runner(
+        message: str, model: str | None = None, course: str | None = None
+    ) -> AsyncIterator[str]:
+        seen_courses.append(course)
+        yield f"scoped to {course or 'nothing'}"
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    app = create_app(Settings(_vault_path=vault), chat_runner=course_runner)
+    with TestClient(app).websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "what's due?", "course": "CS201"})
+        assert ws.receive_json()["text"] == "scoped to CS201"
+        assert ws.receive_json()["type"] == "done"
+        ws.send_json({"message": "and now?"})
+        assert ws.receive_json()["text"] == "scoped to nothing"
+        assert ws.receive_json()["type"] == "done"
+    assert seen_courses == ["CS201", None]
+
+
+def test_ws_chat_course_field_safe_with_legacy_runner(client: TestClient) -> None:
+    """A frame carrying `course` must not break a runner that only knows `message`."""
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "shortest paths?", "course": "CS201"})
+        frames = [ws.receive_json() for _ in range(3)]
+    assert frames[-1] == {"type": "done"}
+
+
 def test_ws_chat_model_field_safe_with_legacy_runner(client: TestClient) -> None:
     """A frame carrying ``model`` must not break single-argument runners."""
     with client.websocket_connect("/ws/chat") as ws:

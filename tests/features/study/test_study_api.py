@@ -1,6 +1,7 @@
 """Tests for /api/study endpoints (fake generator + fake index)."""
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -109,6 +110,71 @@ def test_upload_lands_in_materials(client: TestClient, tmp_path: Path) -> None:
     assert response.status_code == 200
     saved = tmp_path / "vault" / "15-Courses" / "CS201" / "materials" / "deck.pdf"
     assert saved.is_file(), "upload must land in materials/"
+
+
+def test_course_info_reports_its_real_write_targets(client: TestClient) -> None:
+    """The frontend must never rebuild these paths from a bare folder literal
+    (they'd break the moment the taxonomy is reconfigured) — it has to read
+    them off CourseInfo instead."""
+    course = client.get("/api/study/courses").json()[0]
+    assert course["materials_path"] == "15-Courses/CS201/materials"
+    assert course["notes_path"] == "15-Courses/CS201/notes"
+
+
+def test_ingest_with_the_reported_materials_path_makes_courses_report_it(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """The reported bug, end to end: Study's upload target used to be the
+    course *root* (`15-Courses/<code>`), not `materials/` — the file saved
+    fine, but `courses()` only ever counts files inside `materials/`, so the
+    row kept reading "0 materials" and GUIDE/EXAM stayed disabled. The fix is
+    for callers to target whatever `materials_path` this API reports, not a
+    hardcoded path — proven here by going through the generic `/api/ingest`
+    upload path (what `IngestPanel` posts to), not the course-specific one.
+    """
+    # /api/ingest snapshots the vault into git before writing (I2), unlike
+    # /api/study/upload — this test's client fixture never git-inits its
+    # vault, so this specific test does it itself.
+    vault = tmp_path / "vault"
+    subprocess.run(["git", "init"], cwd=vault, capture_output=True, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=vault, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "init"], cwd=vault, capture_output=True, check=True
+    )
+
+    course = client.get("/api/study/courses").json()[0]
+    assert course["materials"] == 0
+
+    response = client.post(
+        "/api/ingest",
+        data={"target": course["materials_path"]},
+        files={"file": ("syllabus.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    assert response.status_code == 200
+
+    updated = client.get("/api/study/courses").json()[0]
+    assert updated["materials"] == 1, "materials must move off zero once the real target is used"
+
+
+def test_course_sources_lists_non_markdown_materials(client: TestClient) -> None:
+    """The bug: `GET /api/notes` only ever lists `*.md`, so an uploaded PDF/
+    PPTX/DOCX could never appear in the Course Hub SOURCES rail even though
+    it was really saved and indexed. This endpoint walks the real files."""
+    client.post(
+        "/api/study/upload",
+        data={"course": "CS201"},
+        files={"file": ("slides.pptx", b"fake pptx bytes", "application/octet-stream")},
+    )
+
+    sources = client.get("/api/study/courses/CS201/sources").json()
+    by_name = {item["path"].rsplit("/", 1)[-1]: item for item in sources}
+
+    assert "slides.pptx" in by_name, "a non-markdown material must be listed"
+    assert by_name["slides.pptx"]["zone"] == "materials"
+    assert by_name["slides.pptx"]["kind"] == "PPTX"
+    # Not in the fixture's fake index -> None, not 0 (0 would falsely claim
+    # "indexed, zero chunks" rather than "not indexed at all").
+    assert by_name["slides.pptx"]["chunks"] is None
 
 
 def test_exam_generation_quiz_and_attempt_roundtrip(client: TestClient, tmp_path: Path) -> None:

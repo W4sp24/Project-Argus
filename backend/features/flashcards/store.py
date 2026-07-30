@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 from fsrs import Card as FsrsCard
@@ -74,6 +74,28 @@ class GradeResult(BaseModel):
     difficulty: float
     due_at: str
     state: str
+
+
+class DeckDueSummary(BaseModel):
+    """One deck's due-card count, as part of the whole-vault summary below."""
+
+    deck_id: int
+    course: str
+    title: str
+    due: int
+
+
+class DueSummary(BaseModel):
+    """Cards due across every deck, in one request.
+
+    ``useDueCards()`` only takes a single deck id, so a whole-vault "cards
+    due" total (the Study overview's stat row + FLASHCARDS panel) would
+    otherwise cost one request per deck. Backs the real replacement for the
+    previously hardcoded ``MOCK_CARDS_DUE = 7``.
+    """
+
+    total: int
+    decks: list[DeckDueSummary]
 
 
 def parse_qa_pairs(text: str) -> list[tuple[str, str]]:
@@ -251,6 +273,23 @@ def due_cards(conn: sqlite3.Connection, deck_id: int, now: datetime | None = Non
 
     scored.sort(key=lambda pair: pair[0])
     return [item for _, item in scored]
+
+
+def due_summary(conn: sqlite3.Connection, now: datetime | None = None) -> DueSummary:
+    """Due-card counts for every deck, newest deck first."""
+    now = now or datetime.now(UTC)
+    rows = conn.execute(
+        "SELECT id, course, title FROM flashcard_decks ORDER BY id DESC"
+    ).fetchall()
+    decks: list[DeckDueSummary] = []
+    total = 0
+    for row in rows:
+        count = len(due_cards(conn, row["id"], now=now))
+        decks.append(
+            DeckDueSummary(deck_id=row["id"], course=row["course"], title=row["title"], due=count)
+        )
+        total += count
+    return DueSummary(total=total, decks=decks)
 
 
 def grade_card(

@@ -15,7 +15,13 @@ from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.features.study.corpus import CourseInfo, course_corpus, courses
+from backend.features.study.corpus import (
+    CourseInfo,
+    CourseSourceInfo,
+    course_corpus,
+    course_sources,
+    courses,
+)
 from backend.features.study.deletes import delete_course, delete_exam
 from backend.features.study.grader import AttemptResult, grade_attempt, load_exam
 from backend.features.study.practice_exam import (
@@ -98,6 +104,15 @@ def build_study_router(
     @router.get("/courses", response_model=list[CourseInfo])
     def list_courses() -> list[CourseInfo]:
         return courses(settings.vault_path, taxonomy=settings.taxonomy)
+
+    @router.get("/courses/{code}/sources", response_model=list[CourseSourceInfo])
+    def course_sources_route(code: str) -> list[CourseSourceInfo]:
+        """Real files (materials/notes/study) — powers the Course Hub SOURCES
+        rail, which ``GET /api/notes`` alone can't (markdown-only)."""
+        safe_code = SAFE_NAME_RE.sub("", code)
+        return course_sources(
+            settings.vault_path, safe_code, taxonomy=settings.taxonomy, index=index_factory()
+        )
 
     @router.delete("/courses/{code}", response_model=CourseDeleteSummary)
     def remove_course(code: str, purge: bool = False) -> CourseDeleteSummary:

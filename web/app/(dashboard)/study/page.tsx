@@ -8,27 +8,30 @@ import StudyTabs from "@/components/study/StudyTabs";
 import IngestPanel from "@/components/dashboard/IngestPanel";
 import Panel from "@/components/Panel";
 import StatRow, { type StatItem } from "@/components/StatRow";
-import { useInsights, useStudyCourses, useStudyExams } from "@/lib/api";
+import { useDueSummary, useInsights, useStudyCourses, useStudyExams } from "@/lib/api";
 import { useNextExam, useWeakTopics } from "@/lib/useStudySignals";
 
-// "cards due" has no backing data source until real decks + SRS scheduling
-// exist (§8 flags.flashcards: preview) — the spec calls this out explicitly
-// as mock. Kept as a fixed small number rather than something that looks
-// live but isn't.
-const MOCK_CARDS_DUE: number = 7;
-
 export default function StudyOverviewPage() {
-  const { data: courses } = useStudyCourses();
+  const { data: courses, mutate: refreshCourses } = useStudyCourses();
   const { data: exams } = useStudyExams();
   const { data: insights } = useInsights();
+  const { data: dueSummary } = useDueSummary();
   const nextExam = useNextExam();
   const weakTopics = useWeakTopics();
   const [ingestCourse, setIngestCourse] = useState("");
 
+  // The upload target must be the course's real materials_path (from the
+  // API), never a hand-built `<courses_dir>/<code>` — that was the reported
+  // "ingesting files seems to not work" bug: a file uploaded to the course
+  // *root* saved fine, but courses() only counts files under materials/, so
+  // the row kept reading "0 materials" and GUIDE/EXAM stayed disabled.
+  const ingestTargetCourse = courses?.find((course) => course.code === ingestCourse);
+  const cardsDue = dueSummary?.total ?? 0;
+
   const stats: StatItem[] = [
     { href: "/study", label: "courses", value: courses?.length ?? "–" },
     { href: "/study/exam", label: "next exam", value: nextExam ? `T-${nextExam.days}` : "—" },
-    { href: "/study/flashcards", label: "cards due", value: MOCK_CARDS_DUE },
+    { href: "/study/flashcards", label: "cards due", value: dueSummary ? cardsDue : "–" },
     { href: "/study", label: "streak", value: insights?.study.streak_days ?? "–", unit: "days" },
     { href: "/study", label: "weak topics", value: weakTopics.length },
   ];
@@ -66,14 +69,17 @@ export default function StudyOverviewPage() {
                   </select>
                 </div>
               )}
-              <IngestPanel target={ingestCourse ? `15-Courses/${ingestCourse}` : undefined} />
+              <IngestPanel
+                target={ingestTargetCourse?.materials_path}
+                onUploaded={() => void refreshCourses()}
+              />
             </div>
           </div>
 
           <div className="flex min-w-0 flex-col gap-4">
-            <Panel label="FLASHCARDS" preview>
+            <Panel label="FLASHCARDS">
               <p className="text-body text-ink-muted">
-                {MOCK_CARDS_DUE} card{MOCK_CARDS_DUE === 1 ? "" : "s"} due for review (mock).
+                {cardsDue} card{cardsDue === 1 ? "" : "s"} due for review.
               </p>
               <Link
                 href="/study/flashcards"
