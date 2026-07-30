@@ -108,7 +108,7 @@ def test_build_scheduler_registers_jobs_without_starting() -> None:
 
     scheduler = build_scheduler(Settings(_vault_path=Path("unused")))
     jobs = {job.id for job in scheduler.get_jobs()}
-    assert jobs == {"morning-briefing", "nightly-task-refresh"}
+    assert jobs == {"morning-briefing", "nightly-task-refresh", "nightly-reindex"}
     assert not scheduler.running
 
 

@@ -21,6 +21,7 @@ logger = logging.getLogger("argus.scheduler")
 
 BRIEFING_HOUR = 7
 REFRESH_HOUR = 3
+REINDEX_HOUR = 4
 
 
 def run_briefing_job(settings: Settings, composer: Composer | None = None) -> str | None:
@@ -54,6 +55,31 @@ def run_refresh_job(settings: Settings) -> None:
         logger.exception("nightly task refresh failed")
 
 
+def run_reindex_job(settings: Settings) -> None:
+    """Nightly full vault reindex; never raises.
+
+    The self-heal for watchdog events missed while the app was closed: the
+    live watcher (:func:`backend.rag.watcher.watch_vault`) only sees changes
+    made while Argus is running, so an edit made with the app shut is invisible
+    to the index until something rebuilds it. This is that something.
+    """
+    try:
+        from backend.rag.index import VaultIndex
+
+        index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
+        result = index.reindex_all(settings.vault_path)
+        if result.errors:
+            logger.warning(
+                "nightly reindex finished with %d error(s): %s", len(result.errors), result.errors
+            )
+        else:
+            logger.info(
+                "nightly reindex complete (%d chunks, %d files)", result.total_chunks, result.files
+            )
+    except Exception:
+        logger.exception("nightly reindex failed")
+
+
 def build_scheduler(settings: Settings, composer: Composer | None = None) -> BackgroundScheduler:
     """Create (but do not start) the background scheduler."""
     scheduler = BackgroundScheduler()
@@ -68,5 +94,11 @@ def build_scheduler(settings: Settings, composer: Composer | None = None) -> Bac
         CronTrigger(hour=REFRESH_HOUR, minute=0),
         args=[settings],
         id="nightly-task-refresh",
+    )
+    scheduler.add_job(
+        run_reindex_job,
+        CronTrigger(hour=REINDEX_HOUR, minute=0),
+        args=[settings],
+        id="nightly-reindex",
     )
     return scheduler
