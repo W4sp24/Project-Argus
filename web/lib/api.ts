@@ -276,6 +276,28 @@ export function useStudyCourses() {
   return useSWR<CourseInfo[]>("/api/study/courses", fetcher);
 }
 
+export interface CourseSource {
+  path: string;
+  title: string;
+  zone: "materials" | "notes" | "study";
+  /** Uppercased file extension, e.g. "PDF", "MD", "PPTX". */
+  kind: string;
+  modified: string;
+  /** Chunks in the live index for this file, or `null` when not indexed
+   * (never `0` for "unknown" — that would misreport "indexed, empty"). */
+  chunks: number | null;
+}
+
+/**
+ * A course's real files (materials/notes/study), including non-markdown
+ * material `GET /api/notes` can never see. Powers the Course Hub SOURCES
+ * rail (§4) and its "generated" list (study guides live under the `study`
+ * zone; exams/decks have their own endpoints below).
+ */
+export function useCourseSources(code: string) {
+  return useSWR<CourseSource[]>(`/api/study/courses/${encodeURIComponent(code)}/sources`, fetcher);
+}
+
 export interface ExamSummary {
   id: number;
   course: string;
@@ -865,6 +887,28 @@ export function gradeFlashcard(deckId: number, cardId: string, grade: FlashcardG
     `/api/flashcards/decks/${deckId}/cards/${encodeURIComponent(cardId)}/grade`,
     { grade },
   );
+}
+
+export interface DeckDueSummary {
+  deck_id: number;
+  course: string;
+  title: string;
+  due: number;
+}
+
+export interface DueSummary {
+  total: number;
+  decks: DeckDueSummary[];
+}
+
+/**
+ * Cards due across every deck, in one request. Backs the Study overview's
+ * real "cards due" stat + FLASHCARDS panel — previously a hardcoded
+ * `MOCK_CARDS_DUE = 7` because `useDueCards()` only takes a single deck id
+ * and there was no whole-vault total to show instead.
+ */
+export function useDueSummary() {
+  return useSWR<DueSummary>("/api/flashcards/due-summary", fetcher);
 }
 
 // --- Search (command palette) -----------------------------------------

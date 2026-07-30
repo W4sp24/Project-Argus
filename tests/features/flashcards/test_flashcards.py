@@ -208,3 +208,31 @@ def test_api_grade_nonexistent_card_in_real_deck_is_404(client: TestClient) -> N
         f"/api/flashcards/decks/{created['id']}/cards/nope/grade", json={"grade": "good"}
     )
     assert response.status_code == 404
+
+
+def test_due_summary_reports_total_and_per_deck(client: TestClient) -> None:
+    """Backs the Study overview's real "cards due" stat — previously a
+    hardcoded `MOCK_CARDS_DUE = 7`. `useDueCards()` only takes one deck id, so
+    this is the one-request whole-vault total the stat row and the
+    FLASHCARDS panel actually need."""
+    created = client.post("/api/flashcards/decks", json={"course": "CS201"}).json()
+
+    summary = client.get("/api/flashcards/due-summary").json()
+    assert summary["total"] == 3
+    assert summary["decks"] == [
+        {"deck_id": created["id"], "course": "CS201", "title": created["title"], "due": 3}
+    ]
+
+    card_id = client.get(f"/api/flashcards/decks/{created['id']}/due").json()[0]["id"]
+    client.post(
+        f"/api/flashcards/decks/{created['id']}/cards/{card_id}/grade", json={"grade": "easy"}
+    )
+
+    summary_after = client.get("/api/flashcards/due-summary").json()
+    assert summary_after["total"] == 2, "a card graded into the future drops out of the due total"
+    assert summary_after["decks"][0]["due"] == 2
+
+
+def test_due_summary_is_zero_with_no_decks(client: TestClient) -> None:
+    summary = client.get("/api/flashcards/due-summary").json()
+    assert summary == {"total": 0, "decks": []}

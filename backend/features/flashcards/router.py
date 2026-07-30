@@ -18,10 +18,12 @@ from backend.core.db import connect, init_schema
 from backend.features.flashcards.store import (
     DeckSummary,
     DueCard,
+    DueSummary,
     FlashcardsError,
     GradeResult,
     delete_deck,
     due_cards,
+    due_summary,
     generate_deck,
     grade_card,
     list_decks,
@@ -76,6 +78,14 @@ def build_flashcards_router(settings: Settings) -> APIRouter:
         conn = db()
         try:
             return list_decks(conn, course)
+        finally:
+            conn.close()
+
+    @router.get("/due-summary", response_model=DueSummary)
+    def due_summary_route() -> DueSummary:
+        conn = db()
+        try:
+            return due_summary(conn)
         finally:
             conn.close()
 

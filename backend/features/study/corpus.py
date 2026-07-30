@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -71,3 +72,78 @@ def courses(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[Cours
 def course_corpus(index: VaultIndex, course: str) -> list[dict[str, Any]]:
     """Every indexed chunk belonging to one course."""
     return [chunk for chunk in index.all_chunks() if chunk["meta"].get("course") == course]
+
+
+class CourseSourceInfo(BaseModel):
+    """One real file under a course's materials/, notes/, or study/ zone."""
+
+    path: str
+    title: str
+    zone: str  # "materials" | "notes" | "study"
+    kind: str  # uppercased file extension, e.g. "PDF", "MD", "PPTX"
+    modified: str
+    # None (not 0) when no index was supplied — a still-cold index reporting
+    # "0 chunks" would be indistinguishable from "genuinely not indexed yet".
+    chunks: int | None = None
+
+
+def course_sources(
+    vault_path: Path,
+    code: str,
+    *,
+    taxonomy: Taxonomy | None = None,
+    index: VaultIndex | None = None,
+) -> list[CourseSourceInfo]:
+    """Every real file under one course's materials/notes/study zones.
+
+    Unlike :func:`backend.vault.notes.list_notes` (markdown only), this walks
+    the actual filesystem, so PDF/PPTX/DOCX materials — invisible to
+    ``GET /api/notes`` — show up too. That gap was the reported "uploaded
+    files are invisible" bug: a course could have real, indexed materials and
+    the SOURCES rail (built on ``useNotes()``) would still show nothing.
+    """
+    tax = taxonomy or active_taxonomy()
+    zones = {
+        "materials": tax.course_materials(code),
+        "notes": tax.course_notes(code),
+        "study": tax.course_study(code),
+    }
+
+    chunk_counts: dict[str, int] | None = None
+    if index is not None:
+        chunk_counts = {}
+        for chunk in index.all_chunks():
+            chunk_path = chunk["meta"].get("path")
+            if chunk_path:
+                chunk_counts[chunk_path] = chunk_counts.get(chunk_path, 0) + 1
+
+    found: list[CourseSourceInfo] = []
+    for zone, rel_dir in zones.items():
+        zone_dir = vault_path / rel_dir
+        if not zone_dir.is_dir():
+            continue
+        for file_path in sorted(zone_dir.iterdir()):
+            if not file_path.is_file():
+                continue
+            rel = file_path.relative_to(vault_path).as_posix()
+            title = file_path.stem
+            if file_path.suffix.lower() == ".md":
+                try:
+                    post = frontmatter.load(file_path)
+                    fm_title = post.metadata.get("title")
+                    if isinstance(fm_title, str) and fm_title.strip():
+                        title = fm_title.strip()
+                except Exception:
+                    pass
+            found.append(
+                CourseSourceInfo(
+                    path=rel,
+                    title=title,
+                    zone=zone,
+                    kind=file_path.suffix.lstrip(".").upper() or "FILE",
+                    modified=datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC).isoformat(),
+                    chunks=chunk_counts.get(rel) if chunk_counts is not None else None,
+                )
+            )
+    found.sort(key=lambda item: item.modified, reverse=True)
+    return found

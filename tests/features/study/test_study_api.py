@@ -156,6 +156,27 @@ def test_ingest_with_the_reported_materials_path_makes_courses_report_it(
     assert updated["materials"] == 1, "materials must move off zero once the real target is used"
 
 
+def test_course_sources_lists_non_markdown_materials(client: TestClient) -> None:
+    """The bug: `GET /api/notes` only ever lists `*.md`, so an uploaded PDF/
+    PPTX/DOCX could never appear in the Course Hub SOURCES rail even though
+    it was really saved and indexed. This endpoint walks the real files."""
+    client.post(
+        "/api/study/upload",
+        data={"course": "CS201"},
+        files={"file": ("slides.pptx", b"fake pptx bytes", "application/octet-stream")},
+    )
+
+    sources = client.get("/api/study/courses/CS201/sources").json()
+    by_name = {item["path"].rsplit("/", 1)[-1]: item for item in sources}
+
+    assert "slides.pptx" in by_name, "a non-markdown material must be listed"
+    assert by_name["slides.pptx"]["zone"] == "materials"
+    assert by_name["slides.pptx"]["kind"] == "PPTX"
+    # Not in the fixture's fake index -> None, not 0 (0 would falsely claim
+    # "indexed, zero chunks" rather than "not indexed at all").
+    assert by_name["slides.pptx"]["chunks"] is None
+
+
 def test_exam_generation_quiz_and_attempt_roundtrip(client: TestClient, tmp_path: Path) -> None:
     created = client.post("/api/study/exam", json={"course": "CS201", "n": 1}).json()
     assert created["questions"] == 1
