@@ -6,6 +6,7 @@ import UsageAreaChart, { type ChartSeries } from "@/components/charts/UsageAreaC
 import AddAgentDialog from "@/components/system/AddAgentDialog";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
+import SegmentedControl from "@/components/ui/SegmentedControl";
 import { useConfirm } from "@/components/ui/useConfirm";
 import AgentSelect, { type AgentOption } from "@/components/usage/AgentSelect";
 import TokenComposition from "@/components/usage/TokenComposition";
@@ -199,32 +200,14 @@ export default function AgentUsage({ size = "default" }: { size?: "default" | "l
         label="AGENT.USAGE"
         className={wide ? "min-h-[22rem]" : undefined}
         headerRight={
-          <div className="flex items-center gap-2">
-            <Button variant="quiet" onClick={() => setAdding(true)}>
-              + ADD AGENT
-            </Button>
-            <div className="flex border border-line font-mono text-micro uppercase tracking-[0.14em]">
-              {RANGES.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => setRange(option)}
-                  aria-pressed={range === option}
-                  className={`border-l border-line px-1.5 py-1 first:border-l-0 transition-colors ${
-                    range === option
-                      ? "bg-[var(--ac-bg)] text-[var(--ac)]"
-                      : "text-ink-faint hover:text-ink-muted"
-                  }`}
-                >
-                  {RANGE_LABEL[option]}
-                </button>
-              ))}
-            </div>
-          </div>
+          <SegmentedControl options={RANGES} value={range} onChange={setRange} labels={RANGE_LABEL} />
         }
       >
         <div className="-mt-1 mb-4 flex flex-wrap items-center gap-2">
           <AgentSelect options={options} value={agentId} onChange={setAgentId} />
+          <Button variant="quiet" onClick={() => setAdding(true)}>
+            + ADD AGENT
+          </Button>
           {active && !active.builtin && (
             <Button variant="ghost" onClick={() => void removeAgent(active)}>
               STOP TRACKING

@@ -1,4 +1,43 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
+
+/**
+ * Locates a `Panel` header row by its eyebrow label (e.g. "AGENT.USAGE").
+ *
+ * Matched by class rather than by the exact header markup: `Panel.tsx`'s
+ * header div is `mb-1 flex items-center …` both before and after the
+ * flex-wrap fix, so this selector keeps working whether or not the fix is
+ * present — which is what lets the same helper prove the assertion goes red
+ * on the unfixed code and green on the fixed code.
+ *
+ * Matched against `▍${label}` (the eyebrow's actual rendered text, tick
+ * included), not the bare label — "MODELS" alone also matches the unrelated
+ * "LOCAL.MODELS" panel's header, since its plain text is
+ * "▍LOCAL.MODELS" and Playwright's `hasText` is substring-based.
+ */
+function headerRow(page: Page, label: string) {
+  return page.locator("div.mb-1.flex.items-center", { hasText: `▍${label}` });
+}
+
+/** No panel header may need more width than the panel gives it. */
+async function expectHeaderFits(page: Page, label: string) {
+  const header = headerRow(page, label);
+  await expect(header).toBeVisible();
+  const { scrollWidth, clientWidth } = await header.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  expect(scrollWidth, `${label} header overflows its panel`).toBeLessThanOrEqual(clientWidth + 1);
+}
+
+/** Applies the DISPLAY panel's large scale the way the app does — via the
+ * localStorage key `layout.tsx`'s boot script reads before first paint —
+ * rather than poking `data-ui-scale` on directly, which would skip the same
+ * code path a real user's setting takes. */
+async function useLargeUiScale(page: Page) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("argus-ui-scale", "large");
+  });
+}
 
 /**
  * The packaged Electron shell pins `minWidth: 960` (desktop/main.js), but the
@@ -49,4 +88,68 @@ test("the engine picker is usable at a narrow width", async ({ page }) => {
 
   const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(scrollWidth).toBeLessThanOrEqual(720);
+});
+
+/**
+ * AGENT.USAGE and ARGUS.USAGE both sit in the 21.25rem right rail on
+ * /dashboard (and /code). AGENT.USAGE's `headerRight` used to carry a
+ * `+ ADD AGENT` button *and* a bare range switcher — together wider than the
+ * rail's ~300px content box after `Panel`'s `p-5` padding, which pushed the
+ * header past the panel edge instead of wrapping.
+ */
+test("rail panel headers fit their panel on /dashboard at 1280x800", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/dashboard");
+
+  await expectHeaderFits(page, "AGENT.USAGE");
+  await expectHeaderFits(page, "ARGUS.USAGE");
+});
+
+/**
+ * Every size token in this app is rem-based, so the large UI scale (18px
+ * root, set from /system → DISPLAY) scales the rail and its contents
+ * together — but text metrics don't scale in perfect lockstep with
+ * container width, so this is the setting under which the header overflow
+ * was reported as worst.
+ */
+test("rail panel headers fit their panel on /dashboard at the large UI scale", async ({ page }) => {
+  await useLargeUiScale(page);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/dashboard");
+  await expect(page.locator("html")).toHaveAttribute("data-ui-scale", "large");
+
+  await expectHeaderFits(page, "AGENT.USAGE");
+  await expectHeaderFits(page, "ARGUS.USAGE");
+});
+
+/**
+ * MODELS, INTEGRATIONS and DOCTOR live on /system and each carry a single
+ * `headerRight` button (+ ADD MODEL / + ADD MCP SERVER / RUN AGAIN) — the
+ * `Panel` header fix (`flex-wrap`, `min-w-0`) must not regress these while
+ * fixing AGENT.USAGE.
+ *
+ * UPDATES also uses `headerRight`, but `UpdatesPanel` renders nothing outside
+ * the packaged Electron shell (no `window.argus` bridge in a plain browser),
+ * so it never mounts in this e2e run and is not asserted here.
+ */
+test("panel headers fit their panel on /system", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/system");
+
+  await expectHeaderFits(page, "DOCTOR");
+  await expectHeaderFits(page, "INTEGRATIONS");
+  await expectHeaderFits(page, "MODELS");
+  await expectHeaderFits(page, "AGENT.USAGE");
+});
+
+test("panel headers fit their panel on /system at the large UI scale", async ({ page }) => {
+  await useLargeUiScale(page);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/system");
+  await expect(page.locator("html")).toHaveAttribute("data-ui-scale", "large");
+
+  await expectHeaderFits(page, "DOCTOR");
+  await expectHeaderFits(page, "INTEGRATIONS");
+  await expectHeaderFits(page, "MODELS");
+  await expectHeaderFits(page, "AGENT.USAGE");
 });
