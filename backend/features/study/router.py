@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.study.corpus import CourseInfo, course_corpus, courses
+from backend.features.study.deletes import delete_course, delete_exam
 from backend.features.study.grader import AttemptResult, grade_attempt, load_exam
 from backend.features.study.practice_exam import (
     Generator,
@@ -23,6 +24,8 @@ from backend.features.study.practice_exam import (
     generate_practice_exam,
 )
 from backend.features.study.study_guide import generate_study_guide
+from backend.vault.errors import raise_http
+from backend.vault.writer import WriterError
 
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ -]")
 
@@ -63,6 +66,22 @@ class AttemptRequest(BaseModel):
     answers: list[str]
 
 
+class CourseDeleteSummary(BaseModel):
+    """A truthful report of what a course delete actually removed."""
+
+    course: str
+    purged: bool
+    exams_removed: int
+    attempts_removed: int
+    decks_removed: int
+    reviews_removed: int
+
+
+class ExamDeleteSummary(BaseModel):
+    exam_id: int
+    attempts_removed: int
+
+
 def build_study_router(
     settings: Settings,
     generator: Generator,
@@ -79,6 +98,31 @@ def build_study_router(
     @router.get("/courses", response_model=list[CourseInfo])
     def list_courses() -> list[CourseInfo]:
         return courses(settings.vault_path, taxonomy=settings.taxonomy)
+
+    @router.delete("/courses/{code}", response_model=CourseDeleteSummary)
+    def remove_course(code: str, purge: bool = False) -> CourseDeleteSummary:
+        """Delete a course's exams/decks (and, with ``purge``, its vault folder).
+
+        ``purge=False`` cleans up DB rows only, for a course whose folder the
+        user already removed by hand in Obsidian.
+        """
+        conn = db()
+        try:
+            result = delete_course(
+                conn, settings.vault_path, code, purge=purge, taxonomy=settings.taxonomy
+            )
+        except WriterError as exc:
+            raise_http(exc)
+        finally:
+            conn.close()
+        return CourseDeleteSummary(
+            course=code,
+            purged=result.folder_removed,
+            exams_removed=result.exams_removed,
+            attempts_removed=result.attempts_removed,
+            decks_removed=result.decks_removed,
+            reviews_removed=result.reviews_removed,
+        )
 
     @router.post("/upload")
     async def upload(course: Annotated[str, Form()], file: UploadFile) -> dict[str, str]:
@@ -211,5 +255,16 @@ def build_study_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         finally:
             conn.close()
+
+    @router.delete("/exams/{exam_id}", response_model=ExamDeleteSummary)
+    def remove_exam(exam_id: int) -> ExamDeleteSummary:
+        conn = db()
+        try:
+            attempts_removed = delete_exam(conn, exam_id)
+        except StudyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            conn.close()
+        return ExamDeleteSummary(exam_id=exam_id, attempts_removed=attempts_removed)
 
     return router

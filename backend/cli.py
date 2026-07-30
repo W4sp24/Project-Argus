@@ -24,9 +24,61 @@ from backend.core.taxonomy import Taxonomy
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "vault-template"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
+# vault-template/'s folders are physically named with Argus's historical PARA
+# defaults. "courses" is deliberately absent here — see _ignore_sample_course,
+# which excludes 15-Courses/ from the copy entirely rather than relocating it.
+_DEFAULT_TAXONOMY_DIRS = {
+    "inbox": "00-Inbox",
+    "daily": "10-Daily",
+    "projects": "20-Projects",
+    "areas": "30-Areas",
+    "people": "40-People",
+    "reference": "50-Reference",
+    "journal": "90-Meta",
+    "private": "99-Private",
+}
+
 
 class InitError(RuntimeError):
     """Raised when a vault cannot be initialised at the requested path."""
+
+
+def _ignore_sample_course(_src: str, names: list[str]) -> set[str]:
+    """Skip ``vault-template/15-Courses/`` entirely during ``argus init``'s copy.
+
+    That folder exists in the repo only to hold ``CS000/course.md``, the
+    reference ``CoursesPanel.renderCourseTemplate`` (web/) is documented to
+    mirror — it stays there, untouched, as that reference. Shipping it into
+    every fresh vault was the "sample course never goes away" bug: nothing in
+    the backend could delete course data at all before
+    ``backend/features/study/deletes.py``, so the sample was permanent.
+    ``Taxonomy.seed_folders()`` still creates an empty, correctly-named
+    courses dir for every taxonomy, sample-free.
+    """
+    return {"15-Courses"} if "15-Courses" in names else set()
+
+
+def _relocate_templated_dirs(dest: Path, taxonomy: Taxonomy) -> None:
+    """Rename copied template folders onto a taxonomy configured before init.
+
+    vault-template/'s folders are physically named with Argus's historical
+    hardcoded defaults (today, only ``30-Areas/assistant-preferences.md`` has
+    real content). A user who sets ``VAULT_AREAS_DIR`` etc. in ``.env``
+    *before* ever running ``argus init`` would otherwise get that content
+    sitting in a folder name their configured taxonomy doesn't recognise —
+    invisible to every feature that reads through the taxonomy from then on.
+    """
+    for field_name, default_name in _DEFAULT_TAXONOMY_DIRS.items():
+        configured = getattr(taxonomy, field_name)
+        if configured == default_name:
+            continue
+        source = dest / default_name
+        if not source.is_dir():
+            continue
+        target = dest / configured
+        if target.exists():
+            continue  # never clobber something already there
+        shutil.move(str(source), str(target))
 
 
 def _run_git(args: list[str], cwd: Path) -> None:
@@ -77,7 +129,8 @@ def init_vault(dest: Path, env_file: Path = DEFAULT_ENV_FILE) -> Path:
         raise InitError(f"vault template not found at {TEMPLATE_DIR}")
 
     taxonomy = Taxonomy.from_env(parse_env_file(env_file))
-    shutil.copytree(TEMPLATE_DIR, dest, dirs_exist_ok=True)
+    shutil.copytree(TEMPLATE_DIR, dest, dirs_exist_ok=True, ignore=_ignore_sample_course)
+    _relocate_templated_dirs(dest, taxonomy)
     for folder in taxonomy.seed_folders():
         (dest / folder).mkdir(parents=True, exist_ok=True)
 

@@ -245,6 +245,59 @@ def test_delete_note_refuses_protected_and_missing(tmp_path):
         writer.delete_note(vault, "00-Inbox/ghost.md")
 
 
+# --- Course deletion (fix: sample data survives a course "delete") ----------
+
+
+def test_delete_course_tree_removes_folder_after_snapshot(tmp_path):
+    vault = _make_vault(tmp_path)
+    course = vault / "15-Courses" / "CS201"
+    (course / "materials").mkdir(parents=True)
+    (course / "materials" / "syllabus.pdf").write_text("x", encoding="utf-8")
+    (course / "course.md").write_text("---\ntitle: X\n---\n", encoding="utf-8")
+
+    writer.delete_course_tree(vault, "CS201")
+
+    assert not course.exists()
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=vault, capture_output=True, text=True
+    ).stdout
+    assert "argus: pre-apply snapshot (delete course CS201)" in log
+
+
+def test_delete_course_tree_refuses_missing_course(tmp_path):
+    vault = _make_vault(tmp_path)
+    with pytest.raises(WriterMissing):
+        writer.delete_course_tree(vault, "CS999")
+
+
+def test_delete_course_tree_refuses_traversal(tmp_path):
+    vault = _make_vault(tmp_path)
+    for bad in ("../escape", "..", "15-Courses/CS201", "a/b", "a\\b", ""):
+        with pytest.raises(WriterForbidden):
+            writer.delete_course_tree(vault, bad)
+
+
+def test_delete_course_tree_refuses_a_code_outside_the_courses_dir(tmp_path):
+    """A code that isn't a direct child of the courses dir must be refused,
+    even if it happens to resolve to a real directory elsewhere in the vault."""
+    vault = _make_vault(tmp_path)
+    (vault / "20-Projects").mkdir()
+    with pytest.raises(WriterForbidden):
+        writer.delete_course_tree(vault, "../20-Projects")
+
+
+def test_delete_course_tree_honours_a_renamed_courses_dir(tmp_path):
+    vault = _make_vault(tmp_path)
+    custom = Taxonomy(courses="Classes")
+    course = vault / "Classes" / "CS301"
+    course.mkdir(parents=True)
+    (course / "course.md").write_text("x", encoding="utf-8")
+
+    writer.delete_course_tree(vault, "CS301", taxonomy=custom)
+
+    assert not course.exists()
+
+
 # --- Note creation (redesign §13 quick add-note modal) ----------------------
 
 

@@ -187,17 +187,17 @@ class Taxonomy:
     def seed_folders(self) -> list[str]:
         """Empty folders ``argus init`` creates — replaces the old ``cli.EMPTY_FOLDERS``.
 
-        CS000 is a sample course seeded on every fresh vault (removing it is a
-        later branch's job; this just expresses the same three entries through
-        the taxonomy so a renamed courses dir still gets the sample in the
-        right place).
+        Used to also seed a CS000 sample course (notes/materials/study). That
+        sample never went away on its own — deleting its row from `courses`
+        wasn't even possible, since nothing in the backend deleted course data
+        at all (see backend/features/study/deletes.py) — so every fresh vault
+        carried permanent demo content. The courses dir itself is still
+        created, empty, so course discovery has somewhere to look.
         """
         return [
             self.inbox,
             self.daily,
-            self.course_notes("CS000"),
-            self.course_materials("CS000"),
-            self.course_study("CS000"),
+            self.courses,
             self.projects,
             self.areas,
             self.people,

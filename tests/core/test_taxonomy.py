@@ -73,9 +73,7 @@ def test_seed_folders_replaces_cli_empty_folders() -> None:
     assert Taxonomy().seed_folders() == [
         "00-Inbox",
         "10-Daily",
-        "15-Courses/CS000/notes",
-        "15-Courses/CS000/materials",
-        "15-Courses/CS000/study",
+        "15-Courses",
         "20-Projects",
         "30-Areas",
         "40-People",
