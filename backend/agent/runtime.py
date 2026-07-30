@@ -11,6 +11,7 @@ any OpenAI-compatible endpoint including local Ollama. See
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import AsyncIterator
 from datetime import date
@@ -30,6 +31,8 @@ from backend.core.taxonomy import Taxonomy
 from backend.rag.index import VaultIndex
 from backend.telemetry.audit import log_prompt
 from backend.vault.paths import is_indexable
+
+logger = logging.getLogger("argus.rag")
 
 MODEL = "claude-opus-4-8"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "chat.md"
@@ -211,12 +214,16 @@ class ChatAgent:
         The first vault tool call otherwise pays ~20s of model loading inside
         the agent's event loop.
         """
-        import contextlib
-
         try:
             # Warming is best-effort; real errors surface on actual queries.
-            with contextlib.suppress(Exception):
-                self._index.query("warmup", n_results=1)
+            # Not swallowed silently, though — a warm that fails every single
+            # time (a genuinely broken index, not just "not built yet") used
+            # to leave no trace anywhere a person would look.
+            self._index.query("warmup", n_results=1)
+        except Exception:
+            logger.warning(
+                "chat index warm-up failed (will retry on first real query)", exc_info=True
+            )
         finally:
             # Always release waiters, including when warming failed — a search
             # that then fails on its own is far better than one that hangs.

@@ -44,6 +44,13 @@ class BrokenIndex:
         raise ImportError("No module named 'chromadb'")
 
 
+class FailingIndex:
+    """Simulates a genuinely broken index — e.g. a corrupt chroma directory."""
+
+    def upsert_file(self, vault_path, rel_path):
+        raise RuntimeError("chroma directory is corrupt")
+
+
 async def fake_generator(prompt: str) -> str:
     return EXTRACTION
 
@@ -79,7 +86,12 @@ def test_ingest_saves_to_inbox_and_indexes(client: TestClient, vault: Path) -> N
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload == {"path": "00-Inbox/files/notes.md", "chunks": 3, "indexed": True}
+    assert payload == {
+        "path": "00-Inbox/files/notes.md",
+        "chunks": 3,
+        "indexed": True,
+        "index_error": None,
+    }
     assert (vault / "00-Inbox" / "files" / "notes.md").is_file()
 
     log = subprocess.run(
@@ -133,7 +145,23 @@ def test_ingest_survives_missing_rag_extras(vault: Path) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["indexed"] is False and payload["chunks"] == 0
+    assert payload["index_error"] is None, "missing [rag] extras is not a real error"
     assert (vault / "00-Inbox" / "files" / "notes.md").is_file(), "file saved despite no RAG"
+
+
+def test_ingest_surfaces_a_genuine_index_failure(vault: Path) -> None:
+    """A real broken index must be visible, not read as 'file had no content'."""
+    app = create_app(
+        Settings(_vault_path=vault), generator=fake_generator, index_factory=FailingIndex
+    )
+    response = TestClient(app).post(
+        "/api/ingest", files={"file": ("notes.md", b"# Notes\n", "text/markdown")}
+    )
+    assert response.status_code == 200, "the file must still save even if indexing breaks"
+    payload = response.json()
+    assert payload["indexed"] is False and payload["chunks"] == 0
+    assert "chroma directory is corrupt" in payload["index_error"]
+    assert (vault / "00-Inbox" / "files" / "notes.md").is_file()
 
 
 def test_email_capture_archives_and_proposes(client: TestClient, vault: Path) -> None:

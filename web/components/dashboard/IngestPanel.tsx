@@ -44,8 +44,19 @@ export default function IngestPanel({ target }: IngestPanelProps) {
           typeof payload.detail === "string" ? payload.detail : `upload failed (${response.status})`,
         );
       }
-      const { chunks, indexed } = payload as { chunks: number; indexed: boolean };
-      setStatus(indexed ? `done :: ${file.name} indexed · ${chunks} chunks` : "saved — indexing unavailable");
+      const { chunks, indexed, index_error } = payload as {
+        chunks: number;
+        indexed: boolean;
+        index_error: string | null;
+      };
+      if (indexed) {
+        setStatus(`done :: ${file.name} indexed · ${chunks} chunks`);
+      } else if (index_error) {
+        // A real failure (broken index), not just "no [rag] extras installed".
+        setStatus(`saved — indexing failed: ${index_error}`);
+      } else {
+        setStatus("saved — indexing unavailable");
+      }
     } catch (error) {
       setStatus("");
       show(`ingest :: failed — ${error instanceof Error ? error.message : "backend offline?"}`);
