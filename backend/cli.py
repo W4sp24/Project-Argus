@@ -205,9 +205,13 @@ def main(argv: list[str] | None = None) -> int:
         index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
 
         if args.command == "reindex":
-            counts = index.reindex_all(settings.vault_path)
-            print(f"Indexed {sum(counts.values())} chunks from {len(counts)} files.")
-            return 0
+            result = index.reindex_all(settings.vault_path)
+            print(f"Indexed {result.total_chunks} chunks from {result.files} files.")
+            if result.errors:
+                print(f"{len(result.errors)} file(s) failed:", file=sys.stderr)
+                for rel_path, message in result.errors.items():
+                    print(f"  {rel_path}: {message}", file=sys.stderr)
+            return 1 if result.errors else 0
 
         from backend.rag.watcher import watch_vault
 

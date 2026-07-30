@@ -1,5 +1,7 @@
 """Tests for the FastAPI application."""
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -53,3 +55,33 @@ def test_notes_excludes_private_and_app_dirs(client: TestClient) -> None:
     paths = [note["path"] for note in client.get("/api/notes").json()]
     assert not any(path.startswith("99-Private") for path in paths), "I3 violation"
     assert not any(path.startswith(".obsidian") for path in paths)
+
+
+def test_no_scheduler_factory_never_spawns_background_threads(vault: Path) -> None:
+    """``create_app`` without ``scheduler_factory`` must not start the
+    auto-index/watch thread — the convention every test app relies on to stay
+    fast and not touch chromadb/the embedding model. Runs the lifespan for
+    real (not just constructing the app) via TestClient's context manager,
+    since that is the only way the gating in ``lifespan`` is actually exercised.
+    """
+    app = create_app(Settings(_vault_path=vault))
+    before = threading.active_count()
+    # Compared after exiting, not during: entering TestClient's context always
+    # spins up its own transient "asyncio-portal-*" thread to run the ASGI app,
+    # which has nothing to do with this app's lifespan and would make an
+    # in-context comparison off by one regardless of what lifespan does.
+    with TestClient(app):
+        pass
+    assert threading.active_count() == before
+
+
+def test_scheduler_factory_present_spawns_a_thread_but_survives_no_vault() -> None:
+    """A machine with no VAULT_PATH configured must not crash on boot even
+    when the (production-only) auto-index thread is enabled — ConfigError from
+    an unconfigured vault must be caught inside the thread, not propagate."""
+    app = create_app(Settings(), scheduler_factory=lambda _settings: None)
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        # Give the background thread a moment to hit ConfigError and return —
+        # it must not linger or crash the process either way.
+        time.sleep(0.2)

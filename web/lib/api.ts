@@ -808,6 +808,31 @@ export async function searchVault(query: string): Promise<SearchResult[]> {
   return fetcher<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`);
 }
 
+// --- Index (reindex) -----------------------------------------------------
+
+export interface IndexStatus {
+  chunks: number;
+  files: number;
+  indexing: boolean;
+  last_run: string | null;
+  last_error: string | null;
+  /** The persisted chroma schema predates the current chunk shape — the
+   * backend rebuilds automatically on boot when this is true, but the UI can
+   * still surface it while a rebuild is in flight. */
+  stale: boolean;
+}
+
+/** Poll reindex progress. GET /api/index/status. */
+export function useIndexStatus() {
+  return useSWR<IndexStatus>("/api/index/status", fetcher);
+}
+
+/** Trigger a full vault reindex. POST /api/index/reindex — 202, runs on a
+ * background thread; poll useIndexStatus() for progress/completion. */
+export function reindexVault() {
+  return mutateJSON<IndexStatus>("/api/index/reindex", undefined);
+}
+
 // --- Quick Links --------------------------------------------------------
 
 /** How a Quick Link's icon is stored. `null` kind => fall back to the `icon` glyph. */

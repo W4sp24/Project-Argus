@@ -73,7 +73,35 @@ def _check_database(settings: Settings) -> Check:
         return Check(name="database", status="FAIL", detail=str(exc))
 
 
+def _vault_has_indexable_files(settings: Settings) -> bool:
+    """Does the vault contain anything the RAG pipeline would actually index?
+
+    Distinguishes "index is empty because there is nothing to index yet" (a
+    brand-new vault — not a problem) from "index is empty despite notes being
+    there" (the actual bug this check exists to catch).
+    """
+    from backend.vault.paths import is_indexable
+
+    vault = settings.vault_path
+    for file_path in vault.rglob("*"):
+        if not file_path.is_file():
+            continue
+        rel_path = file_path.relative_to(vault).as_posix()
+        if is_indexable(rel_path, taxonomy=settings.taxonomy):
+            return True
+    return False
+
+
 def _check_chroma(settings: Settings) -> Check:
+    """Is the vector index actually populated, not just present?
+
+    Previously this only checked that the ``.argus/chroma`` *directory*
+    existed, so it reported OK for a collection nothing had ever indexed into
+    — the exact silent failure mode behind "chat can't find anything in my
+    vault". Opening the collection and checking ``count()`` catches that; a
+    real error opening it (corrupt directory, chromadb genuinely broken) is a
+    FAIL, not a WARN, because no amount of clicking "reindex" fixes it.
+    """
     try:
         import chromadb  # noqa: F401
     except ImportError:
@@ -82,12 +110,22 @@ def _check_chroma(settings: Settings) -> Check:
             status="WARN",
             detail="chromadb not installed — `pip install -e .[rag]` enables chat/RAG",
         )
-    chroma_dir = settings.db_path.parent / "chroma"
-    return Check(
-        name="chroma",
-        status="OK",
-        detail=f"{chroma_dir} ({'exists' if chroma_dir.is_dir() else 'created on first reindex'})",
-    )
+    try:
+        from backend.rag.index import VaultIndex
+
+        index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
+        count = index.collection.count()
+    except Exception as exc:
+        return Check(name="chroma", status="FAIL", detail=f"index unreadable: {exc}")
+    if count > 0:
+        return Check(name="chroma", status="OK", detail=f"{count} chunks indexed")
+    if _vault_has_indexable_files(settings):
+        return Check(
+            name="chroma",
+            status="WARN",
+            detail="index empty — run reindex (Command Palette → reindex, or `argus reindex`)",
+        )
+    return Check(name="chroma", status="OK", detail="no indexable files in the vault yet")
 
 
 def _check_taxonomy(settings: Settings) -> Check:

@@ -348,9 +348,20 @@ def main() -> int:
                 checks = {c["name"]: c["status"] for c in json.loads(body)}
             except (json.JSONDecodeError, TypeError, KeyError):
                 checks = {}
-            for name in ("keyring", "database", "chroma"):
+            for name in ("keyring", "database"):
                 got = checks.get(name, "MISSING")
                 result.check(f"  doctor:{name}", got == "OK", got)
+            # chroma is WARN|OK, not OK-only: doctor now actually opens the
+            # collection and reports "index empty — run reindex" (WARN) when
+            # nothing has been indexed yet, rather than the old check that
+            # only confirmed the directory existed. This throwaway vault is
+            # freshly created by --init above and the app's boot-time
+            # auto-index thread runs asynchronously in the background, so by
+            # the time this request lands the rebuild may well still be in
+            # flight — an un-indexed fresh vault reporting WARN here is
+            # legitimate, not a regression, and MISSING/FAIL would still fail.
+            got = checks.get("chroma", "MISSING")
+            result.check("  doctor:chroma", got in ("OK", "WARN"), got)
 
         status, _ = _get(port, "/api/notes")
         result.check("GET /api/notes", status == 200, f"HTTP {status}")

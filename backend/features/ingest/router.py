@@ -10,6 +10,7 @@ in the review queue (mirroring the planner), never direct writes.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from email import message_from_string, policy
@@ -27,6 +28,8 @@ from backend.vault.writer import (
     archive_email,
     save_ingest_file,
 )
+
+logger = logging.getLogger("argus.rag")
 
 Generator = Callable[[str], Awaitable[str]]
 
@@ -52,6 +55,11 @@ class IngestResponse(BaseModel):
     path: str
     chunks: int
     indexed: bool
+    # Set only when indexing actually failed (as opposed to the [rag] extras
+    # being absent, or the file legitimately producing no chunks) — the file
+    # is saved either way, but the UI must be able to tell "indexed nothing
+    # because it was blank" apart from "indexing broke".
+    index_error: str | None = None
 
 
 class EmailIngestRequest(BaseModel):
@@ -179,13 +187,22 @@ def build_ingest_router(settings: Settings, generator: Generator, index_factory:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         # Index with the existing pipeline; missing [rag] extras degrade
-        # gracefully — the file is saved either way.
+        # gracefully — the file is saved either way. A genuine failure (as
+        # opposed to the extras being absent) is logged and surfaced in
+        # ``index_error`` rather than silently reported as "0 chunks", which
+        # used to be indistinguishable from a file that was legitimately empty.
         chunks = 0
+        index_error: str | None = None
         try:
             chunks = index_factory().upsert_file(settings.vault_path, rel_path)
-        except Exception:
-            chunks = 0
-        return IngestResponse(path=rel_path, chunks=chunks, indexed=chunks > 0)
+        except ImportError as exc:
+            logger.warning("ingest indexing unavailable — [rag] extras not installed: %s", exc)
+        except Exception as exc:
+            logger.exception("ingest indexing failed for %s", rel_path)
+            index_error = str(exc)
+        return IngestResponse(
+            path=rel_path, chunks=chunks, indexed=chunks > 0, index_error=index_error
+        )
 
     @router.post("/ingest/email", response_model=EmailIngestResponse)
     async def ingest_email(request: EmailIngestRequest) -> EmailIngestResponse:
