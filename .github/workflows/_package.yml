@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # dev:false -- the frozen build has no use for pytest or ruff, but it
       # gets the identical runtime extras the test jobs ran against.
@@ -45,7 +45,7 @@ jobs:
       # time is the largest avoidable cost in it.
       - name: Cache the embedding model
         id: model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: desktop/resources/models/bge-small-en-v1.5
           key: bge-small-en-v1.5
@@ -65,7 +65,7 @@ jobs:
         run: python desktop/tests/smoke_backend.py --target desktop/resources/backend/argus-backend.exe
 
       # --- frontend ------------------------------------------------------
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -167,7 +167,7 @@ jobs:
 
       # Uploaded on a merge build too: an installer you can actually download
       # and run is the whole point of rehearsing packaging before a tag.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: argus-windows
