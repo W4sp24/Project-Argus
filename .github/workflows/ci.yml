@@ -32,11 +32,51 @@ jobs:
       # a tag.
       os: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'windows-latest' }}
 
-  # Merges only. Builds and smoke-tests the real installer without publishing
-  # anything, so tagging is a path that has already been walked on this code.
+  # Does this change touch anything the installer is built from?
+  #
+  # Path-filtering is safe *here* and nowhere else in this file: `package` is
+  # not a required status check, so a skipped run cannot leave a pull request
+  # waiting forever on a check that never reports. The same filter applied at
+  # workflow level, or to the `test` jobs, would do exactly that.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      packaging: ${{ steps.check.outputs.packaging }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: check
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Every merge rehearses packaging; only pull requests are filtered.
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "packaging=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "$BASE" "$HEAD")
+          echo "changed:"; echo "$files" | sed 's/^/  /'
+          if echo "$files" | grep -qE '^(desktop/|pyproject\.toml$|\.github/workflows/_package\.yml$|\.github/actions/python-env/)'; then
+            echo "packaging=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "packaging=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Builds and smoke-tests the real installer without publishing anything, so
+  # tagging is a path that has already been walked on this code. Runs on every
+  # merge, and on the pull requests that could break packaging -- an electron
+  # or electron-builder bump otherwise goes green without an installer ever
+  # having been built, which is the one thing worth checking about it.
   package:
-    if: github.event_name != 'pull_request'
-    needs: test
+    needs: [test, changes]
+    if: needs.changes.outputs.packaging == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/_package.yml
