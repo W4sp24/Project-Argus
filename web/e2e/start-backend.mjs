@@ -10,7 +10,11 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..", "..");
-const python = path.join(root, ".venv", "Scripts", "python.exe");
+// ARGUS_PYTHON so CI can point at the runner's interpreter: a hosted runner
+// has no repo-local .venv, and hardcoding one made this suite local-only --
+// which is part of why nothing in web/ was ever gated by CI.
+const python =
+  process.env.ARGUS_PYTHON || path.join(root, ".venv", "Scripts", "python.exe");
 const workdir = path.join(here, ".workdir");
 const vault = path.join(workdir, "vault");
 const envFile = path.join(workdir, ".env");
