@@ -10,9 +10,20 @@ import { useTypewriter } from "@/lib/useTypewriter";
 const ACCEPT = ".pdf,.pptx,.docx,.md,.eml";
 
 interface IngestPanelProps {
-  /** Vault-relative target folder for uploads (e.g. `15-Courses/CS301`).
+  /** Vault-relative target folder for uploads (e.g. a course's materials
+   * folder — see `CourseInfo.materials_path`, never a hand-built path).
    * Omitted -> backend default (`00-Inbox/files`). */
   target?: string;
+  /**
+   * Called after a successful upload (saved, whether or not indexing
+   * finished yet). Lets a parent whose own counts are derived from this
+   * `target` — Study's per-course materials count, in particular —
+   * revalidate instead of staying stale until some unrelated refetch. Was
+   * missing entirely, which was half of the reported "ingesting files seems
+   * to not work" bug: the file really did save, but nothing ever told the
+   * Study page's course list to look again.
+   */
+  onUploaded?: () => void;
 }
 
 /**
@@ -22,7 +33,7 @@ interface IngestPanelProps {
  * (flags.emailCapture: enabled) — extractions land in the Review queue, never
  * a direct write.
  */
-export default function IngestPanel({ target }: IngestPanelProps) {
+export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
   const { show } = useToast();
   const [dragOver, setDragOver] = useState(false);
   const [status, setStatus] = useState("");
@@ -44,8 +55,20 @@ export default function IngestPanel({ target }: IngestPanelProps) {
           typeof payload.detail === "string" ? payload.detail : `upload failed (${response.status})`,
         );
       }
-      const { chunks, indexed } = payload as { chunks: number; indexed: boolean };
-      setStatus(indexed ? `done :: ${file.name} indexed · ${chunks} chunks` : "saved — indexing unavailable");
+      const { chunks, indexed, index_error } = payload as {
+        chunks: number;
+        indexed: boolean;
+        index_error: string | null;
+      };
+      if (indexed) {
+        setStatus(`done :: ${file.name} indexed · ${chunks} chunks`);
+      } else if (index_error) {
+        // A real failure (broken index), not just "no [rag] extras installed".
+        setStatus(`saved — indexing failed: ${index_error}`);
+      } else {
+        setStatus("saved — indexing unavailable");
+      }
+      onUploaded?.();
     } catch (error) {
       setStatus("");
       show(`ingest :: failed — ${error instanceof Error ? error.message : "backend offline?"}`);

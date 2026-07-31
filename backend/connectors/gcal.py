@@ -1,9 +1,14 @@
 """Google Calendar (read-only in P2).
 
 Setup is a human step: create a Desktop OAuth client in Google Cloud Console,
-save ``credentials.json`` in the repo root (gitignored), then run
-``argus connect gcal`` once to complete the browser consent flow. The token
-is stored in the OS keyring (invariant I4).
+then hand its JSON to Argus. The normal path is uploading it in-app
+(Settings > Integrations), which saves it to the vault's ``.argus/`` dir —
+see `Settings.gcal_credentials_file`. For existing setups, dropping a
+``credentials.json`` beside the env file (the repo root's ``.env`` in dev,
+the Electron shell's userData dir when packaged) still works — see
+`legacy_credentials_file`. Either way, run ``argus connect gcal`` once (or
+click Connect in-app) to complete the browser consent flow. The token is
+stored in the OS keyring (invariant I4).
 """
 
 from __future__ import annotations
@@ -14,12 +19,30 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.connectors import ConnectorUnavailable
+
 # Read events in P2; insert approved schedule blocks in P3 (writer-gated, I1).
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 ARGUS_COLOR_ID = "3"  # grape — Argus-created blocks are visually distinct
-CREDENTIALS_FILE = Path("credentials.json")
 KEYRING_SERVICE = "argus-gcal"
 KEYRING_USER = "token"
+
+
+def legacy_credentials_file() -> Path:
+    """Where a hand-placed ``credentials.json`` is still honored.
+
+    See `Settings.gcal_legacy_credentials_file` for why this is anchored to
+    the env file's directory rather than the process's current working
+    directory. `Settings` is imported lazily here, not at module scope: the
+    layering rule (README.md, "Project layout") puts `backend.core` below
+    `backend.connectors`, so a module-level import would be legal, but a
+    function-local one keeps this module importable standalone and avoids
+    paying for `Settings`'s own imports unless a caller actually needs the
+    legacy path.
+    """
+    from backend.core.config import Settings
+
+    return Settings().gcal_legacy_credentials_file
 
 
 class CalendarEvent(BaseModel):
@@ -61,9 +84,16 @@ def configured() -> bool:
 
 
 def connect(
-    credentials_file: Path = CREDENTIALS_FILE, timeout_seconds: float | None = None
+    credentials_file: Path | None = None, timeout_seconds: float | None = None
 ) -> None:
     """Run the one-time browser consent flow and store the token (I4).
+
+    ``credentials_file`` defaults to `legacy_credentials_file` when omitted
+    (as the CLI does) rather than a fixed module-level path — a mutable
+    default evaluated once at import time cannot pick up ``ARGUS_ENV_FILE``,
+    which is exactly what the packaged app relies on. Callers that already
+    know where the client file lives (the HTTP endpoint) pass it explicitly
+    and are unaffected.
 
     ``timeout_seconds`` bounds the wait for the browser redirect. The CLI
     leaves it None (a person at a terminal can take as long as they like); the
@@ -73,6 +103,7 @@ def connect(
     import keyring
     from google_auth_oauthlib.flow import InstalledAppFlow
 
+    credentials_file = credentials_file or legacy_credentials_file()
     if not credentials_file.is_file():
         raise FileNotFoundError(
             f"{credentials_file} not found — create a Desktop OAuth client in Google Cloud "
@@ -133,23 +164,40 @@ def insert_event(title: str, start: str, end: str, service=None) -> None:
 
 
 def list_events(day: date, service=None) -> list[CalendarEvent]:
-    """Events for one local day; [] when unconfigured. ``service`` injectable."""
-    service = service or _service()
+    """Events for one local day; [] when unconfigured. ``service`` injectable.
+
+    Raises `ConnectorUnavailable` when a token IS stored but the client
+    library can't be imported (a broken build), authentication/refresh fails,
+    or the API call itself fails (network outage, a Google outage) — see
+    `list_events_safe` for callers that must degrade instead of raise.
+    """
+    if service is None:
+        try:
+            service = _service()
+        except ImportError as exc:
+            raise ConnectorUnavailable(
+                f"Google Calendar client library is not installed: {exc}"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - refresh/auth failures are "unavailable" too
+            raise ConnectorUnavailable(f"Google Calendar authentication failed: {exc}") from exc
     if service is None:
         return []
     start = datetime.combine(day, time.min).astimezone()
     end = start + timedelta(days=1)
-    response = (
-        service.events()
-        .list(
-            calendarId="primary",
-            timeMin=start.isoformat(),
-            timeMax=end.isoformat(),
-            singleEvents=True,
-            orderBy="startTime",
+    try:
+        response = (
+            service.events()
+            .list(
+                calendarId="primary",
+                timeMin=start.isoformat(),
+                timeMax=end.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
         )
-        .execute()
-    )
+    except Exception as exc:  # noqa: BLE001 - any API/network failure is "unavailable"
+        raise ConnectorUnavailable(f"Google Calendar request failed: {exc}") from exc
     events: list[CalendarEvent] = []
     for item in response.get("items", []):
         start_raw = item.get("start", {})
@@ -164,3 +212,18 @@ def list_events(day: date, service=None) -> list[CalendarEvent]:
             )
         )
     return events
+
+
+def list_events_safe(day: date, service=None) -> tuple[list[CalendarEvent], str | None]:
+    """`list_events`, but for callers that must degrade rather than fail.
+
+    A calendar widget, the task board, or the planner must not take down the
+    whole dashboard because gcal is unreachable or a build is missing the
+    client library. Returns ``(events, None)`` on success and
+    ``([], message)`` when the connector is unavailable — ``message`` is
+    short and safe to show a user directly.
+    """
+    try:
+        return list_events(day, service), None
+    except ConnectorUnavailable as exc:
+        return [], str(exc)

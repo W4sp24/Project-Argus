@@ -21,10 +21,14 @@ looking identical to good ones. Revisit once the read-only path is proven.
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 from typing import Any
 
 from backend.agent.adapters import ToolSpec, flatten_tool_result
 from backend.core.config import Settings
+
+logger = logging.getLogger("argus.rag")
 
 SERVER_NAME = "argus"
 
@@ -49,17 +53,20 @@ def read_only_tools(settings: Settings) -> list[ToolSpec]:
     from backend.agent.runtime import build_vault_tools
     from backend.rag.index import VaultIndex
 
-    index = VaultIndex(settings.db_path.parent / "chroma")
+    index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
     ready = threading.Event()
 
     def warm() -> None:
-        import contextlib
-
         try:
             # Best-effort, exactly as ChatAgent.warm: a failed warm must release
             # waiters so a search fails on its own terms instead of hanging.
-            with contextlib.suppress(Exception):
-                index.query("warmup", n_results=1)
+            # Logged (not silently swallowed) so a genuinely broken index isn't
+            # invisible to anyone but the caller of the first real search.
+            index.query("warmup", n_results=1)
+        except Exception:
+            logger.warning(
+                "mcp index warm-up failed (will retry on first real query)", exc_info=True
+            )
         finally:
             ready.set()
 
@@ -134,13 +141,39 @@ def default_command() -> list[str]:
     return ["argus", "mcp-server"]
 
 
-def client_config_snippets(command: str | None = None) -> dict[str, str]:
-    """Copy-pasteable config for each supported CLI, for the docs and /system."""
+def client_config_snippets(
+    command: str | None = None, env_file: Path | None = None
+) -> dict[str, str]:
+    """Copy-pasteable config for each supported CLI, for the docs and /system.
+
+    Every snippet carries ``ARGUS_ENV_FILE``. Without it, a coding agent that
+    spawns this command from *its own* project directory (Claude Code, Codex,
+    Gemini CLI — none of them run from this repo) makes ``Settings.load()``
+    resolve ``VAULT_PATH`` against ``./.env`` relative to *their* cwd, finds
+    nothing, and the bridge exits 1 (see
+    ``desktop/backend/argus_server.py``'s ``_cmd_mcp_server`` /
+    ``backend.cli``'s ``mcp-server`` branch — both already fail cleanly on an
+    unconfigured vault, but "cleanly" isn't "correctly": the vault this
+    process is actually running against is not unconfigured, the *lookup* is
+    just pointed at the wrong file). Resolving it here means the pasted
+    snippet keeps working regardless of where the calling agent's cwd is.
+
+    ``claude mcp add`` takes environment variables via repeated ``--env
+    KEY=value`` flags before the server name (verified against the CLI's own
+    docs — not guessed); the two JSON-config clients take a plain ``env``
+    object on the stdio entry.
+    """
+    from backend.core.config import DEFAULT_ENV_FILE
+
     argv = command.split() if command else default_command()
     command = " ".join(argv)
-    stdio_entry = {"command": argv[0], "args": argv[1:]}
+    resolved_env = str((env_file or DEFAULT_ENV_FILE).resolve())
+    stdio_entry = {"command": argv[0], "args": argv[1:], "env": {"ARGUS_ENV_FILE": resolved_env}}
     return {
-        "claude-code": f"claude mcp add {SERVER_NAME} -s user -- {command}",
+        "claude-code": (
+            f"claude mcp add {SERVER_NAME} -s user "
+            f"--env ARGUS_ENV_FILE={resolved_env} -- {command}"
+        ),
         "codex-cli": json.dumps({"mcpServers": {SERVER_NAME: stdio_entry}}, indent=2),
         "gemini-cli": json.dumps({"mcpServers": {SERVER_NAME: stdio_entry}}, indent=2),
     }

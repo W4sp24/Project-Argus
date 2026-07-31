@@ -18,9 +18,12 @@ from backend.core.db import connect, init_schema
 from backend.features.flashcards.store import (
     DeckSummary,
     DueCard,
+    DueSummary,
     FlashcardsError,
     GradeResult,
+    delete_deck,
     due_cards,
+    due_summary,
     generate_deck,
     grade_card,
     list_decks,
@@ -36,6 +39,11 @@ class GradeRequest(BaseModel):
     grade: str
 
 
+class DeckDeleteSummary(BaseModel):
+    deck_id: int
+    reviews_removed: int
+
+
 def build_flashcards_router(settings: Settings) -> APIRouter:
     """All /api/flashcards routes."""
     router = APIRouter(prefix="/api/flashcards")
@@ -49,7 +57,9 @@ def build_flashcards_router(settings: Settings) -> APIRouter:
     def create_deck(request: GenerateDeckRequest) -> DeckSummary:
         conn = db()
         try:
-            deck_id = generate_deck(settings.vault_path, conn, request.course)
+            deck_id = generate_deck(
+                settings.vault_path, conn, request.course, taxonomy=settings.taxonomy
+            )
             deck = load_deck(conn, deck_id)
         except FlashcardsError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -70,6 +80,25 @@ def build_flashcards_router(settings: Settings) -> APIRouter:
             return list_decks(conn, course)
         finally:
             conn.close()
+
+    @router.get("/due-summary", response_model=DueSummary)
+    def due_summary_route() -> DueSummary:
+        conn = db()
+        try:
+            return due_summary(conn)
+        finally:
+            conn.close()
+
+    @router.delete("/decks/{deck_id}", response_model=DeckDeleteSummary)
+    def remove_deck(deck_id: int) -> DeckDeleteSummary:
+        conn = db()
+        try:
+            reviews_removed = delete_deck(conn, deck_id)
+        except FlashcardsError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            conn.close()
+        return DeckDeleteSummary(deck_id=deck_id, reviews_removed=reviews_removed)
 
     @router.get("/decks/{deck_id}/due", response_model=list[DueCard])
     def due(deck_id: int) -> list[DueCard]:

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/Toast";
-import { apiFetch, searchVault, useVault, type SearchResult } from "@/lib/api";
+import { apiFetch, reindexVault, searchVault, useVault, type SearchResult } from "@/lib/api";
 import { useChat } from "@/lib/chat";
 import { MODE_ROUTES, type Mode } from "@/lib/mode";
 import { useUi } from "@/lib/ui";
@@ -34,6 +34,52 @@ export interface PaletteAction {
 }
 
 const MODES: Mode[] = ["general", "study", "research", "code", "system"];
+
+/** Reindex polling cadence and giving-up point, for the palette's own toast —
+ * the run itself has no fixed deadline server-side, this is just how long the
+ * palette keeps watching before telling the user to check back later. */
+const INDEX_POLL_MS = 700;
+const INDEX_POLL_TIMEOUT_MS = 5 * 60_000;
+
+interface IndexStatusPayload {
+  indexing: boolean;
+  chunks: number;
+  files: number;
+  last_error: string | null;
+}
+
+/** Poll GET /api/index/status until the background rebuild finishes, then
+ * toast the real outcome (chunk/file counts, or the real error) — replacing
+ * the old fake "arrives with the backend branch" toast entirely. Not a hook:
+ * PALETTE_ACTIONS is a plain array, not a component, so this just recurses
+ * with setTimeout the same way installModel's NDJSON reader loops manually. */
+async function pollIndexStatus(ctx: PaletteContext, startedAt: number): Promise<void> {
+  let response: Response;
+  try {
+    response = await apiFetch("/api/index/status");
+  } catch {
+    ctx.toast("reindex :: failed — is the backend running?");
+    return;
+  }
+  if (!response.ok) {
+    ctx.toast("reindex :: status check failed — see backend logs");
+    return;
+  }
+  const status = (await response.json()) as IndexStatusPayload;
+  if (status.indexing) {
+    if (Date.now() - startedAt > INDEX_POLL_TIMEOUT_MS) {
+      ctx.toast("reindex :: still running — check back later");
+      return;
+    }
+    setTimeout(() => void pollIndexStatus(ctx, startedAt), INDEX_POLL_MS);
+    return;
+  }
+  ctx.toast(
+    status.last_error
+      ? `reindex :: failed — ${status.last_error}`
+      : `reindex :: done — ${status.chunks} chunks from ${status.files} files`,
+  );
+}
 
 /** Plain exported array — no command framework dependency (§6). */
 export const PALETTE_ACTIONS: PaletteAction[] = [
@@ -98,14 +144,18 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     run: (ctx) => ctx.toast("search :: type a query, press enter"),
   },
   {
-    // No reindex HTTP endpoint exists — `argus reindex` is CLI-only
-    // (backend/cli.py → VaultIndex.reindex_all). Preview until the backend
-    // branch exposes one.
+    // POST /api/index/reindex — runs on a background thread; the palette
+    // polls GET /api/index/status until it finishes, then toasts the real
+    // outcome. See pollIndexStatus above.
     kind: "INDEX",
     label: "reindex",
-    hint: "preview",
-    preview: true,
-    run: (ctx) => ctx.toast("reindex :: arrives with the backend branch"),
+    hint: "rebuild the vault index",
+    run: (ctx) => {
+      ctx.toast("reindex :: starting…");
+      reindexVault()
+        .then(() => pollIndexStatus(ctx, Date.now()))
+        .catch(() => ctx.toast("reindex :: failed — is the backend running?"));
+    },
   },
 ];
 

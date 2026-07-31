@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import Panel from "@/components/Panel";
-import { useNotes } from "@/lib/api";
+import { useToast } from "@/components/Toast";
+import { apiFetch, useCourseSources, type CourseSource } from "@/lib/api";
+
+const ACCEPTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md"];
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -15,24 +18,45 @@ function relativeTime(iso: string): string {
   return `${months}mo ago`;
 }
 
-function typeChip(path: string): string {
-  return path.toLowerCase().endsWith(".pdf") ? "PDF" : "MD";
+function isAcceptedFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext));
 }
 
 /**
- * SOURCES rail (§4 Course Hub, left 300px) — real data from `GET /api/notes`
- * (backend/notes.py `list_notes`), filtered to `15-Courses/<CODE>/`. There's
- * no chunk-count concept in the data model (no per-file RAG metadata is
- * exposed), so the meta line shows folder + last-modified instead, as the
- * task allows. Checkbox selection is a client-only RAG-context toggle — no
- * query is actually scoped by it yet (Phase F wires retrieval).
+ * SOURCES rail (§4 Course Hub, left 300px) — real data from the dedicated
+ * `GET /api/study/courses/<code>/sources` (backend/features/study/corpus.py
+ * `course_sources`), scoped to the `materials` and `notes` zones. Replaces
+ * filtering `useNotes()` by a hardcoded `15-Courses/<CODE>/` prefix, which
+ * only ever listed markdown — a PDF/PPTX/DOCX material (the common case for
+ * course materials) could never appear here even though it was really saved
+ * and indexed. The dropzone is real too: it POSTs to `/api/study/upload`
+ * (the same endpoint `CoursesPanel`'s + FILES button uses), not a decorative
+ * `[preview]` div with no drop handler and no file input.
+ *
+ * Checkbox selection is still a client-only RAG-context toggle — no query is
+ * actually scoped by it yet (course-level scoping is real now, via chat's
+ * `course` field; per-file selection remains a follow-up).
  */
 export default function CourseSourcesPanel({ code }: { code: string }) {
-  const { data: notes } = useNotes();
-  const prefix = `15-Courses/${code}/`;
-  const sources = (notes ?? []).filter((note) => note.path.startsWith(prefix));
+  const { data: sources, mutate: refreshSources } = useCourseSources(code);
+  const { show } = useToast();
 
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(sources.map((s) => s.path)));
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const initialized = useRef(false);
+  useEffect(() => {
+    if (initialized.current || !sources) return;
+    initialized.current = true;
+    setSelected(new Set(sources.filter((s) => s.zone !== "study").map((s) => s.path)));
+  }, [sources]);
+
+  const [dragOver, setDragOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const visibleSources: CourseSource[] = (sources ?? []).filter(
+    (source) => source.zone === "materials" || source.zone === "notes",
+  );
 
   function toggle(path: string) {
     setSelected((prev) => {
@@ -43,18 +67,56 @@ export default function CourseSourcesPanel({ code }: { code: string }) {
     });
   }
 
-  const selectedCount = sources.filter((s) => selected.has(s.path)).length;
+  async function upload(file: File) {
+    if (!isAcceptedFile(file)) {
+      show(`"${file.name}" isn't supported — use ${ACCEPTED_EXTENSIONS.join(", ")}`);
+      return;
+    }
+    setBusy(true);
+    const body = new FormData();
+    body.append("course", code);
+    body.append("file", file);
+    try {
+      const response = await apiFetch("/api/study/upload", { method: "POST", body });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.detail === "string" ? payload.detail : `upload failed (${response.status})`,
+        );
+      }
+      show(`saved ${payload.path} — indexing in the background`);
+      refreshSources();
+    } catch (error) {
+      show(`upload failed — ${error instanceof Error ? error.message : "backend offline?"}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function pickFile(picked: File | null | undefined) {
+    if (!picked || busy) return;
+    upload(picked);
+  }
+
+  function handleDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setDragOver(false);
+    pickFile(event.dataTransfer.files?.[0]);
+  }
+
+  const selectedCount = visibleSources.filter((s) => selected.has(s.path)).length;
 
   return (
-    <Panel label={`SOURCES · ${selectedCount}/${sources.length} selected`}>
-      {sources.length === 0 ? (
-        <p className="text-label text-ink-faint">
-          No indexed files under <span className="font-mono text-label">{prefix}</span> yet.
-        </p>
+    <Panel label={`SOURCES · ${selectedCount}/${visibleSources.length} selected`}>
+      {visibleSources.length === 0 ? (
+        <p className="text-label text-ink-faint">No indexed files for this course yet.</p>
       ) : (
         <ul className="space-y-1.5">
-          {sources.map((source) => (
-            <li key={source.path} className="flex items-start gap-2 border border-line px-2.5 py-2 transition-colors hover:border-lineHi">
+          {visibleSources.map((source) => (
+            <li
+              key={source.path}
+              className="flex items-start gap-2 border border-line px-2.5 py-2 transition-colors hover:border-lineHi"
+            >
               <button
                 role="checkbox"
                 aria-checked={selected.has(source.path)}
@@ -69,22 +131,48 @@ export default function CourseSourcesPanel({ code }: { code: string }) {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-label text-ink">{source.title}</p>
                 <p className="mt-0.5 font-mono text-meta text-ink-faint">
-                  {source.folder || "/"} · {relativeTime(source.modified)}
+                  {source.zone} · {relativeTime(source.modified)}
+                  {source.chunks !== null && ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
                 </p>
               </div>
               <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
-                {typeChip(source.path)}
+                {source.kind}
               </span>
             </li>
           ))}
         </ul>
       )}
 
-      <div className="mt-3 border border-dashed border-line px-3 py-4 text-center">
-        <p className="font-mono text-meta text-ink-faint">
-          drop files to ingest <span className="text-micro uppercase tracking-[0.16em] text-[#8b7bc0]">[preview]</span>
-        </p>
-      </div>
+      <button
+        type="button"
+        onDragOver={(event) => {
+          event.preventDefault();
+          if (!busy) setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        className={`mt-3 w-full cursor-pointer border border-dashed px-3 py-4 text-center transition-[border-color,background-color] disabled:cursor-wait disabled:opacity-60 ${
+          dragOver ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
+        }`}
+      >
+        <span className="font-mono text-meta text-ink-faint">
+          {busy ? "uploading…" : `drop a file, or click to choose (${ACCEPTED_EXTENSIONS.join(" ")})`}
+        </span>
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPTED_EXTENSIONS.join(",")}
+        aria-hidden
+        tabIndex={-1}
+        className="hidden"
+        onChange={(event) => {
+          pickFile(event.target.files?.[0]);
+          event.target.value = "";
+        }}
+      />
     </Panel>
   );
 }

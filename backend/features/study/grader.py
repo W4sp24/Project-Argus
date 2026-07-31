@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.study.practice_exam import Exam, Question, StudyError
 
 
@@ -69,7 +70,12 @@ def load_exam(conn: sqlite3.Connection, exam_id: int) -> Exam:
 
 
 def grade_attempt(
-    conn: sqlite3.Connection, vault_path: Path, exam_id: int, answers: list[str]
+    conn: sqlite3.Connection,
+    vault_path: Path,
+    exam_id: int,
+    answers: list[str],
+    *,
+    taxonomy: Taxonomy | None = None,
 ) -> AttemptResult:
     """Score an attempt, persist it, and append weak topics to review-queue.md."""
     exam = load_exam(conn, exam_id)
@@ -103,7 +109,7 @@ def grade_attempt(
     conn.commit()
 
     if weak_topics:
-        _append_review_queue(vault_path, exam, weak_topics, score)
+        _append_review_queue(vault_path, exam, weak_topics, score, taxonomy=taxonomy)
 
     return AttemptResult(
         attempt_id=int(cursor.lastrowid),
@@ -115,9 +121,17 @@ def grade_attempt(
     )
 
 
-def _append_review_queue(vault_path: Path, exam: Exam, weak_topics: list[str], score: int) -> None:
+def _append_review_queue(
+    vault_path: Path,
+    exam: Exam,
+    weak_topics: list[str],
+    score: int,
+    *,
+    taxonomy: Taxonomy | None = None,
+) -> None:
     """Append weak topics under study/ (allowed write target, I1 exemption)."""
-    study_dir = vault_path / "15-Courses" / exam.course / "study"
+    tax = taxonomy or active_taxonomy()
+    study_dir = vault_path / tax.course_study(exam.course)
     study_dir.mkdir(parents=True, exist_ok=True)
     queue = study_dir / "review-queue.md"
     if not queue.exists():

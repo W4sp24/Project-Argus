@@ -86,6 +86,8 @@ export interface NoteInfo {
   title: string;
   folder: string;
   modified: string;
+  /** Only present when the request asked for it — see `useNotesIn`. */
+  frontmatter?: Record<string, unknown>;
 }
 
 /** All non-private notes in the vault, newest first. */
@@ -93,13 +95,83 @@ export function useNotes() {
   return useSWR<NoteInfo[]>("/api/notes", fetcher);
 }
 
+/**
+ * Notes under one vault folder (and its subfolders), with an opt-in
+ * frontmatter whitelist attached to each — `GET /api/notes?folder=&fields=`.
+ * Lets a listing like Research's paper queue read status/progress for every
+ * paper in one request instead of one `GET /api/note` per paper. `folder`
+ * null/undefined skips the fetch (SWR key null) — used while the folder path
+ * is still loading from `useVault()`.
+ */
+export function useNotesIn(folder: string | null | undefined, fields: string[]) {
+  const query = folder
+    ? `/api/notes?folder=${encodeURIComponent(folder)}&fields=${fields.map(encodeURIComponent).join(",")}`
+    : null;
+  return useSWR<NoteInfo[]>(query, fetcher);
+}
+
 export interface VaultInfo {
   name: string;
+  /** Where Research mode's one-note-per-paper reading queue lives, derived
+   * server-side from the configured taxonomy (never hardcode `30-Areas`). */
+  papers_dir: string;
+  /** The single running highlights log Research mode appends to. */
+  highlights_path: string;
+  /** Where Study mode's course folders live — never hardcode `15-Courses`. */
+  courses_dir: string;
 }
 
 /** Vault identity — used to build `obsidian://` deep links client-side. */
 export function useVault() {
   return useSWR<VaultInfo>("/api/vault", fetcher);
+}
+
+export interface NoteContent {
+  path: string;
+  content: string;
+}
+
+/**
+ * One note's raw content, or `null` if it doesn't exist yet (404) — for
+ * notes created lazily on first use, like the research highlights log.
+ */
+export async function fetchNoteOrNull(path: string): Promise<string | null> {
+  const response = await apiFetch(`/api/note?path=${encodeURIComponent(path)}`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, body, body.detail ?? `Request failed: ${response.status}`);
+  }
+  const payload = (await response.json()) as NoteContent;
+  return payload.content;
+}
+
+/**
+ * Replace one note's content through the compare-and-swap `PUT /api/note`,
+ * retrying against the current content a 409 (`WriterConflict`) carries
+ * rather than clobbering whatever changed underneath — for read-modify-write
+ * flows that don't own a note exclusively (status cycling, the append-only
+ * highlights log).
+ */
+export async function updateNoteWithRetry(
+  path: string,
+  currentContent: string,
+  transform: (content: string) => string,
+  attempt = 0,
+): Promise<string> {
+  const next = transform(currentContent);
+  try {
+    await mutateJSON("/api/note", { path, expected_content: currentContent, new_content: next }, "PUT");
+    return next;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409 && attempt < 5) {
+      const detail = (error.payload as { detail?: { current_content?: string } } | undefined)?.detail;
+      if (typeof detail?.current_content === "string") {
+        return updateNoteWithRetry(path, detail.current_content, transform, attempt + 1);
+      }
+    }
+    throw error;
+  }
 }
 
 export interface JournalProject {
@@ -192,11 +264,38 @@ export interface CourseInfo {
   path: string;
   materials: number;
   notes: number;
+  /** Taxonomy-derived write targets — upload here, never a hand-built path,
+   * or the upload lands somewhere `materials`/`notes` above never counts. */
+  materials_path: string;
+  notes_path: string;
 }
 
-/** Courses discovered under 15-Courses/ (each needs a course.md hub note). */
+/** Courses discovered under the taxonomy's courses dir (each needs a
+ * course.md hub note; see `useVault().courses_dir` for the folder itself). */
 export function useStudyCourses() {
   return useSWR<CourseInfo[]>("/api/study/courses", fetcher);
+}
+
+export interface CourseSource {
+  path: string;
+  title: string;
+  zone: "materials" | "notes" | "study";
+  /** Uppercased file extension, e.g. "PDF", "MD", "PPTX". */
+  kind: string;
+  modified: string;
+  /** Chunks in the live index for this file, or `null` when not indexed
+   * (never `0` for "unknown" — that would misreport "indexed, empty"). */
+  chunks: number | null;
+}
+
+/**
+ * A course's real files (materials/notes/study), including non-markdown
+ * material `GET /api/notes` can never see. Powers the Course Hub SOURCES
+ * rail (§4) and its "generated" list (study guides live under the `study`
+ * zone; exams/decks have their own endpoints below).
+ */
+export function useCourseSources(code: string) {
+  return useSWR<CourseSource[]>(`/api/study/courses/${encodeURIComponent(code)}/sources`, fetcher);
 }
 
 export interface ExamSummary {
@@ -429,8 +528,12 @@ export function deleteCustomAgent(id: string) {
   );
 }
 
-/** `needs-credentials`: a prerequisite file is missing, not just the consent. */
-export type ConnectorStatus = "wired" | "not-connected" | "needs-credentials";
+/**
+ * `needs-credentials`: a prerequisite file is missing, not just the consent.
+ * `failing`: a credential IS stored but the connector can't actually answer
+ * right now (e.g. this build is missing the client library) — see `error`.
+ */
+export type ConnectorStatus = "wired" | "not-connected" | "needs-credentials" | "failing";
 
 export interface ConnectorInfo {
   id: string;
@@ -438,6 +541,8 @@ export interface ConnectorInfo {
   status: ConnectorStatus;
   detail: string;
   can_connect: boolean;
+  /** Set only when status === "failing". */
+  error?: string | null;
 }
 
 export interface McpServerInfo {
@@ -771,7 +876,7 @@ export function useDueCards(deckId: number | null) {
   );
 }
 
-/** Parse `Q:: A::` pairs from `15-Courses/<CODE>/flashcards.md` into a new deck. */
+/** Parse `Q:: A::` pairs from the course's `flashcards.md` into a new deck. */
 export function generateFlashcardDeck(course: string) {
   return mutateJSON<FlashcardDeck>("/api/flashcards/decks", { course });
 }
@@ -782,6 +887,28 @@ export function gradeFlashcard(deckId: number, cardId: string, grade: FlashcardG
     `/api/flashcards/decks/${deckId}/cards/${encodeURIComponent(cardId)}/grade`,
     { grade },
   );
+}
+
+export interface DeckDueSummary {
+  deck_id: number;
+  course: string;
+  title: string;
+  due: number;
+}
+
+export interface DueSummary {
+  total: number;
+  decks: DeckDueSummary[];
+}
+
+/**
+ * Cards due across every deck, in one request. Backs the Study overview's
+ * real "cards due" stat + FLASHCARDS panel — previously a hardcoded
+ * `MOCK_CARDS_DUE = 7` because `useDueCards()` only takes a single deck id
+ * and there was no whole-vault total to show instead.
+ */
+export function useDueSummary() {
+  return useSWR<DueSummary>("/api/flashcards/due-summary", fetcher);
 }
 
 // --- Search (command palette) -----------------------------------------
@@ -800,6 +927,31 @@ export async function searchVault(query: string): Promise<SearchResult[]> {
   const q = query.trim();
   if (!q) return [];
   return fetcher<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`);
+}
+
+// --- Index (reindex) -----------------------------------------------------
+
+export interface IndexStatus {
+  chunks: number;
+  files: number;
+  indexing: boolean;
+  last_run: string | null;
+  last_error: string | null;
+  /** The persisted chroma schema predates the current chunk shape — the
+   * backend rebuilds automatically on boot when this is true, but the UI can
+   * still surface it while a rebuild is in flight. */
+  stale: boolean;
+}
+
+/** Poll reindex progress. GET /api/index/status. */
+export function useIndexStatus() {
+  return useSWR<IndexStatus>("/api/index/status", fetcher);
+}
+
+/** Trigger a full vault reindex. POST /api/index/reindex — 202, runs on a
+ * background thread; poll useIndexStatus() for progress/completion. */
+export function reindexVault() {
+  return mutateJSON<IndexStatus>("/api/index/reindex", undefined);
 }
 
 // --- Quick Links --------------------------------------------------------

@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.core.config import Settings
+from backend.core.taxonomy import Taxonomy
 from backend.main import create_app
 
 STUB = """---
@@ -131,3 +132,29 @@ def test_note_path_cannot_escape_90_meta(client: TestClient, vault: Path) -> Non
     for bad in ["../Welcome.md", "90-Meta/../Welcome.md", "Welcome.md", str(vault / "Welcome.md")]:
         response = client.get("/api/journal/note", params={"path": bad})
         assert response.status_code == 400, f"path {bad!r} escaped 90-Meta/"
+
+
+def test_journal_api_honours_a_renamed_journal_dir(tmp_path: Path) -> None:
+    """The bug this branch fixes: a vault that doesn't call it 90-Meta/."""
+    root = tmp_path / "vault"
+    projects = root / "DevJournal" / "projects"
+    projects.mkdir(parents=True)
+    (root / "Welcome.md").write_text("# Welcome\n", encoding="utf-8")
+    (projects / "demo.md").write_text(
+        "---\ntype: dev-project\ntags: [dev-journal]\n---\n\n# Demo Project\n",
+        encoding="utf-8",
+    )
+    settings = Settings(_vault_path=root, taxonomy=Taxonomy(journal="DevJournal"))
+    client = TestClient(create_app(settings))
+
+    projects_payload = client.get("/api/journal/projects").json()
+    assert [p["slug"] for p in projects_payload] == ["demo"]
+    assert projects_payload[0]["title"] == "Demo Project"
+
+    note = client.get("/api/journal/note", params={"path": "DevJournal/projects/demo.md"}).json()
+    assert "# Demo Project" in note["markdown"]
+
+    # The old default name is not special under this taxonomy: reading a note
+    # from it must not be treated as "inside the journal zone".
+    escape = client.get("/api/journal/note", params={"path": "90-Meta/projects/demo.md"})
+    assert escape.status_code == 400

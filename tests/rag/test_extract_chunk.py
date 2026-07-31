@@ -74,6 +74,38 @@ def test_pptx_extraction_keeps_slide_numbers(tmp_path: Path) -> None:
     assert "Hash tables" in blocks[0].text
 
 
+def test_eml_extraction_keeps_headers_and_body(tmp_path: Path) -> None:
+    """A dropped .eml must index, not save-then-yield-nothing.
+
+    The ingest route has always accepted .eml (ALLOWED_SUFFIXES) while there
+    was no extractor registered for it, so the file landed in the vault and
+    then produced zero chunks -- reported in the UI as "saved -- indexing
+    unavailable", which reads as a failure.
+    """
+    eml = tmp_path / "mail.eml"
+    eml.write_text(
+        "From: advisor@uni.edu\n"
+        "Subject: Thesis defence scheduling\n"
+        "Date: Mon, 20 Jul 2026 09:00:00 +0000\n"
+        "\n"
+        "Please confirm the room booking for the defence.\n",
+        encoding="utf-8",
+    )
+
+    blocks = extract_blocks(eml)
+
+    assert blocks, "no text extracted from .eml"
+    assert "Thesis defence scheduling" in blocks[0].text
+    assert "advisor@uni.edu" in blocks[0].text
+    assert "room booking" in blocks[0].text
+    assert blocks[0].meta["sender"] == "advisor@uni.edu"
+    assert blocks[0].meta["date"] == "2026-07-20"
+
+
+def test_eml_is_indexable() -> None:
+    assert is_indexable("00-Inbox/emails/2026-07-20-thesis.eml")
+
+
 def test_chunking_splits_headings_and_carries_metadata() -> None:
     text = "# Sorting\n\nIntro paragraph.\n\n## Quicksort\n\nPivot logic and [[Hoare]] scheme.\n"
     blocks = [Block(text=text, meta={"frontmatter": {"tags": ["cs"], "created": "2026-07-01"}})]
@@ -102,3 +134,97 @@ def test_chunking_windows_long_sections_with_overlap() -> None:
 def test_chunking_passes_page_meta_through() -> None:
     chunks = chunk_blocks([Block(text="Slide text", meta={"page": 7})], "docs/x.pdf")
     assert chunks[0].meta["page"] == 7
+
+
+# --- line-based windowing: bullets, tables, fenced code -----------------------
+
+
+def test_chunking_preserves_newlines_for_bullets_tables_and_code() -> None:
+    text = (
+        "# Notes\n\n"
+        "- item one\n- item two\n- item three\n\n"
+        "| a | b |\n| - | - |\n| 1 | 2 |\n\n"
+        "```python\ndef f():\n    return 1\n```\n"
+    )
+    blocks = [Block(text=text, meta={"frontmatter": {}})]
+    chunks = chunk_blocks(blocks, "note.md")
+
+    assert len(chunks) == 1
+    body = chunks[0].text
+    assert "- item one\n- item two\n- item three" in body
+    assert "| a | b |\n| - | - |\n| 1 | 2 |" in body
+    assert "```python\ndef f():\n    return 1\n```" in body
+
+
+def test_fence_is_never_split_across_chunks() -> None:
+    filler = "\n".join(f"line {i} with some padding words to grow the section" for i in range(80))
+    code = "\n".join(f"code line {i}" for i in range(40))
+    text = f"# Big\n\n{filler}\n\n```text\n{code}\n```\n\n{filler}\n"
+    blocks = [Block(text=text, meta={"frontmatter": {}})]
+    chunks = chunk_blocks(blocks, "note.md")
+
+    assert len(chunks) >= 2, "section should have split into multiple chunks"
+    for chunk in chunks:
+        fence_count = chunk.text.count("```")
+        assert fence_count % 2 == 0, f"fence split across a chunk boundary: {chunk.text!r}"
+
+
+def test_chunking_windows_long_single_line_paragraph_with_overlap() -> None:
+    """Obsidian doesn't hard-wrap, so a long paragraph is often one line —
+    it must still get windowed/overlapped, not become one giant chunk."""
+    words = " ".join(f"word{i}" for i in range(600))
+    chunks = chunk_blocks([Block(text=words, meta={"frontmatter": {}})], "note.md")
+
+    assert len(chunks) >= 2
+    first_words = chunks[0].text.split()
+    second_words = chunks[1].text.split()
+    assert first_words[-1] in second_words, "windows must overlap"
+
+
+# --- headings in chunk text + breadcrumb metadata ------------------------------
+
+
+def test_chunk_contains_its_own_heading_and_breadcrumb_metadata() -> None:
+    text = (
+        "# Sorting\n\nIntro.\n\n"
+        "## Quicksort\n\nPivot logic.\n\n"
+        "### Complexity\n\nO(n log n) average.\n"
+    )
+    blocks = [Block(text=text, meta={"frontmatter": {}})]
+    chunks = chunk_blocks(blocks, "note.md")
+
+    quicksort = next(c for c in chunks if c.meta["heading"] == "Quicksort")
+    assert "Quicksort" in quicksort.text
+    assert quicksort.meta["breadcrumb"] == "Sorting > Quicksort"
+
+    complexity = next(c for c in chunks if c.meta["heading"] == "Complexity")
+    assert "Complexity" in complexity.text
+    assert complexity.meta["breadcrumb"] == "Sorting > Quicksort > Complexity"
+
+
+# --- inline #tags ---------------------------------------------------------------
+
+
+def test_inline_tags_captured_and_unioned_with_frontmatter_tags() -> None:
+    text = "Working on #project/argus today. See #retrieval-quality.\n"
+    blocks = [Block(text=text, meta={"frontmatter": {"tags": ["cs"]}})]
+    chunks = chunk_blocks(blocks, "note.md")
+
+    tags = set(chunks[0].meta["tags"].split(","))
+    assert tags == {"cs", "project/argus", "retrieval-quality"}
+
+
+def test_inline_tag_excludes_fence_heading_and_url_fragment() -> None:
+    text = (
+        "# Heading not a tag\n\n"
+        "See https://example.com/page#anchor for details.\n\n"
+        "```text\n#not-a-tag-in-code\n```\n\n"
+        "Real tag here: #real-tag\n"
+    )
+    blocks = [Block(text=text, meta={"frontmatter": {}})]
+    chunks = chunk_blocks(blocks, "note.md")
+
+    all_tags: set[str] = set()
+    for chunk in chunks:
+        all_tags.update(t for t in chunk.meta["tags"].split(",") if t)
+    assert all_tags == {"real-tag"}

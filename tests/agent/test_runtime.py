@@ -148,6 +148,40 @@ def test_build_vault_tools_exposes_only_read_only_tools(settings: Settings) -> N
     assert not any(name.startswith("propose_") for name in names)
 
 
+@pytest.mark.anyio
+async def test_search_vault_forces_a_fixed_course_over_the_models_own_arg(
+    settings: Settings, monkeypatch
+) -> None:
+    """Course Hub chat passes a fixed course; the model's own `course` tool
+    argument must never widen or redirect that scope — the whole point of
+    asking a question from inside one course's hub."""
+    seen: list[str | None] = []
+    monkeypatch.setattr(
+        "backend.rag.retrieve.retrieve", lambda *a, **k: seen.append(k.get("course")) or []
+    )
+
+    tools = build_vault_tools(settings, FakeIndex(), course="CS201")
+    await tool(tools, "search_vault").handler({"query": "midterm", "course": "CS999"})
+
+    assert seen == ["CS201"], "the fixed course must win over the model-supplied one"
+
+
+@pytest.mark.anyio
+async def test_search_vault_falls_back_to_the_models_course_arg_when_unfixed(
+    settings: Settings, monkeypatch
+) -> None:
+    """Global chat (no fixed course) must keep letting the model decide."""
+    seen: list[str | None] = []
+    monkeypatch.setattr(
+        "backend.rag.retrieve.retrieve", lambda *a, **k: seen.append(k.get("course")) or []
+    )
+
+    tools = build_vault_tools(settings, FakeIndex())  # no fixed course
+    await tool(tools, "search_vault").handler({"query": "midterm", "course": "CS201"})
+
+    assert seen == ["CS201"]
+
+
 def test_the_mcp_bridge_warms_its_index_like_chat_does(settings: Settings, monkeypatch) -> None:
     """The 07-27 warm fix reached chat but never reached the MCP bridge.
 
@@ -266,3 +300,29 @@ def test_resolve_model_keeps_the_default_path(settings: Settings) -> None:
     from backend.agent.runtime import MODEL
 
     assert ChatAgent(settings)._resolve_model(None) == MODEL
+
+
+@pytest.mark.anyio
+async def test_stream_chat_forwards_course_to_the_tool_belt(
+    settings: Settings, monkeypatch
+) -> None:
+    """The plumbing from the ws frame down to the tool belt: `stream_chat`'s
+    `course` argument must reach `build_vault_tools`, which is what actually
+    fixes `search_vault`'s scope (see the course-forcing tests above)."""
+    captured = {}
+
+    def fake_build_vault_tools(*_args, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("backend.agent.runtime.build_vault_tools", fake_build_vault_tools)
+    monkeypatch.setattr(
+        "backend.agent.runtime.resolve_adapter", lambda *a, **k: _AbandonableAdapter()
+    )
+
+    agent = ChatAgent(settings)
+    agent._index = FakeIndex()
+    async for _ in agent.stream_chat("what's on the exam", course="CS201"):
+        pass
+
+    assert captured.get("course") == "CS201"

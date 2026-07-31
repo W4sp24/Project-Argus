@@ -6,6 +6,105 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Argus is currently pre-1.0 (0.x releases).
 
+## [0.2.1]
+
+Bug-fix release for v0.2.0. Two distinct classes of failure: a build that
+shipped without dependencies it imports, and features whose UI was never
+connected to a backend.
+
+> **v0.2.0 published as an empty release and is permanently unrecoverable.**
+> GitHub release immutability freezes assets the moment a release is
+> published, so the installer can never be attached to that tag. Do not
+> attempt to re-tag or re-run the build for `v0.2.0` — CI now refuses to
+> build over an already-published tag. `v0.2.1` is the auto-update floor.
+
+### Fixed
+
+- **The packaged app could never index or search — the embedding model was
+  not importable.** The PyInstaller spec excluded `torch.distributed`,
+  `torch.testing` and `torchgen` to save disk, but sentence-transformers
+  imports all three at module scope, so `import sentence_transformers` raised
+  `ModuleNotFoundError` inside *every packaged build ever produced*. No
+  embedding model meant no indexing and no retrieval, independent of the
+  reindex wiring below. It survived undetected because the release gate only
+  asserted that `GET /api/search` returned HTTP 200, and a swallowed exception
+  returns 200 with an empty list — and because it cannot reproduce in a dev
+  checkout, which never goes through PyInstaller. The smoke test now
+  round-trips a real reindex and requires an actual search hit.
+- **Google Calendar was missing from the build.** CI installed only the
+  `[rag]` extra, so PyInstaller froze a backend with no `google_auth_oauthlib`
+  and users got a 501 telling them to run `pip install` — into an app with no
+  pip. The `gcal` extra is now installed at build time, both connector clients
+  are bundled explicitly, and their packaging metadata is *required* rather
+  than silently skipped, so a build missing them fails instead of shipping.
+- **Todoist was declared nowhere.** `todoist-api-python` was imported
+  unconditionally but absent from every dependency list; it only worked on a
+  machine where it had been installed by hand. It is now a declared
+  dependency.
+- **Connecting Todoist took down the app.** Neither the missing-library
+  `ImportError` nor any API error was caught by any caller, so a stored token
+  turned `/api/agenda`, `/api/tasks`, the study signals and the planner into
+  500s. Google Calendar had the identical exposure, plus two more call sites.
+  Both connectors now degrade instead of failing, and Integrations reports a
+  real `failing` state instead of inferring "wired" from a keyring entry.
+  Connecting no longer stores a token it could not verify.
+- **The vault was never indexed.** `reindex_all` and `watch_vault` had two
+  call sites, both in the CLI — no scheduler job, no trigger from the desktop
+  shell, and the command palette's "reindex" was a fake toast. The collection
+  stayed empty, and an empty collection short-circuits silently, which is why
+  chat could never retrieve from Obsidian. Adds `POST /api/index/reindex` and
+  `GET /api/index/status`, a boot-time index and live file watcher, and a
+  nightly self-heal job.
+- **RAG failures were indistinguishable from an empty vault.** Broad
+  `except Exception` at every boundary turned "extras not installed" and
+  "never indexed" into "no results". Failures are now logged and surfaced, and
+  `argus doctor` reports real chunk counts instead of checking that a
+  directory exists.
+- **Retrieval quality**: chunking collapsed every newline, destroying bullets,
+  tables and code blocks; chunks dropped their own heading text; inline
+  Obsidian `#tags` were ignored; wikilinks were resolved with a full-vault
+  scan per link and could not follow aliases; and the BM25 corpus was rebuilt
+  from the entire index on every query.
+- **Study uploads appeared to do nothing.** Files were sent to the course
+  root while materials are only counted in `<course>/materials/`, so the row
+  kept reading "0 materials" with GUIDE and EXAM disabled. Uploaded PDFs were
+  also invisible in the sources rail, and its dropzone had no handler at all.
+- **Deleted study data came back.** The course `×` was in-memory state that a
+  reload undid; there were no delete routes for exams or decks, so orphaned
+  rows kept listing; and every new vault was seeded with a CS000 sample
+  course. Deletion is now real, confirmed, and cascades.
+- **Research deletion did nothing.** The page was entirely client-side mock
+  state — `×` filtered a local array, and no paper was ever really created.
+  Papers and highlights are now ordinary vault notes.
+- **The AGENT.USAGE panel header overflowed.** It carried a 32px button and a
+  26px switcher in a non-wrapping row, needing 336px of a 300px rail (377 of
+  337 at large UI scale).
+- **A missing `git` binary surfaced as a 500** from every write route rather
+  than a message naming the prerequisite.
+- **`.eml` files saved but never indexed** — the ingest route accepted them
+  while no extractor was registered.
+- The MCP snippet handed to coding agents omitted `ARGUS_ENV_FILE`, so a
+  spawned server could not find the vault and exited.
+- The Google OAuth client file was resolved relative to the working
+  directory, which in the packaged app is inside `Program Files`.
+
+### Added
+
+- **Configurable vault taxonomy.** Argus hardcoded nine PARA folder names in
+  54 places, so pointing it at an existing Obsidian vault meant quick capture,
+  briefings, course discovery and the private-zone guard all targeted folders
+  the user had never created. Folder names now come from `VAULT_*_DIR` keys in
+  the config file. Every default is the previous name, so existing installs
+  are unaffected.
+- `--selftest-imports` on the packaged backend, gating releases on every
+  lazily-imported optional dependency actually being present.
+- A CI workflow running the Python and frontend test suites. Neither had ever
+  run in CI, which is why v0.2.0's regressions were invisible.
+- A version-drift check: `pyproject.toml`, `web/package.json` and
+  `desktop/package.json` all claimed 0.1.0 while v0.2.0 was the shipped tag.
+- A staleness guard for the staged dashboard, matching the existing one for
+  the backend — v0.2.0 shipped a UI predating its own last commit.
+
 ## [Unreleased]
 
 ### Added

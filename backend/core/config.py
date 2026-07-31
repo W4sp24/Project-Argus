@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from backend.core.model_registry import DEFAULT_MODELS, load_model_prefs, load_user_models
+from backend.core.taxonomy import Taxonomy, set_active_taxonomy
 
 # Repo-relative by default (dev, `argus web`, tests). The packaged desktop app
 # has no repo root, so the Electron shell points this at its own userData dir
@@ -49,15 +50,22 @@ class Settings:
 
     backend_port: int = DEFAULT_BACKEND_PORT
     _vault_path: Path | None = field(default=None, repr=False)
+    taxonomy: Taxonomy = field(default_factory=Taxonomy)
 
     @classmethod
     def load(cls, env_file: Path | None = None) -> Settings:
         """Load settings from ``env_file`` (default ``./.env``)."""
         values = parse_env_file(env_file or DEFAULT_ENV_FILE)
         vault_raw = values.get("VAULT_PATH")
+        taxonomy = Taxonomy.from_env(values)
+        # The process-level fallback for code that only has a vault_path, not
+        # a Settings, in scope (backend.core.taxonomy.active_taxonomy). See
+        # that module's docstring for the full tradeoff.
+        set_active_taxonomy(taxonomy)
         return cls(
             backend_port=int(values.get("BACKEND_PORT", DEFAULT_BACKEND_PORT)),
             _vault_path=Path(vault_raw) if vault_raw else None,
+            taxonomy=taxonomy,
         )
 
     @property
@@ -104,6 +112,34 @@ class Settings:
         put it; see :func:`backend.connectors.gcal.connect`.
         """
         return self.db_path.parent / "gcal-credentials.json"
+
+    @property
+    def gcal_legacy_credentials_file(self) -> Path:
+        """The historical location: ``credentials.json`` beside the env file.
+
+        Before this was fixed, ``backend.connectors.gcal`` looked for
+        ``credentials.json`` relative to the process's current working
+        directory — correct by accident in dev, where the repo root doubles
+        as the CWD, and wrong in the packaged app, whose CWD is
+        ``resources/backend`` inside the install directory: unwritable, not
+        where a user would ever put a file, and replaced on every update.
+
+        ``DEFAULT_ENV_FILE`` is the one path Argus already resolves correctly
+        in both worlds — the repo root's ``.env`` in dev, the Electron
+        shell's userData dir when packaged, via ``ARGUS_ENV_FILE`` — so
+        anchoring here instead of the CWD fixes the packaged case for free.
+        ``.resolve()`` matters: a bare relative ``.env`` must still yield an
+        absolute directory. This is deliberately not anchored to
+        ``db_path``/``vault_path``, which raise ``ConfigError`` when
+        unconfigured — this property must stay safe to call on a
+        half-configured machine.
+
+        This is the *legacy* fallback only. New uploads always go to
+        `gcal_credentials_file`, in the vault's ``.argus/`` dir; this
+        property exists purely so a ``credentials.json`` someone hand-placed
+        under an older Argus version keeps working.
+        """
+        return DEFAULT_ENV_FILE.resolve().parent / "credentials.json"
 
     def _registry(self) -> list[dict]:
         """Built-ins first, then user-added models, before the default is applied."""

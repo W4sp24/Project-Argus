@@ -170,7 +170,24 @@ def test_config_snippets_cover_all_three_clis() -> None:
     assert set(snippets) == {"claude-code", "codex-cli", "gemini-cli"}
     assert snippets["claude-code"].startswith("claude mcp add argus")
     parsed = json.loads(snippets["codex-cli"])
-    assert parsed["mcpServers"][SERVER_NAME] == {"command": "argus", "args": ["mcp-server"]}
+    entry = parsed["mcpServers"][SERVER_NAME]
+    assert entry["command"] == "argus"
+    assert entry["args"] == ["mcp-server"]
+    assert entry["env"]["ARGUS_ENV_FILE"], "no env file resolved for the spawned agent"
+
+
+def test_config_snippets_carry_a_resolved_env_file(tmp_path: Path) -> None:
+    """The spawned agent runs from its own cwd, not this repo — VAULT_PATH
+    resolution needs an absolute env file path, not a bare relative ``.env``."""
+    env_file = tmp_path / "custom.env"
+
+    snippets = client_config_snippets(env_file=env_file)
+
+    resolved = str(env_file.resolve())
+    assert resolved in snippets["claude-code"]
+    assert "--env ARGUS_ENV_FILE=" in snippets["claude-code"]
+    parsed = json.loads(snippets["codex-cli"])
+    assert parsed["mcpServers"][SERVER_NAME]["env"] == {"ARGUS_ENV_FILE": resolved}
 
 
 def test_cli_exposes_the_mcp_server_subcommand() -> None:

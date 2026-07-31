@@ -10,7 +10,11 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..", "..");
-const python = path.join(root, ".venv", "Scripts", "python.exe");
+// ARGUS_PYTHON so CI can point at the runner's interpreter: a hosted runner
+// has no repo-local .venv, and hardcoding one made this suite local-only --
+// which is part of why nothing in web/ was ever gated by CI.
+const python =
+  process.env.ARGUS_PYTHON || path.join(root, ".venv", "Scripts", "python.exe");
 const workdir = path.join(here, ".workdir");
 const vault = path.join(workdir, "vault");
 const envFile = path.join(workdir, ".env");
@@ -42,7 +46,25 @@ fs.writeFileSync(
   "utf-8",
 );
 
+// CS000 no longer ships as a sample course (backend/cli.py stopped copying
+// it into fresh vaults — that permanent demo content was the reported
+// "study still retains sample data after it is deleted" bug). study.spec.ts
+// still exercises a real course end to end though, so the e2e vault grows
+// its own CS000 here instead of inheriting one from the template.
+fs.mkdirSync(path.join(vault, "15-Courses", "CS000"), { recursive: true });
+fs.writeFileSync(
+  path.join(vault, "15-Courses", "CS000", "course.md"),
+  `---\ntype: course\ncode: CS000\ntitle: Sample Course\ncreated: "${localToday()}"\ntags: [course]\nstatus: active\n---\n\n# CS000 — Sample Course\n`,
+  "utf-8",
+);
+
 execFileSync(python, [path.join(here, "seed_suggestion.py"), vault], {
+  cwd: root,
+  stdio: "inherit",
+});
+
+// Deterministic flashcard deck (no model call) — see seed_flashcards.py.
+execFileSync(python, [path.join(here, "seed_flashcards.py"), vault], {
   cwd: root,
   stdio: "inherit",
 });

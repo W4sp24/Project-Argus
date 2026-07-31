@@ -10,9 +10,9 @@ in the review queue (mirroring the planner), never direct writes.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
-from email import message_from_string, policy
 from typing import Any
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile
@@ -20,14 +20,16 @@ from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.rag.email import parse_email
 from backend.vault import suggestions as queue
 from backend.vault.writer import (
-    INGEST_FILES_DIR,
     WriterError,
     WriterForbidden,
     archive_email,
     save_ingest_file,
 )
+
+logger = logging.getLogger("argus.rag")
 
 Generator = Callable[[str], Awaitable[str]]
 
@@ -53,6 +55,11 @@ class IngestResponse(BaseModel):
     path: str
     chunks: int
     indexed: bool
+    # Set only when indexing actually failed (as opposed to the [rag] extras
+    # being absent, or the file legitimately producing no chunks) — the file
+    # is saved either way, but the UI must be able to tell "indexed nothing
+    # because it was blank" apart from "indexing broke".
+    index_error: str | None = None
 
 
 class EmailIngestRequest(BaseModel):
@@ -66,34 +73,11 @@ class EmailIngestResponse(BaseModel):
     archived_path: str
 
 
-def _parse_email(text: str) -> dict[str, Any]:
-    """Split raw pasted text / .eml content into headers + body (stdlib only)."""
-    message = message_from_string(text, policy=policy.default)
-    if not (message["From"] or message["Subject"] or message["Date"]):
-        return {"body": text, "subject": None, "sender": None, "date": None}
-    body = ""
-    try:
-        part = message.get_body(preferencelist=("plain",))
-        if part is not None:
-            body = part.get_content()
-    except Exception:
-        body = ""
-    if not body.strip():  # header-only paste or non-MIME body
-        body = message.get_payload() if isinstance(message.get_payload(), str) else text
-    email_date = None
-    try:
-        if message["Date"]:
-            from email.utils import parsedate_to_datetime
-
-            email_date = parsedate_to_datetime(message["Date"]).date().isoformat()
-    except Exception:
-        email_date = None
-    return {
-        "body": str(body),
-        "subject": str(message["Subject"]) if message["Subject"] else None,
-        "sender": str(message["From"]) if message["From"] else None,
-        "date": email_date,
-    }
+# Moved to backend/rag/email.py so the indexer and this route share one parser
+# -- an .eml is now both captured here and extracted for search, and two copies
+# would drift silently. Re-exported under the old private name so the existing
+# call sites and tests in this module keep working.
+_parse_email = parse_email
 
 
 def _fallback_extraction(parsed: dict[str, Any]) -> dict[str, Any]:
@@ -168,7 +152,11 @@ def build_ingest_router(settings: Settings, generator: Generator, index_factory:
             )
         try:
             rel_path = save_ingest_file(
-                settings.vault_path, target or INGEST_FILES_DIR, name, await file.read()
+                settings.vault_path,
+                target or settings.taxonomy.ingest_files,
+                name,
+                await file.read(),
+                taxonomy=settings.taxonomy,
             )
         except WriterForbidden as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -176,13 +164,22 @@ def build_ingest_router(settings: Settings, generator: Generator, index_factory:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         # Index with the existing pipeline; missing [rag] extras degrade
-        # gracefully — the file is saved either way.
+        # gracefully — the file is saved either way. A genuine failure (as
+        # opposed to the extras being absent) is logged and surfaced in
+        # ``index_error`` rather than silently reported as "0 chunks", which
+        # used to be indistinguishable from a file that was legitimately empty.
         chunks = 0
+        index_error: str | None = None
         try:
             chunks = index_factory().upsert_file(settings.vault_path, rel_path)
-        except Exception:
-            chunks = 0
-        return IngestResponse(path=rel_path, chunks=chunks, indexed=chunks > 0)
+        except ImportError as exc:
+            logger.warning("ingest indexing unavailable — [rag] extras not installed: %s", exc)
+        except Exception as exc:
+            logger.exception("ingest indexing failed for %s", rel_path)
+            index_error = str(exc)
+        return IngestResponse(
+            path=rel_path, chunks=chunks, indexed=chunks > 0, index_error=index_error
+        )
 
     @router.post("/ingest/email", response_model=EmailIngestResponse)
     async def ingest_email(request: EmailIngestRequest) -> EmailIngestResponse:
@@ -197,6 +194,7 @@ def build_ingest_router(settings: Settings, generator: Generator, index_factory:
                 subject=parsed["subject"],
                 sender=parsed["sender"],
                 email_date=parsed["date"],
+                taxonomy=settings.taxonomy,
             )
         except WriterError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

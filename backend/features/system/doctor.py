@@ -6,10 +6,12 @@ connector waiting on credentials), or FAIL (something the user must fix).
 
 from __future__ import annotations
 
+import time
 import uuid
 
 from pydantic import BaseModel
 
+from backend.connectors import client_library_importable
 from backend.core.config import Settings
 
 REQUIRED_TABLES = {
@@ -72,7 +74,35 @@ def _check_database(settings: Settings) -> Check:
         return Check(name="database", status="FAIL", detail=str(exc))
 
 
+def _vault_has_indexable_files(settings: Settings) -> bool:
+    """Does the vault contain anything the RAG pipeline would actually index?
+
+    Distinguishes "index is empty because there is nothing to index yet" (a
+    brand-new vault — not a problem) from "index is empty despite notes being
+    there" (the actual bug this check exists to catch).
+    """
+    from backend.vault.paths import is_indexable
+
+    vault = settings.vault_path
+    for file_path in vault.rglob("*"):
+        if not file_path.is_file():
+            continue
+        rel_path = file_path.relative_to(vault).as_posix()
+        if is_indexable(rel_path, taxonomy=settings.taxonomy):
+            return True
+    return False
+
+
 def _check_chroma(settings: Settings) -> Check:
+    """Is the vector index actually populated, not just present?
+
+    Previously this only checked that the ``.argus/chroma`` *directory*
+    existed, so it reported OK for a collection nothing had ever indexed into
+    — the exact silent failure mode behind "chat can't find anything in my
+    vault". Opening the collection and checking ``count()`` catches that; a
+    real error opening it (corrupt directory, chromadb genuinely broken) is a
+    FAIL, not a WARN, because no amount of clicking "reindex" fixes it.
+    """
     try:
         import chromadb  # noqa: F401
     except ImportError:
@@ -81,11 +111,72 @@ def _check_chroma(settings: Settings) -> Check:
             status="WARN",
             detail="chromadb not installed — `pip install -e .[rag]` enables chat/RAG",
         )
-    chroma_dir = settings.db_path.parent / "chroma"
+    # Retried once, deliberately. On a first launch the boot indexer is opening
+    # this same chroma directory on its own thread, and two clients racing to
+    # create it makes the loser raise -- reproducibly, on the very first
+    # /api/doctor of a fresh vault and never again. That is a transient
+    # collision, not a broken install, and reporting FAIL for it would tell a
+    # brand-new user their index is corrupt while it is quietly building.
+    # A second failure half a second later is real.
+    from backend.rag.index import VaultIndex
+
+    count = None
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
+            count = index.collection.count()
+            break
+        except Exception as exc:  # noqa: BLE001 - chromadb raises many types
+            last_error = exc
+            if attempt == 0:
+                time.sleep(0.5)
+    if count is None:
+        return Check(name="chroma", status="FAIL", detail=f"index unreadable: {last_error}")
+    if count > 0:
+        return Check(name="chroma", status="OK", detail=f"{count} chunks indexed")
+    if _vault_has_indexable_files(settings):
+        return Check(
+            name="chroma",
+            status="WARN",
+            detail="index empty — run reindex (Command Palette → reindex, or `argus reindex`)",
+        )
+    return Check(name="chroma", status="OK", detail="no indexable files in the vault yet")
+
+
+def _check_taxonomy(settings: Settings) -> Check:
+    """Which configured taxonomy folders are missing from this vault.
+
+    WARN, never FAIL: a brand-new or partially-populated vault legitimately
+    lacks some (or all) of these folders — the writer creates them lazily on
+    first use — so their absence must never read as "broken install" to
+    someone who has only just pointed Argus at a vault.
+    """
+    vault = settings.vault_path
+    tax = settings.taxonomy
+    named = {
+        "inbox": tax.inbox,
+        "daily": tax.daily,
+        "courses": tax.courses,
+        "projects": tax.projects,
+        "areas": tax.areas,
+        "people": tax.people,
+        "reference": tax.reference,
+        "journal": tax.journal,
+        "private": tax.private,
+    }
+    missing = [
+        f"{label} ({folder}/)" for label, folder in named.items() if not (vault / folder).is_dir()
+    ]
+    if not missing:
+        return Check(name="taxonomy", status="OK", detail="all configured folders exist")
     return Check(
-        name="chroma",
-        status="OK",
-        detail=f"{chroma_dir} ({'exists' if chroma_dir.is_dir() else 'created on first reindex'})",
+        name="taxonomy",
+        status="WARN",
+        detail=(
+            "not yet created (fine for a new/partial vault, or a taxonomy just changed): "
+            + ", ".join(missing)
+        ),
     )
 
 
@@ -166,10 +257,14 @@ def _check_connector(name: str) -> Check:
             from backend.connectors import gcal as connector
 
             hint = "create OAuth credentials.json, then `argus connect gcal`"
+            client_module = "google_auth_oauthlib.flow"
+            missing_detail = "this build shipped without Google Calendar support — update Argus"
         else:
             from backend.connectors import todoist as connector
 
             hint = "`argus connect todoist <api-token>`"
+            client_module = "todoist_api_python.api"
+            missing_detail = "this build shipped without Todoist support — update Argus"
         state = connector.connection_state()
         if state == KEY_PRESENT:
             return Check(name=name, status="OK", detail="connected")
@@ -181,6 +276,15 @@ def _check_connector(name: str) -> Check:
                 status="WARN",
                 detail="cannot tell — the OS keyring is unreadable; see the keyring check",
             )
+        # No token stored. That is normally just an unconfigured connector
+        # (WARN — the user hasn't run `connect` yet), but if the client
+        # library itself is not importable, no amount of running `connect`
+        # will fix it: the build was frozen without the dependency (see
+        # release.yml's `pip install -e ".[rag,gcal]"` and the spec's
+        # required_metadata() section). That is a broken build, not a user
+        # configuration choice, so it is FAIL, not WARN.
+        if not client_library_importable(client_module):
+            return Check(name=name, status="FAIL", detail=missing_detail)
         return Check(name=name, status="WARN", detail=f"not connected — {hint}")
     except Exception as exc:
         return Check(name=name, status="WARN", detail=str(exc))
@@ -201,6 +305,9 @@ def run_checks(settings: Settings) -> list[Check]:
         _check_config_files(settings)
         if vault_ok
         else Check(name="config-files", status="WARN", detail="skipped — vault missing"),
+        _check_taxonomy(settings)
+        if vault_ok
+        else Check(name="taxonomy", status="WARN", detail="skipped — vault missing"),
         _check_keyring(),
         _check_ollama(),
         _check_connector("gcal"),

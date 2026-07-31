@@ -11,6 +11,7 @@ any OpenAI-compatible endpoint including local Ollama. See
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import AsyncIterator
 from datetime import date
@@ -26,9 +27,12 @@ from backend.agent.adapters import (
     text_result,
 )
 from backend.core.config import Settings
+from backend.core.taxonomy import Taxonomy
 from backend.rag.index import VaultIndex
 from backend.telemetry.audit import log_prompt
 from backend.vault.paths import is_indexable
+
+logger = logging.getLogger("argus.rag")
 
 MODEL = "claude-opus-4-8"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "chat.md"
@@ -41,6 +45,19 @@ DISALLOWED_TOOLS = ("Bash", "Write", "Edit")  # read-only agent (P1)
 WARM_TIMEOUT_SECONDS = 90.0
 
 
+def _load_system_prompt(taxonomy: Taxonomy) -> str:
+    """``chat.md`` with the taxonomy's folder names templated in.
+
+    The prompt tells the model which folder is off-limits (I3); if the
+    taxonomy is configurable, a prompt naming the wrong folder would actively
+    mislead the model into thinking a *different* (possibly non-private)
+    folder is the protected one. Simple string substitution, not str.format,
+    so the markdown's own braces (none today, but future-proof) are never at
+    risk of a KeyError.
+    """
+    return PROMPT_PATH.read_text(encoding="utf-8").replace("{{PRIVATE_DIR}}", taxonomy.private)
+
+
 def _tool_text(payload: Any) -> dict[str, Any]:
     """Wrap a payload as an MCP text content result."""
     return text_result(payload)
@@ -51,6 +68,7 @@ def build_vault_tools(
     index: VaultIndex,
     model_label: str = MODEL,
     ready: threading.Event | None = None,
+    course: str | None = None,
 ) -> list[ToolSpec]:
     """The read-only tool belt shared by chat, and re-exposed over MCP.
 
@@ -69,6 +87,14 @@ def build_vault_tools(
     loses the race, so the first question after opening chat would come back
     with no citations at all. ``None`` means nothing is warming (the MCP server
     and tests), so nothing waits.
+
+    ``course``, when given, is a *fixed* retrieval scope: every
+    ``search_vault`` call is filtered to it regardless of what the model
+    passes as its own ``course`` tool argument. This is how the Course Hub's
+    per-course chat (§4) stays scoped to the course the user opened, rather
+    than trusting the model to always remember and pass it. Global chat (the
+    dock, ``/chat``) passes ``None`` here, so it keeps the model's own
+    judgment call on when to filter by course.
     """
 
     async def _await_index() -> None:
@@ -85,13 +111,18 @@ def build_vault_tools(
         # seconds against a cold index. On the MCP stdio server that would stall
         # the whole event loop; in chat it would stall the deltas already
         # streaming to the browser.
+        # A fixed course (Course Hub) always wins over whatever the model
+        # itself passed — the user already scoped this whole conversation to
+        # one course by opening it from there.
+        effective_course = course or (str(args["course"]) if args.get("course") else None)
         hits = await asyncio.to_thread(
             retrieve,
             index,
             str(args["query"]),
             settings.vault_path,
             k=8,
-            course=str(args["course"]) if args.get("course") else None,
+            course=effective_course,
+            taxonomy=settings.taxonomy,
         )
         if not hits:
             return _tool_text({"results": [], "note": "no matches in the vault"})
@@ -119,7 +150,7 @@ def build_vault_tools(
 
     async def read_note(args: dict[str, Any]) -> dict[str, Any]:
         rel_path = str(args["path"]).replace("\\", "/")
-        if not is_indexable(rel_path):
+        if not is_indexable(rel_path, taxonomy=settings.taxonomy):
             return _tool_text("error: that path is not readable")
         file_path = settings.vault_path / rel_path
         if not file_path.is_file():
@@ -134,7 +165,7 @@ def build_vault_tools(
         conn = connect(settings.db_path)
         try:
             init_schema(conn)
-            refresh_cache(conn, settings.vault_path)
+            refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn, today=date.today())
         finally:
             conn.close()
@@ -185,7 +216,7 @@ class ChatAgent:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._index = VaultIndex(settings.db_path.parent / "chroma")
+        self._index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
         # Set when warming finishes, so vault searches can wait rather than
         # race the still-initializing chroma client. See build_vault_tools.
         self._ready = threading.Event()
@@ -196,12 +227,16 @@ class ChatAgent:
         The first vault tool call otherwise pays ~20s of model loading inside
         the agent's event loop.
         """
-        import contextlib
-
         try:
             # Warming is best-effort; real errors surface on actual queries.
-            with contextlib.suppress(Exception):
-                self._index.query("warmup", n_results=1)
+            # Not swallowed silently, though — a warm that fails every single
+            # time (a genuinely broken index, not just "not built yet") used
+            # to leave no trace anywhere a person would look.
+            self._index.query("warmup", n_results=1)
+        except Exception:
+            logger.warning(
+                "chat index warm-up failed (will retry on first real query)", exc_info=True
+            )
         finally:
             # Always release waiters, including when warming failed — a search
             # that then fails on its own is far better than one that hangs.
@@ -221,8 +256,16 @@ class ChatAgent:
             raise RuntimeError(f"unknown model {model!r} — register it under /system first")
         return str(entry.get("model_id") or entry["name"])
 
-    async def stream_chat(self, message: str, model: str | None = None) -> AsyncIterator[str]:
-        """Yield text deltas for one user message, on whichever backend is chosen."""
+    async def stream_chat(
+        self, message: str, model: str | None = None, course: str | None = None
+    ) -> AsyncIterator[str]:
+        """Yield text deltas for one user message, on whichever backend is chosen.
+
+        ``course``, when given, fixes ``search_vault``'s retrieval scope to
+        one course — see :func:`build_vault_tools`. Passed by the Course Hub
+        chat frame (``backend.features.chat.router``); the global chat dock
+        omits it.
+        """
         from backend.telemetry.usage import record_result_usage
 
         resolved_model = self._resolve_model(model)
@@ -234,13 +277,17 @@ class ChatAgent:
             fallback_model=MODEL,
         )
         tools = build_vault_tools(
-            self._settings, self._index, model_label=resolved_model, ready=self._ready
+            self._settings,
+            self._index,
+            model_label=resolved_model,
+            ready=self._ready,
+            course=course,
         )
 
         recorded = False
         try:
             async for event in adapter.run(
-                system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
+                system_prompt=_load_system_prompt(self._settings.taxonomy),
                 user_message=message,
                 tools=tools,
                 max_turns=MAX_TURNS,

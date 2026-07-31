@@ -14,6 +14,8 @@ traceback out of ``asyncio.run`` rather than the intended one-line message.
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -23,6 +25,19 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRY = REPO_ROOT / "desktop" / "backend" / "argus_server.py"
+
+
+def _load_entry_module():
+    """Import desktop/backend/argus_server.py in-process.
+
+    It is a PyInstaller entry script, not a member of the ``backend`` package,
+    so there is no ordinary ``import`` path to it -- load it directly from its
+    file location instead.
+    """
+    spec = importlib.util.spec_from_file_location("argus_server_entry", ENTRY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_entry(args: list[str], env_file: Path, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -63,3 +78,21 @@ def test_mcp_server_reports_an_unconfigured_vault_without_a_traceback(
     assert "VAULT_PATH" in result.stderr
     # stdout is the protocol stream; a stray line there corrupts the handshake.
     assert result.stdout == ""
+
+
+def test_selftest_imports_reports_ok_in_the_dev_environment(capsys) -> None:
+    """--selftest-imports must succeed here: this venv has every optional dep.
+
+    Run in-process (unlike the subprocess-based test above) because this is
+    the ordinary dev-loop check; ``desktop/tests/smoke_backend.py``'s
+    ``_connector_imports`` runs the same flag as a subprocess against a frozen
+    exe, which is the check this test complements, not duplicates.
+    """
+    argus_server = _load_entry_module()
+
+    exit_code = argus_server.main(["--selftest-imports"])
+
+    assert exit_code == 0
+    out_lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    payload = json.loads(out_lines[-1])
+    assert payload == {"ok": True, "missing": []}

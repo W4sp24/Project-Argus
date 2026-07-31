@@ -32,6 +32,10 @@ class AgendaResponse(BaseModel):
     tasks: list[TaskItem]
     top_tasks: list[TaskItem]
     configured: dict[str, bool]
+    #: Populated only for connectors that failed this request (see
+    #: `backend.connectors.ConnectorUnavailable`); additive field, default
+    #: empty, so existing clients are unaffected.
+    connector_errors: dict[str, str] = {}
 
 
 class CaptureRequest(BaseModel):
@@ -69,35 +73,45 @@ def build_tasks_router(settings: Settings) -> APIRouter:
         target = date.fromisoformat(day) if day else date.today()
         conn = db()
         try:
-            refresh_cache(conn, settings.vault_path)
+            refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn, today=target)
         finally:
             conn.close()
 
         vault_today = buckets["overdue"] + buckets["today"]
-        external = [task for task in todoist.list_tasks() if not task.done]
+        todoist_tasks, todoist_error = todoist.list_tasks_safe()
+        external = [task for task in todoist_tasks if not task.done]
         due_external = [task for task in external if task.due and task.due <= target.isoformat()]
         day_tasks = vault_today + due_external
         top = day_tasks[:3] if day_tasks else buckets["week"][:3]
 
+        events, gcal_error = gcal.list_events_safe(target)
+        connector_errors: dict[str, str] = {}
+        if gcal_error:
+            connector_errors["gcal"] = gcal_error
+        if todoist_error:
+            connector_errors["todoist"] = todoist_error
+
         return AgendaResponse(
             date=target.isoformat(),
-            events=gcal.list_events(target),
+            events=events,
             tasks=day_tasks,
             top_tasks=top,
             configured={"gcal": gcal.configured(), "todoist": todoist.configured()},
+            connector_errors=connector_errors,
         )
 
     @router.get("/tasks")
     def tasks_board() -> dict[str, list[TaskItem]]:
         conn = db()
         try:
-            refresh_cache(conn, settings.vault_path)
+            refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn)
         finally:
             conn.close()
         today = date.today()
-        for task in todoist.list_tasks():
+        todoist_tasks, _todoist_error = todoist.list_tasks_safe()
+        for task in todoist_tasks:
             if not task.done:
                 buckets[bucket_of(task, today)].append(task)
         return buckets
@@ -105,7 +119,9 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     @router.post("/capture", response_model=CaptureResponse)
     def capture(request: CaptureRequest) -> CaptureResponse:
         try:
-            return CaptureResponse(path=append_capture(settings.vault_path, request.text))
+            return CaptureResponse(
+                path=append_capture(settings.vault_path, request.text, taxonomy=settings.taxonomy)
+            )
         except WriterError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -113,7 +129,11 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     def toggle(request: TaskLineRef) -> NewLine:
         try:
             new_line = writer.toggle_task_line(
-                settings.vault_path, request.path, request.line, request.old_line
+                settings.vault_path,
+                request.path,
+                request.line,
+                request.old_line,
+                taxonomy=settings.taxonomy,
             )
         except WriterError as exc:
             raise_http(exc)
@@ -123,7 +143,12 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     def edit_line(request: TaskLineUpdate) -> NewLine:
         try:
             new_line = writer.update_task_line(
-                settings.vault_path, request.path, request.line, request.old_line, request.new_line
+                settings.vault_path,
+                request.path,
+                request.line,
+                request.old_line,
+                request.new_line,
+                taxonomy=settings.taxonomy,
             )
         except WriterError as exc:
             raise_http(exc)
@@ -133,7 +158,11 @@ def build_tasks_router(settings: Settings) -> APIRouter:
     def drop_line(request: TaskLineRef) -> dict:
         try:
             writer.delete_task_line(
-                settings.vault_path, request.path, request.line, request.old_line
+                settings.vault_path,
+                request.path,
+                request.line,
+                request.old_line,
+                taxonomy=settings.taxonomy,
             )
         except WriterError as exc:
             raise_http(exc)

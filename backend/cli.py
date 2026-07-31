@@ -19,25 +19,66 @@ from datetime import date
 from pathlib import Path
 
 from backend.core.config import DEFAULT_ENV_FILE, parse_env_file
+from backend.core.taxonomy import Taxonomy
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "vault-template"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-EMPTY_FOLDERS = [
-    "00-Inbox",
-    "10-Daily",
-    "15-Courses/CS000/notes",
-    "15-Courses/CS000/materials",
-    "15-Courses/CS000/study",
-    "20-Projects",
-    "30-Areas",
-    "40-People",
-    "50-Reference",
-    "99-Private",
-]
+
+# vault-template/'s folders are physically named with Argus's historical PARA
+# defaults. "courses" is deliberately absent here — see _ignore_sample_course,
+# which excludes 15-Courses/ from the copy entirely rather than relocating it.
+_DEFAULT_TAXONOMY_DIRS = {
+    "inbox": "00-Inbox",
+    "daily": "10-Daily",
+    "projects": "20-Projects",
+    "areas": "30-Areas",
+    "people": "40-People",
+    "reference": "50-Reference",
+    "journal": "90-Meta",
+    "private": "99-Private",
+}
 
 
 class InitError(RuntimeError):
     """Raised when a vault cannot be initialised at the requested path."""
+
+
+def _ignore_sample_course(_src: str, names: list[str]) -> set[str]:
+    """Skip ``vault-template/15-Courses/`` entirely during ``argus init``'s copy.
+
+    That folder exists in the repo only to hold ``CS000/course.md``, the
+    reference ``CoursesPanel.renderCourseTemplate`` (web/) is documented to
+    mirror — it stays there, untouched, as that reference. Shipping it into
+    every fresh vault was the "sample course never goes away" bug: nothing in
+    the backend could delete course data at all before
+    ``backend/features/study/deletes.py``, so the sample was permanent.
+    ``Taxonomy.seed_folders()`` still creates an empty, correctly-named
+    courses dir for every taxonomy, sample-free.
+    """
+    return {"15-Courses"} if "15-Courses" in names else set()
+
+
+def _relocate_templated_dirs(dest: Path, taxonomy: Taxonomy) -> None:
+    """Rename copied template folders onto a taxonomy configured before init.
+
+    vault-template/'s folders are physically named with Argus's historical
+    hardcoded defaults (today, only ``30-Areas/assistant-preferences.md`` has
+    real content). A user who sets ``VAULT_AREAS_DIR`` etc. in ``.env``
+    *before* ever running ``argus init`` would otherwise get that content
+    sitting in a folder name their configured taxonomy doesn't recognise —
+    invisible to every feature that reads through the taxonomy from then on.
+    """
+    for field_name, default_name in _DEFAULT_TAXONOMY_DIRS.items():
+        configured = getattr(taxonomy, field_name)
+        if configured == default_name:
+            continue
+        source = dest / default_name
+        if not source.is_dir():
+            continue
+        target = dest / configured
+        if target.exists():
+            continue  # never clobber something already there
+        shutil.move(str(source), str(target))
 
 
 def _run_git(args: list[str], cwd: Path) -> None:
@@ -76,14 +117,21 @@ def _write_env(env_file: Path, vault_path: Path) -> None:
 
 
 def init_vault(dest: Path, env_file: Path = DEFAULT_ENV_FILE) -> Path:
-    """Create a new vault at ``dest`` from the template and register it."""
+    """Create a new vault at ``dest`` from the template and register it.
+
+    Seed folders come from ``env_file``'s taxonomy, if it already has one
+    (e.g. someone set ``VAULT_INBOX_DIR`` etc. before running ``argus init``)
+    — otherwise the defaults, identical to every pre-taxonomy vault.
+    """
     if dest.exists() and any(dest.iterdir()):
         raise InitError(f"{dest} already exists and is not empty; refusing to overwrite.")
     if not TEMPLATE_DIR.is_dir():
         raise InitError(f"vault template not found at {TEMPLATE_DIR}")
 
-    shutil.copytree(TEMPLATE_DIR, dest, dirs_exist_ok=True)
-    for folder in EMPTY_FOLDERS:
+    taxonomy = Taxonomy.from_env(parse_env_file(env_file))
+    shutil.copytree(TEMPLATE_DIR, dest, dirs_exist_ok=True, ignore=_ignore_sample_course)
+    _relocate_templated_dirs(dest, taxonomy)
+    for folder in taxonomy.seed_folders():
         (dest / folder).mkdir(parents=True, exist_ok=True)
 
     today = date.today().isoformat()
@@ -207,12 +255,16 @@ def main(argv: list[str] | None = None) -> int:
         from backend.rag.index import VaultIndex
 
         settings = Settings.load(args.env_file)
-        index = VaultIndex(settings.db_path.parent / "chroma")
+        index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
 
         if args.command == "reindex":
-            counts = index.reindex_all(settings.vault_path)
-            print(f"Indexed {sum(counts.values())} chunks from {len(counts)} files.")
-            return 0
+            result = index.reindex_all(settings.vault_path)
+            print(f"Indexed {result.total_chunks} chunks from {result.files} files.")
+            if result.errors:
+                print(f"{len(result.errors)} file(s) failed:", file=sys.stderr)
+                for rel_path, message in result.errors.items():
+                    print(f"  {rel_path}: {message}", file=sys.stderr)
+            return 1 if result.errors else 0
 
         from backend.rag.watcher import watch_vault
 
@@ -221,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             settings.vault_path,
             index,
             on_update=lambda rel, count: print(f"  reindexed {rel} ({count} chunks)"),
+            taxonomy=settings.taxonomy,
         )
         return 0
 

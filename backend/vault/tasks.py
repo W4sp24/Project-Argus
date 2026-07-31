@@ -15,7 +15,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from backend.vault.paths import EXCLUDED_TOP_DIRS
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 
 CHECKBOX_RE = re.compile(r"^\s*[-*]\s+\[( |x|X)\]\s+(.*)$")
 DUE_RE = re.compile(r"(?:📅|🗓)\s*(\d{4}-\d{2}-\d{2})|\[due:\s*(\d{4}-\d{2}-\d{2})\]")
@@ -75,12 +75,15 @@ def parse_task_line(line: str) -> TaskItem | None:
     )
 
 
-def refresh_cache(conn: sqlite3.Connection, vault_path: Path) -> int:
+def refresh_cache(
+    conn: sqlite3.Connection, vault_path: Path, *, taxonomy: Taxonomy | None = None
+) -> int:
     """Rescan the vault into tasks_cache; returns the number of open tasks."""
+    tax = taxonomy or active_taxonomy()
     rows: list[tuple] = []
     for file_path in vault_path.rglob("*.md"):
         relative = file_path.relative_to(vault_path)
-        if any(part in EXCLUDED_TOP_DIRS for part in relative.parts):
+        if any(part in tax.excluded_top_dirs for part in relative.parts):
             continue
         try:
             lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()

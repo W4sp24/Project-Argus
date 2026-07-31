@@ -1,7 +1,7 @@
 {
   "name": "argus-desktop",
   "productName": "Argus",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Argus desktop shell",
   "main": "main.js",
@@ -19,6 +19,7 @@
     "electron-updater": "^6.3.9"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "png-to-ico": "^2.1.8",

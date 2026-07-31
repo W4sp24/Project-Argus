@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.study.practice_exam import (
     MAX_PROMPT_CHARS,
     Generator,
@@ -78,8 +79,11 @@ async def generate_study_guide(
     corpus: list[dict[str, Any]],
     course: str,
     scope: str = "everything so far",
+    *,
+    taxonomy: Taxonomy | None = None,
 ) -> str:
     """Generate and write ``study/guide-<scope>-<date>.md``; returns its vault path."""
+    tax = taxonomy or active_taxonomy()
     if not corpus:
         raise StudyError(f"no indexed material for course {course} — upload to materials/ first")
 
@@ -92,9 +96,9 @@ async def generate_study_guide(
         body += "\n\n## What you haven't taken notes on\n\n"
         body += "\n".join(f"- [ ] {gap}" for gap in gaps)
 
-    study_dir = vault_path / "15-Courses" / course / "study"
+    study_dir = vault_path / tax.course_study(course)
     study_dir.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "-", scope.lower()).strip("-")[:40] or "guide"
     name = f"guide-{slug}-{date.today().isoformat()}.md"
     (study_dir / name).write_text(body + "\n", encoding="utf-8")
-    return f"15-Courses/{course}/study/{name}"
+    return f"{tax.course_study(course)}/{name}"

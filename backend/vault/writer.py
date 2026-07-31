@@ -2,8 +2,9 @@
 
 Every mutation of user notes goes through this module and nothing else.
 Before each apply the vault is git-committed (invariant I2) so any write has
-a free undo. Study outputs (new files under ``15-Courses/*/study/``) are the
-one sanctioned exception and live in ``backend/study/``.
+a free undo. Study outputs (new files under each course's ``study/``
+subfolder, see :mod:`backend.core.taxonomy`) are the one sanctioned exception
+and live in ``backend/features/study/``.
 
 P2 scope: quick capture. P3 adds suggestion application (note edits, task
 line changes) behind the approval gate.
@@ -12,20 +13,23 @@ line changes) behind the approval gate.
 from __future__ import annotations
 
 import re
+import shutil
 import sqlite3
 import subprocess
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
+from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.vault import suggestions as suggestion_queue
-from backend.vault.paths import EXCLUDED_TOP_DIRS
 from backend.vault.suggestions import Suggestion
 
-INBOX_DIR = "00-Inbox"
-DAILY_DIR = "10-Daily"
 ARGUS_LOG_HEADING = "## Argus log"
-_EXCLUDED_CASEFOLD = {name.casefold() for name in EXCLUDED_TOP_DIRS}
+
+# --- Back-compat aliases (deprecated for 0.3) --------------------------------
+# Bound to Taxonomy()'s defaults; prefer settings.taxonomy / active_taxonomy().
+INBOX_DIR = Taxonomy().inbox
+DAILY_DIR = Taxonomy().daily
 
 
 class WriterError(RuntimeError):
@@ -54,25 +58,40 @@ def _git_snapshot(vault_path: Path, reason: str) -> None:
         raise WriterError(
             f"vault {vault_path} is not a git repository — run `git init` there first (I2)"
         )
-    subprocess.run(
-        ["git", "add", "-A"], cwd=vault_path, capture_output=True, text=True, check=False
-    )
-    # --allow-empty: the snapshot marks the pre-apply point even on a clean tree.
-    subprocess.run(
-        ["git", "commit", "--allow-empty", "-m", f"argus: pre-apply snapshot ({reason})"],
-        cwd=vault_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # FileNotFoundError, not a git error: subprocess raises it when the *binary*
+    # is absent from PATH, and it is not caught by check=False. Uncaught it
+    # escaped as a 500 from every write route -- an opaque failure for what is
+    # really a missing prerequisite. As a WriterError it reaches the user as the
+    # 422 the routes already map WriterError to, saying what to install.
+    try:
+        subprocess.run(
+            ["git", "add", "-A"], cwd=vault_path, capture_output=True, text=True, check=False
+        )
+        # --allow-empty: the snapshot marks the pre-apply point even on a clean tree.
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", f"argus: pre-apply snapshot ({reason})"],
+            cwd=vault_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise WriterError(
+            "git is not on PATH — Argus needs it to snapshot the vault before "
+            "each write so the change is undoable (I2). Install git and restart."
+        ) from exc
 
 
-def guard_user_path(vault_path: Path, rel_path: str) -> Path:
+def guard_user_path(
+    vault_path: Path, rel_path: str, *, taxonomy: Taxonomy | None = None
+) -> Path:
     """Resolve a vault-relative path for user CRUD; refuse protected zones."""
+    tax = taxonomy or active_taxonomy()
+    excluded_casefold = {name.casefold() for name in tax.excluded_top_dirs}
     candidate = Path(rel_path)
     if candidate.is_absolute() or ".." in candidate.parts:
         raise WriterForbidden(f"path {rel_path!r} is not vault-relative")
-    if candidate.parts and candidate.parts[0].casefold() in _EXCLUDED_CASEFOLD:
+    if candidate.parts and candidate.parts[0].casefold() in excluded_casefold:
         raise WriterForbidden(f"{candidate.parts[0]}/ is protected and cannot be edited")
     resolved = (vault_path / candidate).resolve()
     if vault_path.resolve() not in resolved.parents:
@@ -92,9 +111,17 @@ def _checked_line(note: Path, rel_path: str, line_no: int, old_line: str) -> lis
 DONE_STAMP_RE = re.compile(r"\s*✅\s*\d{4}-\d{2}-\d{2}")
 
 
-def toggle_task_line(vault_path: Path, rel_path: str, line_no: int, old_line: str) -> str:
+def toggle_task_line(
+    vault_path: Path,
+    rel_path: str,
+    line_no: int,
+    old_line: str,
+    *,
+    taxonomy: Taxonomy | None = None,
+) -> str:
     """Check/uncheck one task checkbox; stamps/strips the ✅ done date."""
-    note = guard_user_path(vault_path, rel_path)
+    tax = taxonomy or active_taxonomy()
+    note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     lines = _checked_line(note, rel_path, line_no, old_line)
     line = lines[line_no - 1]
     if "[ ]" in line:
@@ -109,42 +136,58 @@ def toggle_task_line(vault_path: Path, rel_path: str, line_no: int, old_line: st
     _git_snapshot(vault_path, f"toggle task {rel_path}:{line_no}")
     lines[line_no - 1] = new_line
     note.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    _argus_log(vault_path, f"toggled task in {rel_path}:{line_no}")
+    _argus_log(vault_path, f"toggled task in {rel_path}:{line_no}", taxonomy=tax)
     return new_line
 
 
 def update_task_line(
-    vault_path: Path, rel_path: str, line_no: int, old_line: str, new_line: str
+    vault_path: Path,
+    rel_path: str,
+    line_no: int,
+    old_line: str,
+    new_line: str,
+    *,
+    taxonomy: Taxonomy | None = None,
 ) -> str:
     """Replace one task line verbatim (user-initiated edit)."""
-    note = guard_user_path(vault_path, rel_path)
+    tax = taxonomy or active_taxonomy()
+    note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     lines = _checked_line(note, rel_path, line_no, old_line)
     _git_snapshot(vault_path, f"edit task {rel_path}:{line_no}")
     lines[line_no - 1] = new_line
     note.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    _argus_log(vault_path, f"edited task in {rel_path}:{line_no}")
+    _argus_log(vault_path, f"edited task in {rel_path}:{line_no}", taxonomy=tax)
     return new_line
 
 
-def delete_task_line(vault_path: Path, rel_path: str, line_no: int, old_line: str) -> None:
+def delete_task_line(
+    vault_path: Path,
+    rel_path: str,
+    line_no: int,
+    old_line: str,
+    *,
+    taxonomy: Taxonomy | None = None,
+) -> None:
     """Delete one task line (user-initiated)."""
-    note = guard_user_path(vault_path, rel_path)
+    tax = taxonomy or active_taxonomy()
+    note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     lines = _checked_line(note, rel_path, line_no, old_line)
     _git_snapshot(vault_path, f"delete task {rel_path}:{line_no}")
     del lines[line_no - 1]
     note.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-    _argus_log(vault_path, f"deleted task in {rel_path}:{line_no}")
+    _argus_log(vault_path, f"deleted task in {rel_path}:{line_no}", taxonomy=tax)
 
 
-def append_capture(vault_path: Path, text: str) -> str:
+def append_capture(vault_path: Path, text: str, *, taxonomy: Taxonomy | None = None) -> str:
     """Append one captured thought to today's inbox note; returns its vault path."""
+    tax = taxonomy or active_taxonomy()
     cleaned = " ".join(text.split())
     if not cleaned:
         raise WriterError("nothing to capture")
 
     _git_snapshot(vault_path, "quick capture")
 
-    inbox = vault_path / INBOX_DIR
+    inbox = vault_path / tax.inbox
     inbox.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
     note = inbox / f"capture-{today}.md"
@@ -157,13 +200,15 @@ def append_capture(vault_path: Path, text: str) -> str:
     stamp = datetime.now().strftime("%H:%M")
     with note.open("a", encoding="utf-8") as handle:
         handle.write(f"- [ ] {cleaned} ➕ {today} <!-- {stamp} -->\n")
-    return f"{INBOX_DIR}/capture-{today}.md"
+    return f"{tax.inbox}/capture-{today}.md"
 
 
 # --- Ingestion (redesign §11) -------------------------------------------------
 
-INGEST_FILES_DIR = "00-Inbox/files"
-INBOX_EMAILS_DIR = "00-Inbox/emails"
+# Deprecated for 0.3 — bound to Taxonomy()'s defaults; prefer
+# settings.taxonomy.ingest_files / .inbox_emails.
+INGEST_FILES_DIR = Taxonomy().ingest_files
+INBOX_EMAILS_DIR = Taxonomy().inbox_emails
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ -]")
 SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -179,22 +224,30 @@ def _dedupe(path: Path) -> Path:
     raise WriterError(f"cannot find a free name for {path.name}")
 
 
-def save_ingest_file(vault_path: Path, target_dir: str, filename: str, data: bytes) -> str:
+def save_ingest_file(
+    vault_path: Path,
+    target_dir: str,
+    filename: str,
+    data: bytes,
+    *,
+    taxonomy: Taxonomy | None = None,
+) -> str:
     """Save one uploaded file into the vault (snapshot-first, I1/I2).
 
     ``target_dir`` is vault-relative (e.g. ``15-Courses/CS301``); protected
-    zones (99-Private/, 90-Meta/, dotdirs) are refused by the path guard (I3).
-    Returns the saved file's vault-relative path.
+    zones (the private/journal zones, dotdirs) are refused by the path guard
+    (I3). Returns the saved file's vault-relative path.
     """
+    tax = taxonomy or active_taxonomy()
     safe_name = SAFE_NAME_RE.sub("_", filename).strip() or "upload.bin"
-    clean_dir = target_dir.strip().strip("/").replace("\\", "/") or INGEST_FILES_DIR
-    guarded = guard_user_path(vault_path, f"{clean_dir}/{safe_name}")
+    clean_dir = target_dir.strip().strip("/").replace("\\", "/") or tax.ingest_files
+    guarded = guard_user_path(vault_path, f"{clean_dir}/{safe_name}", taxonomy=tax)
     _git_snapshot(vault_path, f"ingest {safe_name}")
     guarded.parent.mkdir(parents=True, exist_ok=True)
     destination = _dedupe(guarded)
     destination.write_bytes(data)
     rel_path = destination.relative_to(vault_path).as_posix()
-    _argus_log(vault_path, f"ingested file {rel_path}")
+    _argus_log(vault_path, f"ingested file {rel_path}", taxonomy=tax)
     return rel_path
 
 
@@ -204,12 +257,15 @@ def archive_email(
     subject: str | None = None,
     sender: str | None = None,
     email_date: str | None = None,
+    *,
+    taxonomy: Taxonomy | None = None,
 ) -> str:
-    """Archive one captured email to ``00-Inbox/emails/YYYY-MM-DD-<slug>.md``.
+    """Archive one captured email under ``<inbox>/emails/YYYY-MM-DD-<slug>.md``.
 
     Snapshot-first like every write (I2). Frontmatter carries date/from/subject
     when the caller parsed them out of the MIME headers. Returns the vault path.
     """
+    tax = taxonomy or active_taxonomy()
     text = body.strip()
     if not text:
         raise WriterError("email body is empty — nothing to archive")
@@ -220,7 +276,7 @@ def archive_email(
 
     _git_snapshot(vault_path, f"archive email {slug}")
 
-    emails_dir = vault_path / INBOX_EMAILS_DIR
+    emails_dir = vault_path / tax.inbox_emails
     emails_dir.mkdir(parents=True, exist_ok=True)
     note = _dedupe(emails_dir / f"{day}-{slug}.md")
 
@@ -234,7 +290,7 @@ def archive_email(
         encoding="utf-8",
     )
     rel_path = note.relative_to(vault_path).as_posix()
-    _argus_log(vault_path, f"archived email to {rel_path}")
+    _argus_log(vault_path, f"archived email to {rel_path}", taxonomy=tax)
     return rel_path
 
 
@@ -243,15 +299,16 @@ def archive_email(
 BRIEFING_HEADING = "## Briefing"
 
 
-def write_briefing(vault_path: Path, markdown: str) -> str:
+def write_briefing(vault_path: Path, markdown: str, *, taxonomy: Taxonomy | None = None) -> str:
     """Write/replace the ``## Briefing`` section in today's daily note.
 
     Re-running replaces the existing section (the 07:00 job is idempotent).
     Returns the note's vault-relative path.
     """
+    tax = taxonomy or active_taxonomy()
     _git_snapshot(vault_path, "morning briefing")
 
-    daily = vault_path / DAILY_DIR
+    daily = vault_path / tax.daily
     daily.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
     note = daily / f"{today}.md"
@@ -272,15 +329,16 @@ def write_briefing(vault_path: Path, markdown: str) -> str:
         lines[insert_at:insert_at] = [""] + section if insert_at else section
 
     note.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
-    return f"{DAILY_DIR}/{today}.md"
+    return f"{tax.daily}/{today}.md"
 
 
 # --- Suggestion application (P3): the approval gate's one executor ----------
 
 
-def _argus_log(vault_path: Path, line: str) -> None:
+def _argus_log(vault_path: Path, line: str, *, taxonomy: Taxonomy | None = None) -> None:
     """Append an audit line under '## Argus log' in today's daily note."""
-    daily = vault_path / DAILY_DIR
+    tax = taxonomy or active_taxonomy()
+    daily = vault_path / tax.daily
     daily.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
     note = daily / f"{today}.md"
@@ -358,30 +416,41 @@ def _apply_note_diff(vault_path: Path, payload: dict) -> str:
     return f"note edit in {rel_path}"
 
 
-def create_note(vault_path: Path, rel_path: str, content: str) -> str:
+def create_note(
+    vault_path: Path, rel_path: str, content: str, *, taxonomy: Taxonomy | None = None
+) -> str:
     """Create a brand-new note (redesign §13 quick add-note modal).
 
     Snapshot-first (I2) and guarded to user-editable zones (I3), mirroring
     ``save_ingest_file``'s style — but this is create-ONLY: unlike ingest's
     dedupe-on-collision, a note already at ``rel_path`` is refused outright
     (the caller picked an exact, deliberate filename, e.g. a title-derived
-    ``00-Inbox/YYYY-MM-DD-<slug>.md`` — silently renaming it would surprise
+    ``<inbox>/YYYY-MM-DD-<slug>.md`` — silently renaming it would surprise
     the user). Returns the vault-relative path actually written.
     """
-    note = guard_user_path(vault_path, rel_path)
+    tax = taxonomy or active_taxonomy()
+    note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     if note.exists():
         raise WriterExists(f"{rel_path} already exists")
     _git_snapshot(vault_path, f"create note {rel_path}")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(content, encoding="utf-8")
     rel = note.relative_to(vault_path).as_posix()
-    _argus_log(vault_path, f"created note {rel}")
+    _argus_log(vault_path, f"created note {rel}", taxonomy=tax)
     return rel
 
 
-def update_note(vault_path: Path, rel_path: str, expected_content: str, new_content: str) -> None:
+def update_note(
+    vault_path: Path,
+    rel_path: str,
+    expected_content: str,
+    new_content: str,
+    *,
+    taxonomy: Taxonomy | None = None,
+) -> None:
     """Replace a note's full content iff it still matches what the client read."""
-    note = guard_user_path(vault_path, rel_path)
+    tax = taxonomy or active_taxonomy()
+    note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     if not note.is_file():
         raise WriterMissing(f"{rel_path} does not exist")
     current = note.read_text(encoding="utf-8")
@@ -389,17 +458,44 @@ def update_note(vault_path: Path, rel_path: str, expected_content: str, new_cont
         raise WriterConflict(f"{rel_path} has changed since you loaded it — refresh")
     _git_snapshot(vault_path, f"edit note {rel_path}")
     note.write_text(new_content, encoding="utf-8")
-    _argus_log(vault_path, f"edited note {rel_path}")
+    _argus_log(vault_path, f"edited note {rel_path}", taxonomy=tax)
 
 
-def delete_note(vault_path: Path, rel_path: str) -> None:
+def delete_note(vault_path: Path, rel_path: str, *, taxonomy: Taxonomy | None = None) -> None:
     """Delete one note (user-initiated); the pre-apply snapshot is the undo."""
-    note = guard_user_path(vault_path, rel_path)
+    tax = taxonomy or active_taxonomy()
+    note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     if not note.is_file():
         raise WriterMissing(f"{rel_path} does not exist")
     _git_snapshot(vault_path, f"delete note {rel_path}")
     note.unlink()
-    _argus_log(vault_path, f"deleted note {rel_path}")
+    _argus_log(vault_path, f"deleted note {rel_path}", taxonomy=tax)
+
+
+def delete_course_tree(vault_path: Path, code: str, *, taxonomy: Taxonomy | None = None) -> None:
+    """Delete an entire course folder (user-initiated); the pre-apply snapshot is the undo.
+
+    ``code`` must be a single path segment that resolves to a direct child of
+    the taxonomy's courses dir — nothing looser. This is the one writer
+    function that ``shutil.rmtree``s a whole subtree, so a traversal or
+    off-target ``code`` here doesn't corrupt one note, it deletes the wrong
+    directory wholesale; :func:`guard_user_path` alone (built for single
+    files) isn't a strict enough gate for that blast radius.
+    """
+    tax = taxonomy or active_taxonomy()
+    if not code or code != code.strip() or "/" in code or "\\" in code or ".." in code:
+        raise WriterForbidden(f"{code!r} is not a valid course code")
+    rel_path = tax.course_dir(code)
+    course_dir = guard_user_path(vault_path, rel_path, taxonomy=tax)
+    if course_dir.parent != (vault_path / tax.courses).resolve():
+        raise WriterForbidden(
+            f"{code!r} does not resolve to a direct child of {tax.courses}/ — refusing to delete"
+        )
+    if not course_dir.is_dir():
+        raise WriterMissing(f"{rel_path} does not exist")
+    _git_snapshot(vault_path, f"delete course {code}")
+    shutil.rmtree(course_dir)
+    _argus_log(vault_path, f"deleted course {rel_path}", taxonomy=tax)
 
 
 def apply_suggestion(
@@ -407,12 +503,15 @@ def apply_suggestion(
     vault_path: Path,
     suggestion_id: int,
     gcal_insert: Callable[[str, str, str], None] | None = None,
+    *,
+    taxonomy: Taxonomy | None = None,
 ) -> Suggestion:
     """Execute one approved suggestion. The ONLY mutation path (I1).
 
     ``gcal_insert(title, start, end)`` is injectable for tests; the default is
     the real connector (which raises when unconfigured).
     """
+    tax = taxonomy or active_taxonomy()
     suggestion = suggestion_queue.get(conn, suggestion_id)
     if suggestion is None:
         raise WriterError(f"no suggestion {suggestion_id}")
@@ -444,7 +543,7 @@ def apply_suggestion(
     else:  # pragma: no cover - kind is DB-constrained
         raise WriterError(f"unknown suggestion kind {suggestion.kind}")
 
-    _argus_log(vault_path, f"applied #{suggestion_id}: {summary}")
+    _argus_log(vault_path, f"applied #{suggestion_id}: {summary}", taxonomy=tax)
     suggestion_queue.mark_applied(conn, suggestion_id)
     applied = suggestion_queue.get(conn, suggestion_id)
     assert applied is not None

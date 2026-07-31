@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import backend
+from backend.core.taxonomy import Taxonomy
 from backend.vault import writer
 from backend.vault.writer import (
     WriterConflict,
@@ -76,6 +77,25 @@ def test_capture_requires_git_vault(tmp_path: Path) -> None:
         append_capture(bare, "hello")
 
 
+def test_snapshot_without_the_git_binary_is_a_writer_error(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing git *binary* must not escape as a 500.
+
+    ``check=False`` covers git exiting non-zero; it does nothing for git not
+    being on PATH at all, which raises FileNotFoundError out of subprocess and
+    used to surface as an opaque 500 from every write route.
+    """
+
+    def _no_git(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError(2, "The system cannot find the file specified", "git")
+
+    monkeypatch.setattr(subprocess, "run", _no_git)
+
+    with pytest.raises(WriterError, match="git is not on PATH"):
+        append_capture(vault, "hello")
+
+
 WRITE_CALL_RE = re.compile(r"\.write_text\(|\.writelines\(|open\([^)]*[\"'][wa][\"']")
 # cli.py is the vault *installer* (creates the template before any user data
 # exists); study/ may create new files under 15-Courses/*/study/ (I1 exemption).
@@ -108,6 +128,30 @@ def test_guard_rejects_case_variants_of_protected_dirs(vault: Path):
     for bad in ("99-private/x.md", "90-META/sessions/x.md", "99-PRIVATE/y.md"):
         with pytest.raises(WriterForbidden):
             guard_user_path(vault, bad)
+
+
+def test_guard_protects_a_renamed_private_folder(vault: Path):
+    """I3 with a custom taxonomy: a vault that calls its private zone something
+    else entirely must still have that zone protected — and the *old* default
+    name must no longer be special once it isn't the configured one."""
+    custom = Taxonomy(private="Personal", journal="DevNotes")
+
+    with pytest.raises(WriterForbidden):
+        guard_user_path(vault, "Personal/diary.md", taxonomy=custom)
+
+    # The old hardcoded name is just an ordinary folder under this taxonomy.
+    resolved = guard_user_path(vault, "99-Private/not-special.md", taxonomy=custom)
+    assert resolved == (vault / "99-Private" / "not-special.md").resolve()
+
+
+def test_append_capture_lands_in_a_renamed_inbox(vault: Path):
+    custom = Taxonomy(inbox="Capture")
+
+    rel = append_capture(vault, "renamed inbox test", taxonomy=custom)
+
+    assert rel.startswith("Capture/")
+    assert (vault / rel).is_file()
+    assert not (vault / "00-Inbox").exists(), "must not also write the default inbox"
 
 
 def test_toggle_task_line_checks_and_stamps_done_date(vault: Path):
@@ -199,6 +243,59 @@ def test_delete_note_refuses_protected_and_missing(tmp_path):
         writer.delete_note(vault, "99-Private/secret.md")
     with pytest.raises(WriterMissing):
         writer.delete_note(vault, "00-Inbox/ghost.md")
+
+
+# --- Course deletion (fix: sample data survives a course "delete") ----------
+
+
+def test_delete_course_tree_removes_folder_after_snapshot(tmp_path):
+    vault = _make_vault(tmp_path)
+    course = vault / "15-Courses" / "CS201"
+    (course / "materials").mkdir(parents=True)
+    (course / "materials" / "syllabus.pdf").write_text("x", encoding="utf-8")
+    (course / "course.md").write_text("---\ntitle: X\n---\n", encoding="utf-8")
+
+    writer.delete_course_tree(vault, "CS201")
+
+    assert not course.exists()
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=vault, capture_output=True, text=True
+    ).stdout
+    assert "argus: pre-apply snapshot (delete course CS201)" in log
+
+
+def test_delete_course_tree_refuses_missing_course(tmp_path):
+    vault = _make_vault(tmp_path)
+    with pytest.raises(WriterMissing):
+        writer.delete_course_tree(vault, "CS999")
+
+
+def test_delete_course_tree_refuses_traversal(tmp_path):
+    vault = _make_vault(tmp_path)
+    for bad in ("../escape", "..", "15-Courses/CS201", "a/b", "a\\b", ""):
+        with pytest.raises(WriterForbidden):
+            writer.delete_course_tree(vault, bad)
+
+
+def test_delete_course_tree_refuses_a_code_outside_the_courses_dir(tmp_path):
+    """A code that isn't a direct child of the courses dir must be refused,
+    even if it happens to resolve to a real directory elsewhere in the vault."""
+    vault = _make_vault(tmp_path)
+    (vault / "20-Projects").mkdir()
+    with pytest.raises(WriterForbidden):
+        writer.delete_course_tree(vault, "../20-Projects")
+
+
+def test_delete_course_tree_honours_a_renamed_courses_dir(tmp_path):
+    vault = _make_vault(tmp_path)
+    custom = Taxonomy(courses="Classes")
+    course = vault / "Classes" / "CS301"
+    course.mkdir(parents=True)
+    (course / "course.md").write_text("x", encoding="utf-8")
+
+    writer.delete_course_tree(vault, "CS301", taxonomy=custom)
+
+    assert not course.exists()
 
 
 # --- Note creation (redesign §13 quick add-note modal) ----------------------

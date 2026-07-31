@@ -1,8 +1,8 @@
-"""Read-only access to the vault's dev journal (``90-Meta/``).
+"""Read-only access to the vault's dev journal (the taxonomy's ``journal`` dir).
 
 The journal zone is dev-owned (invariant D1): Claude Code writes it, Argus only
 reads it. Every function here enforces the privacy contract (D2): notes tagged
-``no-ai`` are invisible, and path input can never escape ``90-Meta/``.
+``no-ai`` are invisible, and path input can never escape the journal dir.
 """
 
 from __future__ import annotations
@@ -15,7 +15,11 @@ from urllib.parse import quote
 import frontmatter
 from pydantic import BaseModel
 
-JOURNAL_DIR = "90-Meta"
+from backend.core.taxonomy import Taxonomy, active_taxonomy
+
+# Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
+# settings.taxonomy.journal / active_taxonomy().journal.
+JOURNAL_DIR = Taxonomy().journal
 NO_AI_TAG = "no-ai"
 SESSION_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(.+)\.md$")
 BRANCH_RE = re.compile(r"\*\*branch:\*\*\s*`([^`]+)`")
@@ -28,7 +32,7 @@ class JournalPathError(ValueError):
 
 
 class JournalProject(BaseModel):
-    """One project context note under ``90-Meta/projects/``."""
+    """One project context note under the journal dir's ``projects/`` (``90-Meta/`` by default)."""
 
     slug: str
     title: str
@@ -39,7 +43,7 @@ class JournalProject(BaseModel):
 
 
 class JournalSession(BaseModel):
-    """One session note under ``90-Meta/sessions/<year>/``."""
+    """One session note under the journal dir's ``sessions/<year>/`` (``90-Meta/`` by default)."""
 
     date: str
     project: str
@@ -83,9 +87,12 @@ def _title_of(post: frontmatter.Post, fallback: str) -> str:
     return fallback
 
 
-def _iter_session_files(vault_path: Path) -> list[tuple[Path, str, str]]:
+def _iter_session_files(
+    vault_path: Path, *, taxonomy: Taxonomy | None = None
+) -> list[tuple[Path, str, str]]:
     """Yield ``(file, date, project)`` for every well-named session note."""
-    sessions_root = vault_path / JOURNAL_DIR / "sessions"
+    tax = taxonomy or active_taxonomy()
+    sessions_root = vault_path / tax.journal / "sessions"
     results: list[tuple[Path, str, str]] = []
     if not sessions_root.is_dir():
         return results
@@ -96,11 +103,12 @@ def _iter_session_files(vault_path: Path) -> list[tuple[Path, str, str]]:
     return results
 
 
-def list_projects(vault_path: Path) -> list[JournalProject]:
+def list_projects(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[JournalProject]:
     """All visible project notes, most recently updated first."""
-    projects_root = vault_path / JOURNAL_DIR / "projects"
+    tax = taxonomy or active_taxonomy()
+    projects_root = vault_path / tax.journal / "projects"
     session_counts: dict[str, int] = {}
-    for file_path, _, project in _iter_session_files(vault_path):
+    for file_path, _, project in _iter_session_files(vault_path, taxonomy=tax):
         if _load_visible(file_path) is None:  # D2: private sessions don't even count
             continue
         session_counts[project] = session_counts.get(project, 0) + 1
@@ -127,10 +135,12 @@ def list_projects(vault_path: Path) -> list[JournalProject]:
     return projects
 
 
-def list_sessions(vault_path: Path, project: str | None = None) -> list[JournalSession]:
+def list_sessions(
+    vault_path: Path, project: str | None = None, *, taxonomy: Taxonomy | None = None
+) -> list[JournalSession]:
     """All visible session notes, newest first, optionally scoped to one project."""
     sessions: list[JournalSession] = []
-    for file_path, date, slug in _iter_session_files(vault_path):
+    for file_path, date, slug in _iter_session_files(vault_path, taxonomy=taxonomy):
         if project and slug != project:
             continue
         post = _load_visible(file_path)
@@ -152,21 +162,26 @@ def list_sessions(vault_path: Path, project: str | None = None) -> list[JournalS
     return sessions
 
 
-def resolve_journal_path(vault_path: Path, rel_path: str) -> Path:
+def resolve_journal_path(
+    vault_path: Path, rel_path: str, *, taxonomy: Taxonomy | None = None
+) -> Path:
     """Resolve ``rel_path`` strictly inside the journal zone or raise."""
+    tax = taxonomy or active_taxonomy()
     candidate = Path(rel_path)
     if candidate.is_absolute():
         raise JournalPathError("absolute paths are not allowed")
     resolved = (vault_path / candidate).resolve()
-    journal_root = (vault_path / JOURNAL_DIR).resolve()
+    journal_root = (vault_path / tax.journal).resolve()
     if journal_root != resolved and journal_root not in resolved.parents:
-        raise JournalPathError(f"path must stay inside {JOURNAL_DIR}/")
+        raise JournalPathError(f"path must stay inside {tax.journal}/")
     return resolved
 
 
-def read_note(vault_path: Path, rel_path: str) -> JournalNote | None:
+def read_note(
+    vault_path: Path, rel_path: str, *, taxonomy: Taxonomy | None = None
+) -> JournalNote | None:
     """One journal note as raw markdown, or None if missing/private."""
-    resolved = resolve_journal_path(vault_path, rel_path)
+    resolved = resolve_journal_path(vault_path, rel_path, taxonomy=taxonomy)
     if not resolved.is_file() or resolved.suffix != ".md":
         return None
     if _load_visible(resolved) is None:

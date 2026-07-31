@@ -10,12 +10,15 @@ mini chat response.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.core.config import Settings
+
+logger = logging.getLogger("argus.rag")
 
 SNIPPET_CHARS = 500
 
@@ -32,10 +35,15 @@ class SearchResult(BaseModel):
 def build_search_router(settings: Settings, index_factory: Any) -> APIRouter:
     """``GET /api/search?q=``. ``index_factory`` is injectable (tests use a fake).
 
-    Degrades to an empty list — never a 500 — when the query is blank or the
-    vault index isn't built/available (missing [rag] extras, no vault
-    configured, etc.), matching this codebase's "must work
-    offline/unconfigured" convention (D-020).
+    Degrades to an empty list — never a 500 — when the query is blank, or when
+    the ``[rag]`` extras are genuinely absent (``ImportError``): that matches
+    this codebase's "must work offline/unconfigured" convention (D-020). Any
+    *other* failure — a broken chroma directory, a corrupt index, whatever
+    caused ``VaultIndex`` to actually raise — becomes a 503 instead, because
+    swallowing it here made a broken index indistinguishable from an
+    empty-but-healthy one (the exact bug this endpoint shipped with: an
+    unindexed vault and a genuinely broken RAG stack both silently returned
+    ``[]``). An empty index that works fine must still come back 200 ``[]``.
     """
     router = APIRouter(prefix="/api")
 
@@ -48,9 +56,13 @@ def build_search_router(settings: Settings, index_factory: Any) -> APIRouter:
             from backend.rag.retrieve import retrieve
 
             index = index_factory()
-            hits = retrieve(index, query, settings.vault_path, k=8)
-        except Exception:
+            hits = retrieve(index, query, settings.vault_path, k=8, taxonomy=settings.taxonomy)
+        except ImportError as exc:
+            logger.warning("search unavailable — [rag] extras not installed: %s", exc)
             return []
+        except Exception as exc:
+            logger.exception("search failed")
+            raise HTTPException(status_code=503, detail=f"search unavailable: {exc}") from exc
         return [
             SearchResult(
                 snippet=str(hit["text"])[:SNIPPET_CHARS],

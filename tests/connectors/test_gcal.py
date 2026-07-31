@@ -16,7 +16,7 @@ from datetime import date
 
 import pytest
 
-from backend.connectors import gcal
+from backend.connectors import ConnectorUnavailable, gcal
 
 
 def test_list_events_unconfigured_does_not_import_google_libs(monkeypatch):
@@ -51,6 +51,36 @@ def test_configured_false_without_google_libs(monkeypatch):
     assert gcal.configured() is False
 
 
+def test_legacy_credentials_file_is_env_anchored_not_cwd(monkeypatch, tmp_path):
+    """`legacy_credentials_file` follows the env file's directory, not the CWD.
+
+    This is the regression test for the bug this branch fixes:
+    ``CREDENTIALS_FILE = Path("credentials.json")`` used to resolve against
+    the process's current working directory, which is a nonsense, unwritable
+    location in the packaged desktop app. ``DEFAULT_ENV_FILE`` is computed
+    once at import time from ``os.environ["ARGUS_ENV_FILE"]``, so
+    ``monkeypatch.setenv`` alone would not move it here -- the module-level
+    constant already holds whatever value import saw. Patch the constant
+    directly, following ``backend.core.config``'s own convention.
+    """
+    from backend.core import config
+
+    other_cwd = tmp_path / "somewhere-unwritable"
+    other_cwd.mkdir()
+    env_dir = tmp_path / "env-anchor"
+    env_dir.mkdir()
+
+    monkeypatch.chdir(other_cwd)
+    monkeypatch.setattr(config, "DEFAULT_ENV_FILE", env_dir / ".env")
+
+    resolved = gcal.legacy_credentials_file()
+
+    assert resolved == env_dir / "credentials.json"
+    assert resolved != other_cwd / "credentials.json", (
+        "must not resolve against the process CWD"
+    )
+
+
 def test_service_imports_google_libs_only_once_a_token_exists(monkeypatch):
     """A stored token DOES require the google libs — that failure is expected
     and actionable (the user connected gcal but the extra isn't installed)."""
@@ -67,3 +97,87 @@ def test_service_imports_google_libs_only_once_a_token_exists(monkeypatch):
 
     with pytest.raises(ImportError):
         gcal._service()
+
+
+# --- ConnectorUnavailable containment --------------------------------------
+#
+# Before this fix, `list_events()` propagated any import or API/network
+# failure straight out of the connector: once gcal was connected, every
+# caller (`/api/agenda`, `/api/insights`, the briefing, the planner) started
+# 500ing the moment a token expired or Google was unreachable. See
+# `backend.connectors.ConnectorUnavailable`.
+
+
+class _FakeExecute:
+    def __init__(self, payload=None, error=None):
+        self._payload = payload
+        self._error = error
+
+    def execute(self):
+        if self._error is not None:
+            raise self._error
+        return self._payload
+
+
+class _FakeEvents:
+    def __init__(self, execute: _FakeExecute) -> None:
+        self._execute = execute
+
+    def list(self, **kwargs):  # noqa: ANN003 - matches the google client's shape
+        return self._execute
+
+
+class _FakeService:
+    def __init__(self, execute: _FakeExecute) -> None:
+        self._execute = execute
+
+    def events(self):
+        return _FakeEvents(self._execute)
+
+
+def test_list_events_maps_injected_fake_service():
+    """An injected ``service`` is used as-is; behaviour beyond exception
+    translation must not change."""
+    payload = {
+        "items": [
+            {
+                "summary": "Standup",
+                "start": {"dateTime": "2026-08-01T09:00:00"},
+                "end": {"dateTime": "2026-08-01T09:15:00"},
+            }
+        ]
+    }
+    service = _FakeService(_FakeExecute(payload=payload))
+
+    events = gcal.list_events(date(2026, 8, 1), service=service)
+
+    assert len(events) == 1
+    assert events[0].title == "Standup"
+    assert events[0].start == "2026-08-01T09:00:00"
+
+
+def test_list_events_wraps_api_failure_in_connector_unavailable():
+    """The API call itself fails (network/auth) — must not be a bare 500."""
+    service = _FakeService(_FakeExecute(error=RuntimeError("503 backend error")))
+
+    with pytest.raises(ConnectorUnavailable):
+        gcal.list_events(date(2026, 8, 1), service=service)
+
+
+def test_list_events_safe_returns_message_instead_of_raising():
+    service = _FakeService(_FakeExecute(error=RuntimeError("503 backend error")))
+
+    events, message = gcal.list_events_safe(date(2026, 8, 1), service=service)
+
+    assert events == []
+    assert message is not None and "Google Calendar" in message
+
+
+def test_list_events_safe_returns_events_and_no_message_on_success():
+    payload = {"items": []}
+    service = _FakeService(_FakeExecute(payload=payload))
+
+    events, message = gcal.list_events_safe(date(2026, 8, 1), service=service)
+
+    assert events == []
+    assert message is None

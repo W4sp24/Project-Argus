@@ -222,6 +222,48 @@ def _mcp_server_starts(target: Path, env_file: Path) -> tuple[bool, str]:
     return False, _tail(err) or _tail(out) or "no handshake"
 
 
+def _connector_imports(target: Path) -> tuple[bool, str]:
+    """Does the frozen build actually have the gcal/todoist client libraries?
+
+    This is the check that would have caught v0.2.0 shipping without
+    google_auth_oauthlib: that release answered /health, passed --doctor, and
+    passed every other check here, because nothing exercised either
+    connector's lazy, in-function import. ``--selftest-imports`` imports them
+    (and the rest of the lazily-loaded optional stack) up front and reports
+    failures as one JSON line, the same handshake shape ``desktop/main.js``
+    parses for every other one-shot command.
+    """
+    try:
+        proc = subprocess.run(
+            [*_base_cmd(target), "--selftest-imports"],
+            capture_output=True,
+            text=True,
+            cwd=_cwd_for(target),
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "no response within 120s"
+
+    lines = [line for line in (proc.stdout or "").splitlines() if line.strip()]
+    if not lines:
+        return False, f"no stdout (exit {proc.returncode}); stderr: {_tail(proc.stderr or '')}"
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return False, f"unparseable stdout: {_tail(lines[-1])}"
+
+    if proc.returncode != 0 and payload.get("ok"):
+        # Contradiction between the exit code and the payload -- report both
+        # rather than silently trusting one.
+        return False, f"exit {proc.returncode} but payload claimed ok=true"
+
+    missing = payload.get("missing") or []
+    if missing:
+        names = ", ".join(str(entry.get("module", "?")) for entry in missing)
+        return False, f"missing: {names}"
+    return bool(payload.get("ok")), "all optional dependencies importable"
+
+
 def _watchdog_dies_with_parent(target: Path) -> bool:
     """Force-kill a stand-in parent; the backend must exit on its own."""
     dummy = subprocess.Popen(
@@ -306,9 +348,20 @@ def main() -> int:
                 checks = {c["name"]: c["status"] for c in json.loads(body)}
             except (json.JSONDecodeError, TypeError, KeyError):
                 checks = {}
-            for name in ("keyring", "database", "chroma"):
+            for name in ("keyring", "database"):
                 got = checks.get(name, "MISSING")
                 result.check(f"  doctor:{name}", got == "OK", got)
+            # chroma is WARN|OK, not OK-only: doctor now actually opens the
+            # collection and reports "index empty — run reindex" (WARN) when
+            # nothing has been indexed yet, rather than the old check that
+            # only confirmed the directory existed. This throwaway vault is
+            # freshly created by --init above and the app's boot-time
+            # auto-index thread runs asynchronously in the background, so by
+            # the time this request lands the rebuild may well still be in
+            # flight — an un-indexed fresh vault reporting WARN here is
+            # legitimate, not a regression, and MISSING/FAIL would still fail.
+            got = checks.get("chroma", "MISSING")
+            result.check("  doctor:chroma", got in ("OK", "WARN"), got)
 
         status, _ = _get(port, "/api/notes")
         result.check("GET /api/notes", status == 200, f"HTTP {status}")
@@ -370,6 +423,48 @@ def main() -> int:
             # Forces chromadb + sentence-transformers + torch to actually load.
             status, body = _get(port, "/api/search?q=test", timeout=300)
             result.check("GET /api/search (torch)", status == 200, f"HTTP {status}")
+
+            # ...but a 200 proves almost nothing on its own, and that is not a
+            # hypothetical: the spec excluded torch.distributed, so
+            # `import sentence_transformers` raised inside every frozen build
+            # ever produced -- no embedding model, no indexing, no search --
+            # and this check still passed, because a swallowed exception
+            # returns 200 with an empty list. Round-trip a real reindex and
+            # require an actual hit, so "answers 200" can never again stand in
+            # for "retrieval works".
+            status, body = _post(port, "/api/index/reindex", timeout=600)
+            result.check("POST /api/index/reindex", status in (200, 202), f"HTTP {status}")
+
+            chunks, waited = 0, 0.0
+            while waited < 600:
+                status, body = _get(port, "/api/index/status", timeout=60)
+                if status != 200:
+                    break
+                try:
+                    payload = json.loads(body)
+                except (json.JSONDecodeError, TypeError):
+                    break
+                chunks = payload.get("chunks") or 0
+                if not payload.get("indexing"):
+                    break
+                time.sleep(2)
+                waited += 2
+            # The seeded vault always contains Welcome.md, so a working
+            # pipeline cannot legitimately produce zero chunks here.
+            result.check("  index:chunks written", chunks > 0, f"{chunks} chunks")
+
+            status, body = _get(port, "/api/search?q=Argus", timeout=300, limit=20_000)
+            hits = []
+            if status == 200:
+                try:
+                    hits = json.loads(body) or []
+                except (json.JSONDecodeError, TypeError):
+                    hits = []
+            result.check(
+                "  search:returns a real hit",
+                status == 200 and len(hits) > 0,
+                f"HTTP {status}, {len(hits)} hits",
+            )
     finally:
         proc.kill()
         proc.wait(timeout=10)
@@ -383,6 +478,12 @@ def main() -> int:
     # --mcp-server flag and the spec's mcp hiddenimports landed together.
     ok, detail = _mcp_server_starts(target, env_file)
     result.check("--mcp-server serves over stdio", ok, detail)
+
+    # Would have caught v0.2.0 shipping without google_auth_oauthlib: every
+    # check above passes on a build missing both connector client libraries,
+    # because nothing else actually imports them.
+    ok, detail = _connector_imports(target)
+    result.check("connector imports", ok, detail)
 
     shutil.rmtree(workdir, ignore_errors=True)
 

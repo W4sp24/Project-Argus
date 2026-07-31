@@ -1,8 +1,8 @@
 """Flashcard decks parsed from the vault, scheduled with real FSRS.
 
 Decks are generated from ``Q:: A::`` pairs in a course's
-``15-Courses/<CODE>/flashcards.md`` note (mirrors ``backend/study/corpus.py``'s
-vault-relative course layout) and persisted as a JSON blob
+``<courses>/<CODE>/flashcards.md`` note (mirrors ``backend/features/study/corpus.py``'s
+vault-relative course layout, see :mod:`backend.core.taxonomy`) and persisted as a JSON blob
 (``flashcard_decks.cards_json``), the same JSON-blob-column shape
 ``backend/study/practice_exam.py`` uses for ``exams.questions_json``.
 
@@ -20,14 +20,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 from fsrs import Card as FsrsCard
 from fsrs import Rating, Scheduler, State
 from pydantic import BaseModel
 
-COURSES_DIR = "15-Courses"
+from backend.core.taxonomy import Taxonomy, active_taxonomy
+
+# Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
+# settings.taxonomy.courses / active_taxonomy().courses.
+COURSES_DIR = Taxonomy().courses
 
 GRADE_TO_RATING: dict[str, Rating] = {
     "again": Rating.Again,
@@ -72,6 +76,28 @@ class GradeResult(BaseModel):
     state: str
 
 
+class DeckDueSummary(BaseModel):
+    """One deck's due-card count, as part of the whole-vault summary below."""
+
+    deck_id: int
+    course: str
+    title: str
+    due: int
+
+
+class DueSummary(BaseModel):
+    """Cards due across every deck, in one request.
+
+    ``useDueCards()`` only takes a single deck id, so a whole-vault "cards
+    due" total (the Study overview's stat row + FLASHCARDS panel) would
+    otherwise cost one request per deck. Backs the real replacement for the
+    previously hardcoded ``MOCK_CARDS_DUE = 7``.
+    """
+
+    total: int
+    decks: list[DeckDueSummary]
+
+
 def parse_qa_pairs(text: str) -> list[tuple[str, str]]:
     """Parse ``Q:: <front>`` / ``A:: <back>`` pairs from markdown.
 
@@ -107,17 +133,20 @@ def parse_qa_pairs(text: str) -> list[tuple[str, str]]:
     return pairs
 
 
-def _flashcards_path(vault_path: Path, course: str) -> Path:
-    return vault_path / COURSES_DIR / course / "flashcards.md"
+def _flashcards_path(vault_path: Path, course: str, *, taxonomy: Taxonomy | None = None) -> Path:
+    tax = taxonomy or active_taxonomy()
+    return vault_path / tax.courses / course / "flashcards.md"
 
 
-def generate_deck(vault_path: Path, conn: sqlite3.Connection, course: str) -> int:
+def generate_deck(
+    vault_path: Path, conn: sqlite3.Connection, course: str, *, taxonomy: Taxonomy | None = None
+) -> int:
     """Parse ``flashcards.md`` for ``course`` and persist a new deck.
 
     Returns the new ``flashcard_decks.id``. Raises :class:`FlashcardsError`
     if the file is missing or has no valid ``Q:: A::`` pairs.
     """
-    path = _flashcards_path(vault_path, course)
+    path = _flashcards_path(vault_path, course, taxonomy=taxonomy)
     if not path.is_file():
         raise FlashcardsError(f"no flashcards.md for course {course}")
     pairs = parse_qa_pairs(path.read_text(encoding="utf-8"))
@@ -175,6 +204,25 @@ def list_decks(conn: sqlite3.Connection, course: str | None = None) -> list[Deck
     ]
 
 
+def delete_deck(conn: sqlite3.Connection, deck_id: int) -> int:
+    """Delete one deck and its reviews (children first). Returns reviews removed.
+
+    Mirrors ``backend/features/study/deletes.py::delete_exam`` — same
+    children-before-parent shape, since ``flashcard_reviews.deck_id``
+    references ``flashcard_decks`` and ``connect()`` runs with
+    ``PRAGMA foreign_keys=ON`` (no ``ON DELETE CASCADE`` on this table).
+    """
+    exists = conn.execute("SELECT 1 FROM flashcard_decks WHERE id = ?", (deck_id,)).fetchone()
+    if exists is None:
+        raise FlashcardsError(f"no flashcard deck {deck_id}")
+    reviews_removed = conn.execute(
+        "DELETE FROM flashcard_reviews WHERE deck_id = ?", (deck_id,)
+    ).rowcount
+    conn.execute("DELETE FROM flashcard_decks WHERE id = ?", (deck_id,))
+    conn.commit()
+    return reviews_removed
+
+
 def _parse_dt(value: str) -> datetime:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
@@ -225,6 +273,23 @@ def due_cards(conn: sqlite3.Connection, deck_id: int, now: datetime | None = Non
 
     scored.sort(key=lambda pair: pair[0])
     return [item for _, item in scored]
+
+
+def due_summary(conn: sqlite3.Connection, now: datetime | None = None) -> DueSummary:
+    """Due-card counts for every deck, newest deck first."""
+    now = now or datetime.now(UTC)
+    rows = conn.execute(
+        "SELECT id, course, title FROM flashcard_decks ORDER BY id DESC"
+    ).fetchall()
+    decks: list[DeckDueSummary] = []
+    total = 0
+    for row in rows:
+        count = len(due_cards(conn, row["id"], now=now))
+        decks.append(
+            DeckDueSummary(deck_id=row["id"], course=row["course"], title=row["title"], due=count)
+        )
+        total += count
+    return DueSummary(total=total, decks=decks)
 
 
 def grade_card(

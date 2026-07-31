@@ -28,7 +28,6 @@ from backend.vault.tasks import bucketed_tasks, refresh_cache
 
 MODEL = "claude-opus-4-8"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "planner.md"
-PREFERENCES_NOTE = "30-Areas/assistant-preferences.md"
 MAX_TURNS = 12
 # The planner may only ever propose (I1), so it gets no filesystem tools at all.
 DISALLOWED_TOOLS = ("Bash", "Write", "Edit", "Read", "Glob", "Grep")
@@ -134,23 +133,32 @@ def _planner_context(
     """Assemble everything the planner needs into one user message."""
     from backend.connectors import gcal, todoist
 
+    tax = settings.taxonomy
     today = date.today()
-    refresh_cache(conn, settings.vault_path)
+    refresh_cache(conn, settings.vault_path, taxonomy=tax)
     buckets = bucketed_tasks(conn, today=today)
 
-    events = [event.model_dump() for event in gcal.list_events(today)]
-    external = [task.model_dump() for task in todoist.list_tasks()]
+    gcal_events, gcal_error = gcal.list_events_safe(today)
+    todoist_tasks, todoist_error = todoist.list_tasks_safe()
+    events = [event.model_dump() for event in gcal_events]
+    external = [task.model_dump() for task in todoist_tasks]
+    connector_notes = [
+        f"{name}: {message}"
+        for name, message in (("gcal", gcal_error), ("todoist", todoist_error))
+        if message
+    ]
 
     sent_paths: list[str] = []
     review_queues: list[str] = []
-    for queue_file in settings.vault_path.glob("15-Courses/*/study/review-queue.md"):
+    for queue_file in settings.vault_path.glob(tax.review_queue_glob):
         review_queues.append(queue_file.read_text(encoding="utf-8")[-2000:])
         sent_paths.append(queue_file.relative_to(settings.vault_path).as_posix())
 
-    preferences_path = settings.vault_path / PREFERENCES_NOTE
+    preferences_note = tax.preferences_note
+    preferences_path = settings.vault_path / preferences_note
     if preferences_path.is_file():
         preferences = preferences_path.read_text(encoding="utf-8")
-        sent_paths.append(PREFERENCES_NOTE)
+        sent_paths.append(preferences_note)
     else:
         preferences = "(no preferences note yet — assume 50-minute focus blocks, breaks between)"
 
@@ -163,10 +171,14 @@ def _planner_context(
         "todoist_tasks": external,
         "weak_topics_review_queues": review_queues,
         "dismissal_feedback": dismissal_feedback(conn),
+        # A connector down is not "the user has no tasks/events" — say so
+        # plainly so the model doesn't plan around data that simply failed
+        # to load.
+        "connector_notes": connector_notes,
     }
     return (
         f"Instruction from the user: {instruction}\n\n"
-        f"PREFERENCES NOTE ({PREFERENCES_NOTE}):\n{preferences}\n\n"
+        f"PREFERENCES NOTE ({preferences_note}):\n{preferences}\n\n"
         f"CONTEXT (JSON):\n{json.dumps(payload, ensure_ascii=False, indent=1)}"
     )
 

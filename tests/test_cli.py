@@ -10,9 +10,7 @@ from backend.cli import InitError, init_vault, needs_build
 EXPECTED_FOLDERS = [
     "00-Inbox",
     "10-Daily",
-    "15-Courses/CS000/notes",
-    "15-Courses/CS000/materials",
-    "15-Courses/CS000/study",
+    "15-Courses",
     "20-Projects",
     "30-Areas",
     "40-People",
@@ -58,11 +56,32 @@ def test_init_vault_copies_template_and_inits_git(tmp_path: Path) -> None:
     for folder in EXPECTED_FOLDERS:
         assert (dest / folder).is_dir(), f"missing {folder}"
     assert (dest / "Welcome.md").is_file()
-    assert (dest / "15-Courses" / "CS000" / "course.md").is_file()
+    assert not (dest / "15-Courses" / "CS000").exists(), "no sample course should ship"
+    assert not list((dest / "15-Courses").iterdir()), "courses dir must start empty"
     assert (dest / ".git").is_dir(), "vault must be its own git repo (I2)"
 
     env_text = env_file.read_text(encoding="utf-8")
     assert f"VAULT_PATH={dest.resolve()}" in env_text
+
+
+def test_init_vault_with_custom_taxonomy_relocates_template_content(tmp_path: Path) -> None:
+    """A custom taxonomy set *before* first init must not leave template
+    content sitting in Argus's old hardcoded folder names.
+
+    ``30-Areas/assistant-preferences.md`` is vault-template's only file that
+    still ships real content after CS000 was excluded from the copy — a
+    custom ``VAULT_AREAS_DIR`` configured ahead of ``argus init`` used to get
+    ignored by the copy step, leaving that note invisible to every feature
+    that reads through the (renamed) taxonomy from then on.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text("VAULT_AREAS_DIR=Zones\n", encoding="utf-8")
+    dest = tmp_path / "vault"
+
+    init_vault(dest, env_file)
+
+    assert (dest / "Zones" / "assistant-preferences.md").is_file()
+    assert not (dest / "30-Areas").exists()
 
 
 def test_init_vault_refuses_non_empty_destination(tmp_path: Path) -> None:

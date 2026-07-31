@@ -54,6 +54,21 @@ def safe_metadata(name):
         return []
 
 
+def required_metadata(name):
+    """copy_metadata that does NOT tolerate an absent package.
+
+    Use this instead of safe_metadata() for anything the build must not ship
+    without -- i.e. a connector whose only failure mode, if it silently goes
+    missing, is a user clicking Connect against a dependency that was never
+    frozen in. safe_metadata() is for genuinely optional packages (mcp,
+    pydantic extras, etc.) where absence just means a feature degrades; here
+    absence means the release pipeline installed the wrong extras (see
+    release.yml's `pip install -e ".[rag,gcal]"`) and that has to fail the
+    build, not ship it.
+    """
+    return copy_metadata(name)
+
+
 # --- our own runtime data ---------------------------------------------------
 # backend/agent/runtime.py and planner.py read PROMPT_PATH via
 # Path(__file__).parent, which resolves inside _MEIPASS once frozen; cli.py's
@@ -111,6 +126,33 @@ hiddenimports += [
     "win32ctypes.pywin32",
 ]
 datas += safe_metadata("keyring")
+
+# --- google calendar / todoist clients --------------------------------------
+# Both connectors import their client libraries lazily and in-function --
+# google_auth_oauthlib inside gcal.py's connect() (backend/connectors/gcal.py:74)
+# and todoist_api_python inside todoist.py's list_tasks() (backend/connectors/
+# todoist.py:66) -- which is exactly the pattern static analysis cannot see.
+# Before this, CI's `pip install -e ".[rag]"` never installed the gcal extra
+# at all, so PyInstaller had nothing to collect and the frozen backend shipped
+# with neither connector importable; the keyring entry above already stores
+# both of their secrets, so this belongs right after it.
+#
+# required_metadata(), not safe_metadata(): a build missing this metadata is a
+# build that shipped without the connector, which must fail loudly here
+# rather than pass all 25 smoke checks and reach a user as an inexplicable 501.
+hiddenimports += collect_submodules("google_auth_oauthlib")
+hiddenimports += collect_submodules("google.auth")
+hiddenimports += collect_submodules("google.oauth2")
+hiddenimports += collect_submodules("googleapiclient")
+hiddenimports += collect_submodules("todoist_api_python")
+hiddenimports += ["google.auth.transport.requests"]
+datas += collect_data_files("googleapiclient")  # discovery_cache/documents/*.json
+datas += (
+    required_metadata("google-auth-oauthlib")
+    + required_metadata("google-api-python-client")
+    + required_metadata("google-auth")
+    + required_metadata("todoist-api-python")
+)
 
 # --- apscheduler -----------------------------------------------------------
 # APScheduler 3.x resolves triggers/executors via pkg_resources entry points.
@@ -180,9 +222,31 @@ datas += collect_data_files("transformers", include_py_files=False)
 hiddenimports += collect_submodules("transformers.models.bert")
 binaries += collect_dynamic_libs("tokenizers")
 
+# --- scipy / scikit-learn --------------------------------------------------
+# scipy >=1.15 vendors array_api_compat under scipy/_external/ and reaches its
+# backends (numpy.fft and friends) through importlib, which static analysis
+# cannot follow: the frozen build raised
+# "No module named 'scipy._external.array_api_compat.numpy.fft'" the moment
+# sentence-transformers was imported.
+#
+# collect_submodules("scipy") alone does NOT fix that, which is the subtle part.
+# Walking scipy tries to import scipy._external.array_api_compat.dask.array,
+# dask is an optional backend nobody installed, the ModuleNotFoundError makes
+# PyInstaller abandon that subtree, and all 75 _external modules vanish from an
+# otherwise 1002-module collection -- with only a WARNING. Naming the subpackage
+# explicitly collects it despite the same dask warning. Verified by comparing
+# both calls directly.
+hiddenimports += collect_submodules("scipy")
+hiddenimports += collect_submodules("scipy._external")
+hiddenimports += collect_submodules("sklearn")
+datas += collect_data_files("scipy", include_py_files=False)
+datas += collect_data_files("sklearn", include_py_files=False)
+
 # --- torch -----------------------------------------------------------------
-# Never collect_all('torch'): it drags in include/, test/, torchgen/ and .lib
-# import libraries -- +200MB of dead weight and a 10-minute analysis.
+# Never collect_all('torch'): it drags in include/ and .lib import libraries --
+# dead weight and a much slower analysis. (torchgen and torch.distributed used
+# to be excluded here for the same reason; see the excludes list for why they
+# are not any more -- sentence-transformers imports both.)
 binaries += collect_dynamic_libs("torch")
 
 # --- document extraction ---------------------------------------------------
@@ -215,9 +279,21 @@ excludes = [
     "PySide2",
     "PySide6",
     "wx",
-    "torch.distributed",
-    "torch.testing",
-    "torchgen",
+    # torch.distributed / torch.testing / torchgen are deliberately NOT excluded.
+    # sentence-transformers imports all three at module scope, so excluding them
+    # made `import sentence_transformers` raise ModuleNotFoundError inside the
+    # frozen app -- no embedding model, therefore no indexing and no search, in
+    # every packaged build since this spec was written. Verified by importing
+    # sentence_transformers and intersecting sys.modules against this list.
+    #
+    # It stayed invisible because the only gate was `GET /api/search` returning
+    # 200, and a swallowed exception returns 200 with an empty list. The smoke
+    # test now round-trips a real reindex and requires an actual hit, and
+    # `--selftest-imports` fails the build outright -- that is what caught it.
+    #
+    # They cost disk (torchgen especially), which is what the size guard in
+    # release.yml is for. A smaller installer that cannot answer a search is
+    # not a trade worth making.
     "torch.utils.tensorboard",
     "pytest",
 ]

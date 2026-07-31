@@ -13,7 +13,9 @@ boots with neither extra installed.
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from collections.abc import Callable
 
 from fastapi import FastAPI, Request
@@ -25,6 +27,7 @@ from backend.core.config import ConfigError, Settings
 from backend.features.briefing.router import build_briefing_router
 from backend.features.chat.router import ChatRunner, build_chat_router
 from backend.features.flashcards.router import build_flashcards_router
+from backend.features.index.router import build_index_router
 from backend.features.ingest.router import build_ingest_router
 from backend.features.insights.router import build_insights_router
 from backend.features.journal.router import build_journal_router
@@ -36,7 +39,25 @@ from backend.features.study.router import build_study_router
 from backend.features.system.router import build_system_router
 from backend.features.tasks.router import build_tasks_router
 
+logger = logging.getLogger("argus.rag")
+
 DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
+def _version() -> str:
+    """The installed package version, for ``/docs`` and the OpenAPI schema.
+
+    Read from installed metadata rather than written here as a literal: the
+    hardcoded one said 0.1.0 while v0.2.0 was the shipped tag, because nothing
+    kept them in sync. Falling back rather than raising keeps the app bootable
+    from a source tree that was never pip-installed (some test runners).
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("argus")
+    except PackageNotFoundError:
+        return "0.0.0+dev"
 
 # The desktop shell serves Next on a dynamically-allocated port, so it passes
 # its exact origin through ARGUS_ALLOWED_ORIGINS (comma-separated). Never "*":
@@ -79,18 +100,55 @@ def create_app(
 
     resolved = settings or Settings.load()
 
+    def _auto_index_and_watch(stop_event: threading.Event) -> None:
+        """Background thread: index the vault if needed, then watch it live.
+
+        This is the fix for the actual reported bug — nothing in the shipped
+        app ever called ``VaultIndex.reindex_all``/``watch_vault`` before this,
+        so a vault full of notes searched and chatted against an empty chroma
+        collection with no visible error. Only runs when ``scheduler_factory``
+        is given (see this function's caller): a test app must never spawn a
+        watcher thread or load the embedding model.
+
+        Guarded broadly: ``VAULT_PATH`` may be unset on a fresh machine
+        (``ConfigError``), and the ``[rag]`` extras may not be installed at all
+        (``ImportError`` from inside ``VaultIndex``) — neither may crash the app.
+        """
+        try:
+            vault_path = resolved.vault_path
+        except ConfigError:
+            return
+        try:
+            from backend.rag.watcher import watch_vault
+
+            vault_index = index()
+            if vault_index.collection.count() == 0 or vault_index.schema_stale():
+                vault_index.reindex_all(vault_path)
+            watch_vault(vault_path, vault_index, taxonomy=resolved.taxonomy, stop_event=stop_event)
+        except Exception:
+            logger.exception("auto-index/watch thread failed")
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         scheduler = scheduler_factory(resolved) if scheduler_factory else None
         if scheduler is not None:
             scheduler.start()
+        stop_event = threading.Event()
+        # Gated on scheduler_factory, exactly like the scheduler above: test
+        # apps never construct one, so tests never spawn this thread or touch
+        # chromadb/the embedding model.
+        if scheduler_factory is not None:
+            threading.Thread(
+                target=_auto_index_and_watch, args=(stop_event,), daemon=True
+            ).start()
         try:
             yield
         finally:
+            stop_event.set()
             if scheduler is not None:
                 scheduler.shutdown(wait=False)
 
-    app = FastAPI(title="Argus", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Argus", version=_version(), lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
@@ -109,7 +167,7 @@ def create_app(
     def _default_index_factory() -> object:
         from backend.rag.index import VaultIndex
 
-        return VaultIndex(resolved.db_path.parent / "chroma")
+        return VaultIndex(resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy)
 
     def _default_generator(feature: str) -> Callable:
         """agent_generate bound to a feature label + db so usage rows attribute.
@@ -155,6 +213,7 @@ def create_app(
     app.include_router(build_flashcards_router(resolved))
     app.include_router(build_quick_links_router(resolved))
     app.include_router(build_search_router(resolved, index))
+    app.include_router(build_index_router(resolved, index))
     app.include_router(build_review_router(resolved, planner or _default_planner()))
     app.include_router(build_briefing_router(resolved, briefing_composer or _default_composer()))
     app.include_router(build_insights_router(resolved))
