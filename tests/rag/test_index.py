@@ -172,6 +172,22 @@ def test_absent_schema_metadata_is_treated_as_stale(tmp_path: Path) -> None:
     assert legacy.schema_stale() is True
 
 
+def test_schema_version_1_index_is_stale_after_the_bump(tmp_path: Path) -> None:
+    """A pre-bump (SCHEMA_VERSION 1) index must be treated as stale too, not
+    just a totally absent marker -- old-shape chunks (run-on text, no
+    heading, no inline tags) must never silently coexist with new ones."""
+    import chromadb
+
+    from backend.rag.index import VaultIndex
+
+    db_dir = tmp_path / "chroma"
+    client = chromadb.PersistentClient(path=str(db_dir))
+    client.get_or_create_collection("vault", metadata={"hnsw:space": "cosine", "schema_version": 1})
+
+    legacy = VaultIndex(db_dir)
+    assert legacy.schema_stale() is True
+
+
 def test_reindex_recreates_a_stale_collection_and_keeps_cosine_space(
     vault: Path, tmp_path: Path
 ) -> None:
@@ -200,3 +216,48 @@ def test_reindex_recreates_a_stale_collection_and_keeps_cosine_space(
     all_ids = legacy_index.collection.get(include=[])["ids"]
     assert "legacy-1" not in all_ids
     assert result.total_chunks > 0
+
+
+# --- corpus / BM25 caching ---------------------------------------------------
+# retrieve() used to call index.all_chunks() on every query, and all_chunks()
+# does a full collection.get() of the whole vault -- O(whole vault) per search.
+
+
+def test_all_chunks_and_bm25_are_built_once_for_repeated_queries(index, monkeypatch) -> None:
+    calls = {"get": 0}
+    real_get = index.collection.get
+
+    def counting_get(*args, **kwargs):
+        calls["get"] += 1
+        return real_get(*args, **kwargs)
+
+    monkeypatch.setattr(index.collection, "get", counting_get)
+
+    first = index.all_chunks()
+    bm25_first = index.bm25()
+    for _ in range(5):
+        assert index.all_chunks() == first
+        assert index.bm25() is bm25_first
+
+    assert calls["get"] == 1, f"corpus re-fetched {calls['get']} times across 6 calls"
+
+
+def test_a_mutation_invalidates_the_cached_corpus(index, vault: Path) -> None:
+    before = index.all_chunks()
+    bm25_before = index.bm25()
+
+    (vault / "50-Reference" / "extra.md").write_text(
+        "---\ntitle: Extra\n---\n\nA brand new note about Kruskal.\n", encoding="utf-8"
+    )
+    index.upsert_file(vault, "50-Reference/extra.md")
+
+    after = index.all_chunks()
+    assert len(after) > len(before), "new chunks not visible after upsert"
+    assert index.bm25() is not bm25_before, "stale BM25 survived an index mutation"
+
+
+def test_delete_also_invalidates_the_cached_corpus(index) -> None:
+    before = index.all_chunks()
+    index.delete_file("50-Reference/algorithms.md")
+    after = index.all_chunks()
+    assert len(after) < len(before), "deleted chunks still served from cache"
