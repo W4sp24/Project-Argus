@@ -14,7 +14,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.13.4",
     "python-frontmatter>=1.1",
-    "watchdog>=4.0",
+    "watchdog>=6.0.0",
     "keyring>=25.0",
     # Optional at runtime: only the "anthropic" (Claude Code CLI) provider
     # imports it, and that import is lazy. Argus runs entirely on Ollama or a
