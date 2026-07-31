@@ -207,8 +207,9 @@ def test_custom_agent_rejects_reserved_and_duplicate_names(
     assert reserved.status_code == 409
     assert "built-in" in reserved.json()["detail"]
 
-    assert client.post("/api/usage/agents/custom", json={"name": "Mine", "path": str(logs)}).status_code == 201
-    assert client.post("/api/usage/agents/custom", json={"name": "Mine", "path": str(logs)}).status_code == 409
+    mine = {"name": "Mine", "path": str(logs)}
+    assert client.post("/api/usage/agents/custom", json=mine).status_code == 201
+    assert client.post("/api/usage/agents/custom", json=mine).status_code == 409
 
 
 def test_custom_agent_rejects_an_unreadable_folder(client: TestClient, tmp_path: Path) -> None:

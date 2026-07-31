@@ -1,0 +1,178 @@
+name: package
+
+# The Windows build, defined once. ci.yml runs it with publish:false on every
+# merge to main -- a rehearsal that leaves an installable artifact and touches
+# no release -- and release.yml runs it with publish:true on a tag.
+#
+# The point of the rehearsal is that publishing a GitHub release freezes its
+# assets forever. A packaging bug discovered at tag time is unrecoverable by
+# design (v0.2.0 is a permanently empty release), so the build must have
+# already succeeded on that code before a tag ever reaches it.
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: >
+          Attach assets to the tag's draft release and publish it. False builds
+          and smoke-tests the installer without touching any release.
+        type: boolean
+        required: false
+        default: false
+
+# No `permissions:` block on purpose. A reusable workflow's permissions
+# intersect with the calling job's, so declaring `contents: read` here would
+# quietly strip the write access the publish step needs. The callers set it:
+# read in ci.yml, write in release.yml.
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # dev:false -- the frozen build has no use for pytest or ruff, but it
+      # gets the identical runtime extras the test jobs ran against.
+      - uses: ./.github/actions/python-env
+        with:
+          dev: "false"
+
+      - name: Install PyInstaller
+        run: pip install "pyinstaller==6.16.0" pyinstaller-hooks-contrib
+
+      # Now that this job runs on every merge, re-downloading the model each
+      # time is the largest avoidable cost in it.
+      - name: Cache the embedding model
+        id: model
+        uses: actions/cache@v4
+        with:
+          path: desktop/resources/models/bge-small-en-v1.5
+          key: bge-small-en-v1.5
+
+      - name: Pre-fetch the embedding model
+        if: steps.model.outputs.cache-hit != 'true'
+        run: |
+          python -c "from sentence_transformers import SentenceTransformer as S; S('BAAI/bge-small-en-v1.5').save('desktop/resources/models/bge-small-en-v1.5')"
+
+      - name: Freeze the backend
+        run: pyinstaller desktop/argus-backend.spec --noconfirm --distpath desktop/resources --workpath desktop/build-py
+
+      # Fails in ~2 minutes instead of after 25 minutes of packaging. Catches
+      # the silent freezing failures (keyring entry points, chromadb's SQL
+      # migrations, transformers metadata) that a /health probe would miss.
+      - name: Smoke-test the frozen backend
+        run: python desktop/tests/smoke_backend.py --target desktop/resources/backend/argus-backend.exe
+
+      # --- frontend ------------------------------------------------------
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      - name: Build and stage the dashboard
+        run: node scripts/stage.mjs
+        working-directory: desktop
+
+      # --- package -------------------------------------------------------
+      # _test.yml already asserted all three manifests equal the tag, so this
+      # is a no-op safety net rather than the thing that sets the version.
+      - name: Match package version to the tag
+        if: inputs.publish && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+        working-directory: desktop
+
+      # build/icon.ico is generated, not committed (so it can never go stale
+      # against icon.svg). electron-builder.yml references it for the app, the
+      # installer and the uninstaller, so this has to run before packaging --
+      # the npm scripts do it as a prebuild, but CI calls electron-builder
+      # directly.
+      - name: Generate the app icon
+        run: node scripts/make-icon.mjs
+        working-directory: desktop
+
+      - name: Build the installer
+        shell: pwsh
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: ${{ inputs.publish && 'always' || 'never' }}
+        run: |
+          npx electron-builder --win --publish $env:PUBLISH 2>&1 | Tee-Object -FilePath eb.log
+          if ($LASTEXITCODE -ne 0) {
+            # Raw step logs need a login to read; annotations don't.
+            $tail = ((Get-Content eb.log -Tail 30) -join ' | ')
+            Write-Host "::error title=electron-builder::$tail"
+            exit 1
+          }
+
+      # GitHub caps a single release asset at 2GB. The realistic installer is
+      # 550-700MB, so this is a tripwire, not an expected failure -- it tells
+      # you in CI rather than at upload time if a dependency bloats the bundle.
+      - name: Guard installer size
+        shell: pwsh
+        run: |
+          $limit = 1.5GB
+          $big = Get-ChildItem desktop/dist/*.exe | Where-Object { $_.Length -gt $limit }
+          Get-ChildItem desktop/dist/*.exe | ForEach-Object {
+            "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB)
+          }
+          if ($big) { throw "installer exceeds 1.5GB - see the packaging notes in desktop/README" }
+
+      # electron-builder uploads into a *draft* (see electron-builder.yml), so
+      # the release is not visible and electron-updater cannot see latest.yml
+      # until this runs. Deliberately last: publishing is what makes the
+      # release immutable, so it must happen only after every asset is attached
+      # and the size guard has passed. A failed build therefore leaves a draft
+      # you can inspect and delete, not a permanently empty published release.
+      - name: Publish the draft release
+        if: inputs.publish && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' > assets.txt
+          echo "attached:"; sed 's/^/  /' assets.txt
+
+          # Matched on a real suffix, not a substring: the blockmap is named
+          # "Argus-x64.exe.blockmap", so a `case *".exe"*` test passes even when
+          # the installer itself failed to upload -- publishing a release whose
+          # only real content is a delta map for a file that isn't there.
+          grep -qE '\.exe$' assets.txt || {
+            echo "::error title=release::no installer (*.exe) on $GITHUB_REF_NAME - refusing to publish"
+            exit 1
+          }
+          # Without latest.yml electron-updater cannot see the release at all,
+          # so every existing install stays silently on its current version.
+          grep -qx 'latest.yml' assets.txt || {
+            echo "::error title=release::no latest.yml on $GITHUB_REF_NAME - installed apps could not discover this update - refusing to publish"
+            exit 1
+          }
+
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+          echo "published $GITHUB_REF_NAME"
+
+      # Uploaded on a merge build too: an installer you can actually download
+      # and run is the whole point of rehearsing packaging before a tag.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: argus-windows
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.blockmap
+            desktop/dist/latest.yml
+          retention-days: 14

@@ -18,7 +18,7 @@ import sqlite3
 import subprocess
 from collections.abc import Callable
 from datetime import date, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.vault import suggestions as suggestion_queue
@@ -89,7 +89,19 @@ def guard_user_path(
     tax = taxonomy or active_taxonomy()
     excluded_casefold = {name.casefold() for name in tax.excluded_top_dirs}
     candidate = Path(rel_path)
-    if candidate.is_absolute() or ".." in candidate.parts:
+    # Judged against Windows path semantics as well as the host's, for the
+    # same reason Taxonomy._validate_name checks both separators: the rule is
+    # about the string a user supplied, not about which OS happens to be
+    # interpreting it. A POSIX host reads "C:/abs.md" as an ordinary relative
+    # name and would happily create a directory called "C:" inside the vault,
+    # so without this the guard means something different per platform.
+    windows = PureWindowsPath(rel_path)
+    if (
+        candidate.is_absolute()
+        or windows.is_absolute()
+        or ".." in candidate.parts
+        or ".." in windows.parts
+    ):
         raise WriterForbidden(f"path {rel_path!r} is not vault-relative")
     if candidate.parts and candidate.parts[0].casefold() in excluded_casefold:
         raise WriterForbidden(f"{candidate.parts[0]}/ is protected and cannot be edited")

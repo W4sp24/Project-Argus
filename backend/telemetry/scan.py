@@ -164,7 +164,10 @@ def _previous_window(range_: CliRange) -> str:
     fabricated one.
     """
     if range_ == "today":
-        return "ts >= datetime('now', '-1 day', 'start of day') AND ts < datetime('now', 'start of day')"
+        return (
+            "ts >= datetime('now', '-1 day', 'start of day')"
+            " AND ts < datetime('now', 'start of day')"
+        )
     if range_ == "week":
         return (
             "ts >= datetime('now', '-13 days', 'start of day')"

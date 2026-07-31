@@ -80,6 +80,29 @@ def test_list_tasks_safe_returns_message_instead_of_raising():
     assert message is not None and "Todoist" in message
 
 
+def test_list_tasks_safe_degrades_when_the_keyring_is_unreadable(monkeypatch):
+    """An unreadable keyring must not take down the caller.
+
+    `_stored_token` goes straight to `keyring.get_password`, which raises on a
+    machine with no usable backend — a headless Linux box, or a Windows one
+    whose Credential Manager is locked. That exception is not
+    `ConnectorUnavailable`, so it sailed through `list_tasks_safe` and turned
+    `GET /api/agenda` into a 500, which renders the dashboard with no tasks at
+    all. `connection_state` already treats an unreadable keyring as "unknown";
+    this is the same judgement applied on the read path.
+    """
+
+    def _no_keyring():
+        raise RuntimeError("No recommended backend was available")
+
+    monkeypatch.setattr(todoist, "_stored_token", _no_keyring)
+
+    tasks, message = todoist.list_tasks_safe()
+
+    assert tasks == []
+    assert message is not None and "keyring" in message.lower()
+
+
 def test_list_tasks_safe_returns_tasks_and_no_message_on_success():
     fake = _FakeApi([_FakeTask("Buy milk")])
 

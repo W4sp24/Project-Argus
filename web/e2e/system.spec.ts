@@ -46,24 +46,31 @@ test("adding a model requires passing the connection test first", async ({ page 
   const dialog = page.getByRole("dialog", { name: "Add a model" });
   await expect(dialog).toBeVisible();
 
-  // Ollama is the default choice, so the endpoint is prefilled — a
-  // non-developer never has to know this URL.
-  await expect(dialog.getByLabel("Display name")).toBeVisible();
-  await expect(page.getByPlaceholder("http://127.0.0.1:11434/v1")).toHaveValue(
+  // This dialog is a stepped wizard, not the single scrolling form it used to
+  // be, so "Display name" does not exist yet — it lives on the last step. The
+  // gate being tested is now the *step* gate: you cannot reach naming and
+  // saving without a green connection test.
+  await dialog.getByRole("button", { name: /Ollama on this PC/ }).click();
+
+  // Choosing a provider is the answer to the WHERE step and advances to
+  // CONNECT, where Ollama's endpoint is prefilled — a non-developer never has
+  // to know this URL.
+  await expect(dialog.getByPlaceholder("http://127.0.0.1:11434/v1")).toHaveValue(
     "http://127.0.0.1:11434/v1",
   );
 
-  // Naming it is not enough: Save stays locked until the test goes green.
-  await dialog.getByLabel("Display name").fill("e2e-model");
-  await expect(dialog.getByRole("button", { name: "SAVE MODEL" })).toBeDisabled();
+  // A prefilled endpoint is not proof it is there: NEXT stays locked, and the
+  // dialog says why rather than leaving a dead button.
+  await expect(dialog.getByRole("button", { name: "NEXT →" })).toBeDisabled();
+  await expect(dialog.getByText("Pass the connection test to continue.")).toBeVisible();
 
   // Nothing is running on 11434 in CI, so the test must fail *readably*
-  // rather than hang or save a broken entry.
+  // rather than hang or wave the wizard through.
   await dialog.getByRole("button", { name: "TEST CONNECTION" }).click();
   await expect(dialog.getByText(/could not reach that endpoint/)).toBeVisible({
     timeout: 30_000,
   });
-  await expect(dialog.getByRole("button", { name: "SAVE MODEL" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "NEXT →" })).toBeDisabled();
 
   await dialog.getByRole("button", { name: "CANCEL" }).click();
   await expect(dialog).toBeHidden();
@@ -115,12 +122,27 @@ test("email capture posts and lands a proposal in the review queue", async ({ pa
   const beforeCount = ((await before.json()) as unknown[]).length;
 
   await page.goto("/dashboard");
-  await page
-    .getByPlaceholder("paste an email…")
-    .fill(
+
+  const box = page.getByPlaceholder("paste an email…");
+  const extract = page.getByRole("button", { name: "EXTRACT →" });
+
+  // `next dev` resolves the navigation before React has attached its
+  // listeners, and a fill that lands in that window updates the DOM but never
+  // the component state — EXTRACT stays disabled forever on a page that looks
+  // completely correct, which is a ~50% flake. Re-filling until the button
+  // reacts is what proves hydration actually happened; it is the precondition
+  // this test depends on, not a wait bolted on to make red go away.
+  let attempts = 0;
+  await expect(async () => {
+    attempts++;
+    await box.fill(
       "Subject: E2E email capture\n\nHi,\n\n- [ ] reply to the registrar by 2026-07-20\n\nThanks,\nRegistrar <registrar@example.edu>",
     );
-  await page.getByRole("button", { name: "EXTRACT →" }).click();
+    await expect(extract).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
+  if (attempts > 1) console.log(`FILL RETRIED: took ${attempts} attempts to stick`);
+
+  await extract.click();
 
   // The backend archives the email, runs extraction (agent with a
   // deterministic fallback — either path ends in a suggestion row), and the

@@ -20,7 +20,9 @@ from backend.telemetry.claude_cli import (
 
 def _assistant_line(ts: str, model: str, in_tok: int, out_tok: int, **extra_usage) -> str:
     usage = {"input_tokens": in_tok, "output_tokens": out_tok, **extra_usage}
-    return json.dumps({"type": "assistant", "timestamp": ts, "message": {"model": model, "usage": usage}})
+    return json.dumps(
+        {"type": "assistant", "timestamp": ts, "message": {"model": model, "usage": usage}}
+    )
 
 
 def test_scan_projects_excludes_subagents(tmp_path: Path) -> None:
@@ -47,12 +49,17 @@ def test_parse_transcript_filters_and_tolerates_malformed(tmp_path: Path) -> Non
     path = tmp_path / "session.jsonl"
     lines = [
         json.dumps({"type": "user", "timestamp": "2026-07-15T09:00:00.000Z"}),
-        _assistant_line("2026-07-15T09:00:01.000Z", "claude-sonnet-5", 10, 5, cache_read_input_tokens=3),
+        _assistant_line(
+            "2026-07-15T09:00:01.000Z", "claude-sonnet-5", 10, 5, cache_read_input_tokens=3
+        ),
         json.dumps(
             {
                 "type": "assistant",
                 "timestamp": "2026-07-15T09:00:02.000Z",
-                "message": {"model": "<synthetic>", "usage": {"input_tokens": 1, "output_tokens": 1}},
+                "message": {
+                    "model": "<synthetic>",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
             }
         ),
         "not json at all {{{",

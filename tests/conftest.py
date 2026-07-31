@@ -2,11 +2,51 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
 import pytest
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy, set_active_taxonomy
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _git_identity_for_tests() -> Iterator[None]:
+    """Give git an identity, so the suite does not depend on the machine's.
+
+    Invariant I2 means most write paths run ``git commit`` (``_git_snapshot``),
+    and several fixtures build a throwaway vault with ``git init`` + an initial
+    commit under ``check=True``. Git refuses to commit without a ``user.name``
+    and ``user.email``, and a **GitHub-hosted runner has neither** — so the
+    whole suite passed on a developer machine, where a global identity happens
+    to exist, and collapsed the first time CI ran it: 14 failed, 493 passed and
+    52 setup errors, all of them "Author identity unknown".
+
+    Reproduce that state locally with::
+
+        GIT_CONFIG_GLOBAL=/nonexistent GIT_CONFIG_SYSTEM=/nonexistent pytest
+
+    These four environment variables are what git reads *before* any config
+    file, so they fix it without writing to the developer's real ``.gitconfig``
+    and without every vault fixture having to remember a pair of
+    ``git config`` calls (only ``tests/features/insights`` ever did).
+    """
+    identity = {
+        "GIT_AUTHOR_NAME": "Argus Tests",
+        "GIT_AUTHOR_EMAIL": "tests@argus.invalid",
+        "GIT_COMMITTER_NAME": "Argus Tests",
+        "GIT_COMMITTER_EMAIL": "tests@argus.invalid",
+    }
+    previous = {key: os.environ.get(key) for key in identity}
+    os.environ.update(identity)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 @pytest.fixture(autouse=True)

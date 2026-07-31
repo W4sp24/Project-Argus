@@ -1,0 +1,42 @@
+version: 2
+
+# Lockfiles drift silently until a build breaks: desktop/package-lock.json was
+# out of sync with its own cross-env devDependency (ec2a361) and had to be
+# repaired by hand. Grouped weekly PRs keep that from accumulating without
+# turning the inbox into a per-package firehose.
+updates:
+  # Covers .github/workflows/* and the composite action in .github/actions/.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    groups:
+      web:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: /desktop
+    schedule:
+      interval: weekly
+    groups:
+      desktop:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

@@ -58,7 +58,9 @@ def test_agent_column_migration_backfills_claude_code(tmp_path: Path) -> None:
     connection = connect(db_path)
     init_schema(connection)
     try:
-        assert connection.execute("SELECT agent FROM cli_usage").fetchone()["agent"] == "claude-code"
+        assert (
+            connection.execute("SELECT agent FROM cli_usage").fetchone()["agent"] == "claude-code"
+        )
         assert (
             connection.execute("SELECT agent FROM cli_usage_files").fetchone()["agent"]
             == "claude-code"
@@ -108,7 +110,9 @@ def _seed(conn, agent: str, model: str, tokens_in: int, tokens_out: int) -> None
     conn.commit()
 
 
-def test_agents_report_lists_every_source_even_when_absent(tmp_path: Path, conn, monkeypatch) -> None:
+def test_agents_report_lists_every_source_even_when_absent(
+    tmp_path: Path, conn, monkeypatch
+) -> None:
     """An undetected agent reports zeroes and a hint — it never disappears."""
     monkeypatch.setattr(claude_cli, "DEFAULT_CLAUDE_HOME", tmp_path / "no-claude")
     monkeypatch.setattr(CodexSource, "root", lambda self: tmp_path / "no-codex")

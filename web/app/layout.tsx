@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import UiScaleSync from "@/components/UiScaleSync";
 import { UI_SCALE_BOOT_SCRIPT } from "@/lib/uiScale";
 import "./globals.css";
 
@@ -42,6 +43,9 @@ export default function RootLayout({
         {/* Applies the saved interface size before first paint, so the app
             never renders at one scale and then jumps to another. */}
         <script dangerouslySetInnerHTML={{ __html: UI_SCALE_BOOT_SCRIPT }} />
+        {/* ...and puts it back if React rebuilds the root, which discards
+            anything the script above set on <html>. See UiScaleSync. */}
+        <UiScaleSync />
         {children}
       </body>
     </html>
