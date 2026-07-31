@@ -98,6 +98,42 @@ def test_chroma_fails_when_index_is_unreadable(healthy_vault: Path, monkeypatch)
     assert "corrupt" in by_name["chroma"].detail
 
 
+def test_chroma_retries_a_transient_open_failure(healthy_vault: Path, monkeypatch) -> None:
+    """First-launch race with the boot indexer must not be reported as FAIL.
+
+    Reproduced against the frozen backend: the very first /api/doctor of a
+    fresh vault raced the boot-time index thread creating the same chroma
+    directory, and the loser raised. Every later call succeeded. Telling a
+    brand-new user their index is corrupt while it is quietly building is the
+    wrong answer, so one retry decides it.
+    """
+    attempts = {"n": 0}
+
+    class FlakyCollection:
+        def count(self) -> int:
+            return 7
+
+    class FlakyIndex:
+        def __init__(self, *_args, **_kwargs) -> None:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("chroma directory is being created")
+
+        @property
+        def collection(self):
+            return FlakyCollection()
+
+    monkeypatch.setattr("backend.rag.index.VaultIndex", FlakyIndex)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    checks = run_checks(Settings(_vault_path=healthy_vault))
+    by_name = {check.name: check for check in checks}
+
+    assert attempts["n"] == 2, "the transient failure was not retried"
+    assert by_name["chroma"].status == "OK"
+    assert "7" in by_name["chroma"].detail
+
+
 def test_cli_doctor_exit_codes(healthy_vault: Path, tmp_path: Path, capsys) -> None:
     env_ok = tmp_path / "ok.env"
     env_ok.write_text(f"VAULT_PATH={healthy_vault}\n", encoding="utf-8")

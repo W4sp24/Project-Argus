@@ -20,6 +20,17 @@ connected to a backend.
 
 ### Fixed
 
+- **The packaged app could never index or search — the embedding model was
+  not importable.** The PyInstaller spec excluded `torch.distributed`,
+  `torch.testing` and `torchgen` to save disk, but sentence-transformers
+  imports all three at module scope, so `import sentence_transformers` raised
+  `ModuleNotFoundError` inside *every packaged build ever produced*. No
+  embedding model meant no indexing and no retrieval, independent of the
+  reindex wiring below. It survived undetected because the release gate only
+  asserted that `GET /api/search` returned HTTP 200, and a swallowed exception
+  returns 200 with an empty list — and because it cannot reproduce in a dev
+  checkout, which never goes through PyInstaller. The smoke test now
+  round-trips a real reindex and requires an actual search hit.
 - **Google Calendar was missing from the build.** CI installed only the
   `[rag]` extra, so PyInstaller froze a backend with no `google_auth_oauthlib`
   and users got a 501 telling them to run `pip install` — into an app with no

@@ -423,6 +423,48 @@ def main() -> int:
             # Forces chromadb + sentence-transformers + torch to actually load.
             status, body = _get(port, "/api/search?q=test", timeout=300)
             result.check("GET /api/search (torch)", status == 200, f"HTTP {status}")
+
+            # ...but a 200 proves almost nothing on its own, and that is not a
+            # hypothetical: the spec excluded torch.distributed, so
+            # `import sentence_transformers` raised inside every frozen build
+            # ever produced -- no embedding model, no indexing, no search --
+            # and this check still passed, because a swallowed exception
+            # returns 200 with an empty list. Round-trip a real reindex and
+            # require an actual hit, so "answers 200" can never again stand in
+            # for "retrieval works".
+            status, body = _post(port, "/api/index/reindex", timeout=600)
+            result.check("POST /api/index/reindex", status in (200, 202), f"HTTP {status}")
+
+            chunks, waited = 0, 0.0
+            while waited < 600:
+                status, body = _get(port, "/api/index/status", timeout=60)
+                if status != 200:
+                    break
+                try:
+                    payload = json.loads(body)
+                except (json.JSONDecodeError, TypeError):
+                    break
+                chunks = payload.get("chunks") or 0
+                if not payload.get("indexing"):
+                    break
+                time.sleep(2)
+                waited += 2
+            # The seeded vault always contains Welcome.md, so a working
+            # pipeline cannot legitimately produce zero chunks here.
+            result.check("  index:chunks written", chunks > 0, f"{chunks} chunks")
+
+            status, body = _get(port, "/api/search?q=Argus", timeout=300, limit=20_000)
+            hits = []
+            if status == 200:
+                try:
+                    hits = json.loads(body) or []
+                except (json.JSONDecodeError, TypeError):
+                    hits = []
+            result.check(
+                "  search:returns a real hit",
+                status == 200 and len(hits) > 0,
+                f"HTTP {status}, {len(hits)} hits",
+            )
     finally:
         proc.kill()
         proc.wait(timeout=10)
