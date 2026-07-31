@@ -15,20 +15,20 @@ test("adding a paper persists across reload, and deleting it removes it permanen
   await page.getByLabel("Paper title").fill("E2E Delete Me Paper");
   await page.getByLabel("Authors and venue").fill("E2E et al. · Test Conf 2026");
   await page.getByRole("button", { name: "+ ADD PAPER" }).click();
-  await expect(page.getByText("E2E Delete Me Paper")).toBeVisible();
+  await expect(page.getByText("E2E Delete Me Paper", { exact: true })).toBeVisible();
   await expect(page.getByText("E2E et al. · Test Conf 2026")).toBeVisible();
 
   await page.reload();
-  await expect(page.getByText("E2E Delete Me Paper")).toBeVisible();
+  await expect(page.getByText("E2E Delete Me Paper", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Delete E2E Delete Me Paper" }).click();
   const confirmDialog = page.getByRole("dialog", { name: "Delete E2E Delete Me Paper" });
   await expect(confirmDialog).toBeVisible();
   await confirmDialog.getByRole("button", { name: "DELETE" }).click();
-  await expect(page.getByText("E2E Delete Me Paper")).not.toBeVisible();
+  await expect(page.getByText("E2E Delete Me Paper", { exact: true })).not.toBeVisible();
 
   await page.reload();
-  await expect(page.getByText("E2E Delete Me Paper")).not.toBeVisible();
+  await expect(page.getByText("E2E Delete Me Paper", { exact: true })).not.toBeVisible();
 });
 
 test("cycling a paper's status persists across reload", async ({ page }) => {
@@ -61,10 +61,10 @@ test("adding a highlight persists across reload, and deleting it removes it perm
   const highlightInput = page.getByLabel("Add a highlight");
   await highlightInput.fill("E2E highlight — self-attention is O(1) sequential ops.");
   await highlightInput.press("Enter");
-  await expect(page.getByText("E2E highlight — self-attention is O(1) sequential ops.")).toBeVisible();
+  await expect(page.getByText("E2E highlight — self-attention is O(1) sequential ops.", { exact: true })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByText("E2E highlight — self-attention is O(1) sequential ops.")).toBeVisible();
+  await expect(page.getByText("E2E highlight — self-attention is O(1) sequential ops.", { exact: true })).toBeVisible();
 
   const row = page.locator("li", { hasText: "E2E highlight — self-attention is O(1) sequential ops." });
   await row.hover();
@@ -72,8 +72,8 @@ test("adding a highlight persists across reload, and deleting it removes it perm
   const confirmDialog = page.getByRole("dialog", { name: "Delete highlight" });
   await expect(confirmDialog).toBeVisible();
   await confirmDialog.getByRole("button", { name: "DELETE" }).click();
-  await expect(page.getByText("E2E highlight — self-attention is O(1) sequential ops.")).not.toBeVisible();
+  await expect(page.getByText("E2E highlight — self-attention is O(1) sequential ops.", { exact: true })).not.toBeVisible();
 
   await page.reload();
-  await expect(page.getByText("E2E highlight — self-attention is O(1) sequential ops.")).not.toBeVisible();
+  await expect(page.getByText("E2E highlight — self-attention is O(1) sequential ops.", { exact: true })).not.toBeVisible();
 });

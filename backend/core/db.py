@@ -143,7 +143,15 @@ CREATE INDEX IF NOT EXISTS idx_quick_links_sort_order ON quick_links(sort_order)
 def connect(db_path: Path) -> sqlite3.Connection:
     """Open (creating if needed) the Argus database at ``db_path``."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # 30s, not the sqlite3 default of 5. WAL lets readers and one writer run
+    # together, but writers still serialise, and this database has a writer the
+    # user never sees: the boot-time auto-index/watch thread (backend/main.py)
+    # rewrites state whenever the vault changes. Five seconds was short enough
+    # that a request landing during that work got `sqlite3.OperationalError:
+    # database is locked` instead of waiting its turn -- surfacing as a 500
+    # from /api/agenda and an empty task list on the dashboard, which is what
+    # made the e2e task specs flaky.
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
