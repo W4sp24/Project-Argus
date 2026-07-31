@@ -26,6 +26,20 @@ jobs:
 
       - uses: ./.github/actions/python-env
 
+      # A headless Linux runner has no OS keyring at all, so keyring.set_password
+      # raises and seven tests that legitimately round-trip a real secret fail
+      # for a reason that says nothing about this code -- as does doctor's
+      # keyring probe in the smoke check below. keyrings.alt supplies a real
+      # file-backed backend, so those tests still genuinely store, read back
+      # and delete rather than being skipped. Windows is left alone: it has
+      # the real backend, and it is the platform that ships.
+      - name: Provide a headless keyring backend
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          pip install keyrings.alt
+          echo "PYTHON_KEYRING_BACKEND=keyrings.alt.file.PlaintextKeyring" >> "$GITHUB_ENV"
+
       # Repo-wide, with no allow-list: a package added tomorrow is linted
       # from its first commit rather than whenever someone remembers to
       # extend a path list here.
@@ -34,19 +48,6 @@ jobs:
 
       - name: Test
         run: pytest -q
-
-      # A headless Linux runner has no OS keyring, so doctor's probe would
-      # WARN and fail the smoke check below for a reason that says nothing
-      # about this code. keyrings.alt supplies a real file-backed backend, so
-      # the entry-point resolution that check exists to test is still
-      # genuinely exercised. Windows is left entirely alone -- it has the
-      # real backend, and it is the platform that ships.
-      - name: Provide a headless keyring backend
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          pip install keyrings.alt
-          echo "PYTHON_KEYRING_BACKEND=keyrings.alt.file.PlaintextKeyring" >> "$GITHUB_ENV"
 
       # smoke_backend.py takes the plain module as well as the frozen exe.
       # Thirty seconds here catches the broken import chains that would
