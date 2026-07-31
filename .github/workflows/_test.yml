@@ -22,7 +22,7 @@ jobs:
     runs-on: ${{ inputs.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/python-env
 
@@ -59,9 +59,9 @@ jobs:
     runs-on: ${{ inputs.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -98,11 +98,11 @@ jobs:
       # path works for both.
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw-browsers
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/python-env
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -119,7 +119,7 @@ jobs:
 
       # Keyed on the resolved version, not the lockfile hash: the browser
       # bundle only changes when Playwright itself does.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.pw-browsers
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
@@ -136,7 +136,7 @@ jobs:
         env:
           ARGUS_PYTHON: python
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report-${{ inputs.os }}
