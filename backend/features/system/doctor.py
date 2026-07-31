@@ -6,6 +6,7 @@ connector waiting on credentials), or FAIL (something the user must fix).
 
 from __future__ import annotations
 
+import time
 import uuid
 
 from pydantic import BaseModel
@@ -110,13 +111,28 @@ def _check_chroma(settings: Settings) -> Check:
             status="WARN",
             detail="chromadb not installed — `pip install -e .[rag]` enables chat/RAG",
         )
-    try:
-        from backend.rag.index import VaultIndex
+    # Retried once, deliberately. On a first launch the boot indexer is opening
+    # this same chroma directory on its own thread, and two clients racing to
+    # create it makes the loser raise -- reproducibly, on the very first
+    # /api/doctor of a fresh vault and never again. That is a transient
+    # collision, not a broken install, and reporting FAIL for it would tell a
+    # brand-new user their index is corrupt while it is quietly building.
+    # A second failure half a second later is real.
+    from backend.rag.index import VaultIndex
 
-        index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
-        count = index.collection.count()
-    except Exception as exc:
-        return Check(name="chroma", status="FAIL", detail=f"index unreadable: {exc}")
+    count = None
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
+            count = index.collection.count()
+            break
+        except Exception as exc:  # noqa: BLE001 - chromadb raises many types
+            last_error = exc
+            if attempt == 0:
+                time.sleep(0.5)
+    if count is None:
+        return Check(name="chroma", status="FAIL", detail=f"index unreadable: {last_error}")
     if count > 0:
         return Check(name="chroma", status="OK", detail=f"{count} chunks indexed")
     if _vault_has_indexable_files(settings):

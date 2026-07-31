@@ -222,9 +222,31 @@ datas += collect_data_files("transformers", include_py_files=False)
 hiddenimports += collect_submodules("transformers.models.bert")
 binaries += collect_dynamic_libs("tokenizers")
 
+# --- scipy / scikit-learn --------------------------------------------------
+# scipy >=1.15 vendors array_api_compat under scipy/_external/ and reaches its
+# backends (numpy.fft and friends) through importlib, which static analysis
+# cannot follow: the frozen build raised
+# "No module named 'scipy._external.array_api_compat.numpy.fft'" the moment
+# sentence-transformers was imported.
+#
+# collect_submodules("scipy") alone does NOT fix that, which is the subtle part.
+# Walking scipy tries to import scipy._external.array_api_compat.dask.array,
+# dask is an optional backend nobody installed, the ModuleNotFoundError makes
+# PyInstaller abandon that subtree, and all 75 _external modules vanish from an
+# otherwise 1002-module collection -- with only a WARNING. Naming the subpackage
+# explicitly collects it despite the same dask warning. Verified by comparing
+# both calls directly.
+hiddenimports += collect_submodules("scipy")
+hiddenimports += collect_submodules("scipy._external")
+hiddenimports += collect_submodules("sklearn")
+datas += collect_data_files("scipy", include_py_files=False)
+datas += collect_data_files("sklearn", include_py_files=False)
+
 # --- torch -----------------------------------------------------------------
-# Never collect_all('torch'): it drags in include/, test/, torchgen/ and .lib
-# import libraries -- +200MB of dead weight and a 10-minute analysis.
+# Never collect_all('torch'): it drags in include/ and .lib import libraries --
+# dead weight and a much slower analysis. (torchgen and torch.distributed used
+# to be excluded here for the same reason; see the excludes list for why they
+# are not any more -- sentence-transformers imports both.)
 binaries += collect_dynamic_libs("torch")
 
 # --- document extraction ---------------------------------------------------
@@ -257,9 +279,21 @@ excludes = [
     "PySide2",
     "PySide6",
     "wx",
-    "torch.distributed",
-    "torch.testing",
-    "torchgen",
+    # torch.distributed / torch.testing / torchgen are deliberately NOT excluded.
+    # sentence-transformers imports all three at module scope, so excluding them
+    # made `import sentence_transformers` raise ModuleNotFoundError inside the
+    # frozen app -- no embedding model, therefore no indexing and no search, in
+    # every packaged build since this spec was written. Verified by importing
+    # sentence_transformers and intersecting sys.modules against this list.
+    #
+    # It stayed invisible because the only gate was `GET /api/search` returning
+    # 200, and a swallowed exception returns 200 with an empty list. The smoke
+    # test now round-trips a real reindex and requires an actual hit, and
+    # `--selftest-imports` fails the build outright -- that is what caught it.
+    #
+    # They cost disk (torchgen especially), which is what the size guard in
+    # release.yml is for. A smaller installer that cannot answer a search is
+    # not a trade worth making.
     "torch.utils.tensorboard",
     "pytest",
 ]
