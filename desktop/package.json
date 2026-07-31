@@ -22,7 +22,7 @@
     "cross-env": "^7.0.3",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
-    "png-to-ico": "^2.1.8",
+    "png-to-ico": "^3.0.2",
     "sharp": "^0.33.5"
   }
 }
