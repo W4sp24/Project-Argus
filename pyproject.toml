@@ -55,7 +55,7 @@ rag = [
 gcal = [
     "google-api-python-client>=2.100",
     "google-auth>=2.30",
-    "google-auth-oauthlib>=1.2",
+    "google-auth-oauthlib>=1.4.0",
 ]
 dev = [
     "pytest>=8.2",
