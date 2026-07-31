@@ -16,8 +16,12 @@ export default defineConfig({
   // The list reporter writes nothing to disk, so CI's "upload playwright-report
   // on failure" step had never once produced an artifact -- a failed e2e run
   // could only be read by someone logged in with access to the raw job log.
-  // The HTML report is what makes a CI failure diagnosable at all.
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
+  // The html report fixes that; the github reporter turns each failure into a
+  // run-summary annotation, which is readable *without* signing in at all --
+  // the same reasoning as desktop/tests/smoke_backend.py's annotate().
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["html", { open: "never" }]]
+    : [["list"]],
   use: {
     baseURL: "http://127.0.0.1:3100",
   },
