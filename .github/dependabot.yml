@@ -8,14 +8,17 @@ version: 2
 # opened fifteen pull requests at once against a repo that had never run
 # Dependabot before:
 #
-#  1. Groups carry *every* update type, majors included. Restricting a group to
-#     minor+patch does not exclude majors, it gives each one its own PR -- so a
-#     backlog of accumulated majors arrives as a flood rather than one branch.
-#  2. Major bumps of the four dependencies that define the shipped app are
-#     ignored outright. Electron, electron-builder, Next and React majors are
-#     migrations with breaking changes, scheduled and tested on their own; an
-#     automated PR for one is noise at best and a trap at worst, because a green
-#     check does not mean the packaged app still launches.
+#  1. npm majors are ignored outright, for every package. Restricting a group to
+#     minor+patch does not exclude majors, it gives each one its own PR -- which
+#     is how a backlog arrived as fifteen branches. But letting the group carry
+#     majors instead is worse: the very next run proposed tailwindcss 3 -> 4, a
+#     ground-up rewrite, together with eslint 8 -> 10 (flat config, incompatible
+#     with the pinned eslint-config-next 14) and typescript 5 -> 7, bundled into
+#     one PR where a single bad major poisons the whole group. A major here is a
+#     migration to schedule, not a PR to merge.
+#  2. github-actions majors DO come through, ungrouped by update type. Action
+#     majors are mostly runtime bumps, and refusing them means sitting on
+#     deprecation warnings when GitHub retires a Node version under the runners.
 #
 # Security updates are not governed by this file and still arrive regardless of
 # the ignore rules below.
@@ -40,13 +43,7 @@ updates:
       interval: weekly
     open-pull-requests-limit: 3
     ignore:
-      - dependency-name: "next"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "eslint-config-next"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react-dom"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
     groups:
       web:
@@ -58,9 +55,7 @@ updates:
       interval: weekly
     open-pull-requests-limit: 3
     ignore:
-      - dependency-name: "electron"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "electron-builder"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
     groups:
       desktop:
