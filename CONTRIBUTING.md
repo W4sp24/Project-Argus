@@ -2,17 +2,36 @@
 
 ## Branching model
 
-- `main` is the released line. Releases are cut by pushing a `v*` tag (the tag-driven release workflow in `.github/workflows/release.yml`).
-- `v0.2` is the long-lived **integration branch** for the next release line. All new feature work branches off `v0.2` and merges back into `v0.2` via a reviewed pull request.
-- **Start a feature:**
-  ```bash
-  git checkout v0.2
-  git pull --ff-only origin v0.2
-  git checkout -b feature/<short-name>
-  ```
-- Open a PR from `feature/<short-name>` **into `v0.2`** (never into `main`). Get it reviewed and merged.
-- `v0.2` merges into `main` **only at release time**, after which a `v0.2.x` tag is pushed to trigger the release build.
-- **Naming note:** feature branches are flat (`feature/<name>`), NOT nested under the integration branch (e.g. not `v0.2/feature/<name>`). Git stores refs as file paths, so a branch literally named `v0.2` makes any `v0.2/...` ref impossible to create. Flat `feature/*` also matches the repo's existing convention.
+`main` is the only long-lived branch. Feature branches are short-lived, merge
+into `main` through a pull request, and are deleted after.
+
+```bash
+git checkout main
+git pull --ff-only origin main
+git checkout -b feature/<short-name>
+# work, commit
+git push -u origin feature/<short-name>   # then open a PR into main
+```
+
+- **`main` is protected.** A ruleset requires a pull request and green
+  `test / python`, `test / web` and `test / e2e` before anything merges, and
+  blocks force-pushes and deletion. Pushing straight to `main` is refused, so
+  the PR is the only way in.
+- **Releases are cut from `main`** by pushing a `v*` tag — see the release
+  scenario under CI/CD below.
+- **Branch names are flat**: `feature/<name>`, `fix/<name>`, `docs/<name>`.
+  Git stores refs as file paths, so a branch literally named `v0.2` would make
+  any `v0.2/...` ref impossible to create — hence no nesting under a release
+  name.
+- **Delete the branch after merging.** GitHub does this automatically for
+  branches whose commits reach `main`.
+
+There is **no integration branch.** This repo used to route feature work
+through a long-lived `v0.2` branch that merged into `main` only at release
+time. That branch no longer exists, and the model it belonged to no longer
+holds: `main` is now gated by required checks and rehearses the full Windows
+packaging build on every merge, so an integration branch would only delay
+the point at which work meets that gate.
 
 ## CI/CD
 
@@ -93,9 +112,9 @@ on every merge means tagging is a path already walked. It leaves an
 **Do not tag until you have seen `main` go green**, including the `package`
 job.
 
-Note that `push` is wired to `main` only. Merges into the `v0.2` integration
-branch get per-PR Linux coverage but no Windows run and no packaging rehearsal
-until `v0.2` reaches `main`.
+Note that `push` is wired to `main` only, which is the whole reason there is no
+integration branch: work merged anywhere else would collect no Windows run and
+no packaging rehearsal at all.
 
 ### Scenario 4 — cutting a release
 
