@@ -43,6 +43,22 @@ logger = logging.getLogger("argus.rag")
 
 DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
+
+def _version() -> str:
+    """The installed package version, for ``/docs`` and the OpenAPI schema.
+
+    Read from installed metadata rather than written here as a literal: the
+    hardcoded one said 0.1.0 while v0.2.0 was the shipped tag, because nothing
+    kept them in sync. Falling back rather than raising keeps the app bootable
+    from a source tree that was never pip-installed (some test runners).
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("argus")
+    except PackageNotFoundError:
+        return "0.0.0+dev"
+
 # The desktop shell serves Next on a dynamically-allocated port, so it passes
 # its exact origin through ARGUS_ALLOWED_ORIGINS (comma-separated). Never "*":
 # the vault is readable through these routes.
@@ -132,7 +148,7 @@ def create_app(
             if scheduler is not None:
                 scheduler.shutdown(wait=False)
 
-    app = FastAPI(title="Argus", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Argus", version=_version(), lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,

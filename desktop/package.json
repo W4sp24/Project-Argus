@@ -1,7 +1,7 @@
 {
   "name": "argus-desktop",
   "productName": "Argus",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Argus desktop shell",
   "main": "main.js",

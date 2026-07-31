@@ -108,6 +108,55 @@ if (fs.existsSync(frozenExe)) {
   }
 }
 
+/**
+ * The same staleness trap, on the dashboard side — and this one actually bit.
+ *
+ * `resources/web` is only rebuilt when this script builds it, so the
+ * `--no-build` path (and anyone packaging from an existing staging dir) can
+ * ship a bundle older than `web/`. That is how v0.2.0 went out with a
+ * dashboard predating its own last commit: the staged BUILD_ID was stamped
+ * hours before the final UI work landed, and nothing compared the two.
+ *
+ * Only meaningful when we are NOT about to rebuild — if `npm run build` is
+ * about to run, the bundle is about to be fresh by definition.
+ */
+function newestWebSourceMtime() {
+  const roots = ["app", "components", "lib", "e2e", "tailwind.config.ts", "next.config.mjs"];
+  let newest = 0;
+  const walk = (current) => {
+    if (!fs.existsSync(current)) return;
+    const stat = fs.statSync(current);
+    if (!stat.isDirectory()) {
+      newest = Math.max(newest, stat.mtimeMs);
+      return;
+    }
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name === ".next") continue;
+      walk(path.join(current, entry.name));
+    }
+  };
+  for (const root of roots) walk(path.join(web, root));
+  return newest;
+}
+
+const stagedBuildId = path.join(resources, "web", ".next", "BUILD_ID");
+if (skipBuild && fs.existsSync(stagedBuildId)) {
+  const stagedAt = fs.statSync(stagedBuildId).mtimeMs;
+  const sourceAt = newestWebSourceMtime();
+  if (sourceAt > stagedAt) {
+    const behind = Math.round((sourceAt - stagedAt) / 60000);
+    const message =
+      `resources/web is ${behind} min older than web/ sources — the packaged ` +
+      `app would ship a stale dashboard. Re-run this script without --no-build.`;
+    if (process.env.GITHUB_ACTIONS) {
+      console.error(message);
+      annotate(message);
+      process.exit(1);
+    }
+    console.warn(`\nWARNING: ${message}\n`);
+  }
+}
+
 // --- Next ------------------------------------------------------------------
 
 if (!skipBuild) {
