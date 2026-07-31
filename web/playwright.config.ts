@@ -28,11 +28,20 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 90_000,
     },
+    // A production build, not `next dev`. The dev server compiles routes on
+    // demand and carries the webpack compiler and HMR runtime in-process, and
+    // it dies partway through a full run: one test hangs for ~16s and every
+    // test after it fails in a uniform ~3.2s with ERR_CONNECTION_REFUSED, with
+    // the death point moving between runs. That made the suite unusable as a
+    // gate no matter how many specs were correct. A built server also hydrates
+    // without on-demand compilation (the race that made email capture flaky)
+    // and enforces the stricter production CSP -- no 'unsafe-eval' -- which is
+    // what actually ships. Costs one build per run.
     {
-      command: "npm run dev -- -p 3100",
+      command: "npm run build && npm run start -- -p 3100",
       url: "http://127.0.0.1:3100",
       reuseExistingServer: false,
-      timeout: 120_000,
+      timeout: 300_000,
     },
   ],
 });
