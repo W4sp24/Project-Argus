@@ -1,6 +1,6 @@
 """Tests for flashcard deck generation, due-queue ordering, and FSRS grading."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -78,7 +78,7 @@ def test_due_cards_ordering_new_cards_and_soonest_due_first(tmp_path: Path, conn
     vault = _vault(tmp_path)
     deck_id = generate_deck(vault, conn, "CS201")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     all_due = due_cards(conn, deck_id, now=now)
     assert len(all_due) == 3, "ungraded cards must be due immediately"
 
@@ -95,7 +95,7 @@ def test_grading_increases_due_at_on_successive_good_grades(tmp_path: Path, conn
     deck_id = generate_deck(vault, conn, "CS201")
     card_id = due_cards(conn, deck_id)[0].id
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     intervals = []
     for _ in range(3):
         result = grade_card(conn, deck_id, card_id, "good", now=now)
@@ -113,12 +113,12 @@ def test_grading_again_shrinks_interval_relative_to_prior_good_grades(tmp_path: 
     deck_id = generate_deck(vault, conn, "CS201")
     card_id = due_cards(conn, deck_id)[0].id
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for _ in range(2):
         result = grade_card(conn, deck_id, card_id, "good", now=now)
         now = datetime.fromisoformat(result.due_at)
 
-    good_interval = (now - datetime.now(timezone.utc)).total_seconds()
+    good_interval = (now - datetime.now(UTC)).total_seconds()
 
     again_result = grade_card(conn, deck_id, card_id, "again", now=now)
     again_interval = (datetime.fromisoformat(again_result.due_at) - now).total_seconds()
@@ -180,7 +180,7 @@ def test_api_generate_list_due_and_grade_roundtrip(client: TestClient) -> None:
         f"/api/flashcards/decks/{created['id']}/cards/{card_id}/grade", json={"grade": "good"}
     ).json()
     assert graded["card_id"] == card_id
-    assert graded["due_at"] > datetime.now(timezone.utc).isoformat()
+    assert graded["due_at"] > datetime.now(UTC).isoformat()
 
     due_after = client.get(f"/api/flashcards/decks/{created['id']}/due").json()
     assert card_id not in [c["id"] for c in due_after]

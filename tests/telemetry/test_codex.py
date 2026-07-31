@@ -34,7 +34,10 @@ def _token_count(
         {
             "timestamp": ts,
             "type": "event_msg",
-            "payload": {"type": "token_count", "info": {key: usage, "model_context_window": 272000}},
+            "payload": {
+                "type": "token_count",
+                "info": {key: usage, "model_context_window": 272000},
+            },
         }
     )
 
@@ -137,10 +140,16 @@ def test_falls_back_to_last_token_usage(tmp_path: Path) -> None:
         [
             _turn_context("2026-07-20T09:00:00.000Z", "gpt-5-codex"),
             _token_count(
-                "2026-07-20T09:00:01.000Z", input_tokens=300, cached=100, output=40, cumulative=False
+                "2026-07-20T09:00:01.000Z", input_tokens=300,
+                cached=100,
+                output=40,
+                cumulative=False,
             ),
             _token_count(
-                "2026-07-20T09:01:00.000Z", input_tokens=300, cached=100, output=40, cumulative=False
+                "2026-07-20T09:01:00.000Z", input_tokens=300,
+                cached=100,
+                output=40,
+                cumulative=False,
             ),
         ],
     )

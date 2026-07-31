@@ -57,10 +57,12 @@ async def _probe(entry: dict[str, Any], token: str | None) -> McpProbeResult:
         headers = dict(entry.get("headers") or {})
         if token:
             headers.setdefault("Authorization", f"Bearer {token}")
-        async with streamablehttp_client(url, headers=headers) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                listed = await session.list_tools()
+        async with (
+            streamablehttp_client(url, headers=headers) as (read, write, _),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            listed = await session.list_tools()
         names = [tool.name for tool in listed.tools]
         return McpProbeResult(
             ok=True,
@@ -86,10 +88,9 @@ async def _probe(entry: dict[str, Any], token: str | None) -> McpProbeResult:
         # own shell.
         env={**os.environ, **{str(k): str(v) for k, v in (entry.get("env") or {}).items()}},
     )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            listed = await session.list_tools()
+    async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        listed = await session.list_tools()
     names = [tool.name for tool in listed.tools]
     return McpProbeResult(
         ok=True,

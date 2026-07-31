@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fsrs import Card as FsrsCard
@@ -226,7 +226,7 @@ def delete_deck(conn: sqlite3.Connection, deck_id: int) -> int:
 def _parse_dt(value: str) -> datetime:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -254,7 +254,7 @@ def due_cards(conn: sqlite3.Connection, deck_id: int, now: datetime | None = Non
     A card with no review row yet is "new" and due as of deck creation
     (i.e. immediately).
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     deck = load_deck(conn, deck_id)
     latest = _latest_reviews(conn, deck_id)
     deck_created = _parse_dt(deck["created_at"])
@@ -269,7 +269,18 @@ def due_cards(conn: sqlite3.Connection, deck_id: int, now: datetime | None = Non
             due_dt = _parse_dt(due_at)
             state = State(row["state"]).name
         if due_dt <= now:
-            scored.append((due_dt, DueCard(id=card["id"], front=card["front"], back=card["back"], due_at=due_at, state=state)))
+            scored.append(
+                (
+                    due_dt,
+                    DueCard(
+                        id=card["id"],
+                        front=card["front"],
+                        back=card["back"],
+                        due_at=due_at,
+                        state=state,
+                    ),
+                )
+            )
 
     scored.sort(key=lambda pair: pair[0])
     return [item for _, item in scored]
@@ -310,7 +321,7 @@ def grade_card(
     if not any(card["id"] == card_id for card in deck["cards"]):
         raise FlashcardsError(f"no card {card_id} in deck {deck_id}")
 
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     row = _latest_reviews(conn, deck_id).get(card_id)
     if row is None:
         card = FsrsCard()
