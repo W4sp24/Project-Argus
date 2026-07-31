@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,12 @@ from backend.rag.extract import extract_blocks
 from backend.vault.paths import is_indexable
 
 logger = logging.getLogger("argus.rag")
+
+TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokenize(text: str) -> list[str]:
+    return TOKEN_RE.findall(text.lower())
 
 # A HuggingFace repo id by default (downloaded on first use). The packaged
 # desktop app pre-bakes the weights and points this at an absolute path so a
@@ -34,7 +41,14 @@ EMBED_BATCH = 64
 # the old shape gets rebuilt instead of silently degrading retrieval forever.
 # Stored in the chroma collection's metadata; see ``schema_stale`` for why a
 # plain ``get_or_create_collection(metadata=...)`` bump is not enough.
-SCHEMA_VERSION = 1
+#
+# Bumped 1 -> 2 for the retrieval-quality fix: chunking switched from
+# word-window to line-window (chunk text now keeps newlines and starts with
+# its own heading), chunk.meta gained "breadcrumb", and "tags" now unions
+# inline #tags with frontmatter tags. An index built under version 1 has
+# run-on, heading-less chunk text and misses every inline tag, so it must be
+# rebuilt rather than mixed in with new-shape chunks.
+SCHEMA_VERSION = 2
 _COLLECTION_METADATA = {"hnsw:space": "cosine", "schema_version": SCHEMA_VERSION}
 
 
@@ -72,6 +86,25 @@ class VaultIndex:
         self._taxonomy = taxonomy or active_taxonomy()
         self._model: Any = None
         self._collection: Any = None
+        # `all_chunks()`/`bm25()` cache: a full `collection.get()` of every
+        # document+metadata in the vault is O(whole vault), and retrieve()
+        # used to pay that cost on every single query to rebuild the BM25
+        # corpus. `_version` bumps on every mutation (upsert/delete/recreate);
+        # the cache is valid as long as (_version, collection.count()) still
+        # matches what was cached — cheap to check, and catches any mutation
+        # that goes through this class's own methods.
+        self._version = 0
+        self._chunks_cache: list[dict] | None = None
+        self._chunks_cache_key: tuple[int, int] | None = None
+        self._bm25_cache: Any = None
+        self._bm25_cache_key: tuple[int, int] | None = None
+
+    def _invalidate_cache(self) -> None:
+        self._version += 1
+        self._chunks_cache = None
+        self._chunks_cache_key = None
+        self._bm25_cache = None
+        self._bm25_cache_key = None
 
     def _client(self) -> Any:
         import chromadb
@@ -118,6 +151,7 @@ class VaultIndex:
         self._collection = client.get_or_create_collection(
             COLLECTION, metadata=dict(_COLLECTION_METADATA)
         )
+        self._invalidate_cache()
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         if self._model is None:
@@ -132,6 +166,7 @@ class VaultIndex:
     def delete_file(self, rel_path: str) -> None:
         """Remove every chunk of one vault-relative file from the index."""
         self.collection.delete(where={"path": rel_path})
+        self._invalidate_cache()
 
     def upsert_file(
         self, vault_path: Path, rel_path: str, *, errors: list[str] | None = None
@@ -158,6 +193,7 @@ class VaultIndex:
             embeddings=self._embed([chunk.text for chunk in chunks]),
             metadatas=[chunk.meta for chunk in chunks],
         )
+        self._invalidate_cache()
         return len(chunks)
 
     def reindex_all(self, vault_path: Path) -> ReindexResult:
@@ -225,14 +261,50 @@ class VaultIndex:
         return hits
 
     def all_chunks(self) -> list[dict]:
-        """Every stored chunk (for the BM25 corpus)."""
-        if self.collection.count() == 0:
-            return []
-        result = self.collection.get(include=["documents", "metadatas"])
-        return [
-            {"text": document, "meta": meta}
-            for document, meta in zip(result["documents"], result["metadatas"], strict=True)
-        ]
+        """Every stored chunk (for the BM25 corpus). Memoised — see ``__init__``.
+
+        A real vault's ``collection.get()`` of every document+metadata is
+        O(whole vault); ``retrieve()`` used to call this once per query, which
+        made search cost grow with vault size instead of query cost. The
+        cache key is ``(_version, collection.count())`` so any mutation this
+        class knows about (upsert/delete/recreate) forces a fresh fetch, and a
+        stray external mutation would still be caught by the count changing.
+        """
+        count = self.collection.count()
+        key = (self._version, count)
+        if self._chunks_cache is not None and self._chunks_cache_key == key:
+            return self._chunks_cache
+        if count == 0:
+            chunks: list[dict] = []
+        else:
+            result = self.collection.get(include=["documents", "metadatas"])
+            chunks = [
+                {"text": document, "meta": meta}
+                for document, meta in zip(result["documents"], result["metadatas"], strict=True)
+            ]
+        self._chunks_cache = chunks
+        self._chunks_cache_key = key
+        return chunks
+
+    def bm25(self) -> Any:
+        """Cached ``rank_bm25.BM25Okapi`` over :meth:`all_chunks`, or ``None`` when empty.
+
+        Rebuilt only when the underlying corpus actually changed (same cache
+        key as ``all_chunks``) — the whole point being that repeated queries
+        against an unchanged index build the BM25 corpus exactly once.
+        """
+        chunks = self.all_chunks()
+        key = self._chunks_cache_key
+        if self._bm25_cache is not None and self._bm25_cache_key == key:
+            return self._bm25_cache
+        bm25 = None
+        if chunks:
+            from rank_bm25 import BM25Okapi
+
+            bm25 = BM25Okapi([_tokenize(chunk["text"]) for chunk in chunks])
+        self._bm25_cache = bm25
+        self._bm25_cache_key = key
+        return bm25
 
 
 def index_chunks(index: VaultIndex, rel_path: str, chunks: list[Chunk]) -> None:
@@ -245,3 +317,4 @@ def index_chunks(index: VaultIndex, rel_path: str, chunks: list[Chunk]) -> None:
         embeddings=index._embed([chunk.text for chunk in chunks]),
         metadatas=[chunk.meta for chunk in chunks],
     )
+    index._invalidate_cache()
