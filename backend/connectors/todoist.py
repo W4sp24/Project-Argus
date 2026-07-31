@@ -67,7 +67,16 @@ def list_tasks(api=None) -> list[TaskItem]:
     `list_tasks_safe` for callers that must degrade instead of raise.
     """
     if api is None:
-        token = _stored_token()
+        try:
+            token = _stored_token()
+        except Exception as exc:  # noqa: BLE001 - keyring backends raise many types
+            # An unreadable keyring is a connector that cannot be used, not a
+            # crash: without this the error is not `ConnectorUnavailable`, so
+            # it sails through `list_tasks_safe` and turns GET /api/agenda into
+            # a 500 -- a dashboard with no tasks at all because one optional
+            # connector could not read a token. `connection_state` above
+            # already makes the same judgement.
+            raise ConnectorUnavailable(f"the OS keyring could not be read: {exc}") from exc
         if token is None:
             return []
         try:
