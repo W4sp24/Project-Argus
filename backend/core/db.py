@@ -137,6 +137,41 @@ CREATE TABLE IF NOT EXISTS quick_links (
     sort_order INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_quick_links_sort_order ON quick_links(sort_order);
+
+CREATE TABLE IF NOT EXISTS automation_widgets (
+    slug                       TEXT PRIMARY KEY,
+    title                      TEXT,
+    kind                       TEXT NOT NULL
+                               CHECK (kind IN
+                                   ('metric', 'list', 'table', 'timeline', 'text', 'chart')),
+    payload                    TEXT NOT NULL,
+    last_seen_at               TEXT,
+    expected_interval_seconds  INTEGER,
+    created_at                 TEXT NOT NULL,
+    position                   INTEGER,
+    pinned                     INTEGER NOT NULL DEFAULT 0,
+    hidden                     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+    id            TEXT PRIMARY KEY,
+    workflow_id   TEXT NOT NULL,
+    workflow_name TEXT,
+    started_at    TEXT NOT NULL,
+    finished_at   TEXT,
+    status        TEXT NOT NULL
+                  CHECK (status IN ('running', 'ok', 'failed', 'timeout', 'unresolved')),
+    mode          TEXT CHECK (mode IS NULL OR mode IN ('ack', 'status', 'widget')),
+    message       TEXT,
+    execution_id  TEXT,
+    payload       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_started_at ON automation_runs(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS automation_prefs (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
