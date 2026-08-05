@@ -85,6 +85,9 @@ export default function DashboardPage() {
           <Link href="/review" className="transition-colors hover:text-ink-bright">
             → REVIEW
           </Link>
+          <Link href="/automations" className="transition-colors hover:text-ink-bright">
+            → AUTOMATIONS
+          </Link>
         </nav>
       </div>
     </>

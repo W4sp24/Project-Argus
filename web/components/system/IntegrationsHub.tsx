@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
@@ -15,6 +16,7 @@ import {
   useMcpSnippets,
   type ConnectorInfo,
   type McpServerInfo,
+  useAutomations,
 } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/relativeTime";
 
@@ -110,6 +112,7 @@ export default function IntegrationsHub() {
   const { data, isLoading, mutate } = useIntegrations();
   const { data: sessions } = useJournalSessions();
   const { data: snippets } = useMcpSnippets();
+  const { data: automations } = useAutomations();
   const { show } = useToast();
   const { confirm, confirmDialog } = useConfirm();
 
@@ -241,6 +244,30 @@ export default function IntegrationsHub() {
               status="MANUAL"
               title="email capture"
               detail="paste-only by design — no inbox access, ever (§11)"
+            />
+            {/* n8n is registered on its own page rather than here: connecting
+                it is a four-step flow with two credentials pointing opposite
+                ways, which does not fit a card. But this hub is where people
+                look for "add an integration", so not naming it here made the
+                whole feature reachable only by guessing at the palette. */}
+            <Card
+              status={automations?.instance ? "WIRED" : "NOT CONNECTED"}
+              title="n8n automations"
+              detail={
+                automations?.instance
+                  ? `${automations.workflows.length} workflow${
+                      automations.workflows.length === 1 ? "" : "s"
+                    } tagged argus${automations.connected ? "" : " · n8n unreachable"}`
+                  : "run and display your own n8n workflows from Argus"
+              }
+              actions={
+                <Link
+                  href="/automations"
+                  className="font-mono text-meta uppercase tracking-[0.12em] text-[var(--ac)] hover:underline"
+                >
+                  {automations?.instance ? "MANAGE →" : "CONNECT →"}
+                </Link>
+              }
             />
           </div>
         )}
