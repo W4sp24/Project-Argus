@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Panel from "@/components/Panel";
 import PageHeader from "@/components/PageHeader";
+import TemplateGallery from "@/components/automations/TemplateGallery";
 import ConnectN8nDialog from "@/components/system/ConnectN8nDialog";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
@@ -249,14 +250,7 @@ export default function AutomationsPage() {
       </div>
 
       <div className="mt-4">
-        {tab === "GALLERY" && (
-          <Panel label="GALLERY">
-            <p className="text-label leading-relaxed text-ink-faint">
-              The template catalog isn&rsquo;t here yet — this tab lands with a later chunk of
-              automations work. Nothing is broken; there&rsquo;s just nothing to browse yet.
-            </p>
-          </Panel>
-        )}
+        {tab === "GALLERY" && <TemplateGallery onInstalled={() => void mutate()} />}
 
         {tab === "ACTIVE" && (
           <div className="flex flex-col gap-4">

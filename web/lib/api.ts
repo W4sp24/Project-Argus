@@ -1191,6 +1191,37 @@ export function patchAutomationWidget(
   );
 }
 
+/** A bundled n8n workflow template from the shipped gallery. */
+export interface AutomationTemplate {
+  id: string;
+  name: string;
+  description: string;
+  kind: "display" | "action";
+  widget_slug: string | null;
+  /** The connector module this template replaces, when it replaces one. */
+  replaces: string | null;
+  /** Credentials the user must grant in n8n — the one manual step by design. */
+  requires: string[];
+  installed: boolean;
+}
+
+export interface TemplateInstallResult {
+  workflow_id: string;
+  /** Where the user goes to grant the credential; installing cannot do it. */
+  open_in_n8n: string;
+}
+
+export function useAutomationTemplates() {
+  return useSWR<AutomationTemplate[]>("/api/automations/templates", fetcher);
+}
+
+export function installAutomationTemplate(templateId: string) {
+  return mutateJSON<TemplateInstallResult>(
+    `/api/automations/templates/${encodeURIComponent(templateId)}/install`,
+    undefined,
+  );
+}
+
 /** The inbound surface's configuration — never its token. */
 export interface ExternalSurfaceInfo {
   enabled: boolean;
