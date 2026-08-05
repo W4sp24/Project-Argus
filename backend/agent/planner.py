@@ -131,15 +131,15 @@ def _planner_context(
     settings: Settings, conn: sqlite3.Connection, instruction: str, model_label: str = MODEL
 ) -> str:
     """Assemble everything the planner needs into one user message."""
-    from backend.connectors import gcal, todoist
+    from backend.features.automations import sources
 
     tax = settings.taxonomy
     today = date.today()
     refresh_cache(conn, settings.vault_path, taxonomy=tax)
     buckets = bucketed_tasks(conn, today=today)
 
-    gcal_events, gcal_error = gcal.list_events_safe(today)
-    todoist_tasks, todoist_error = todoist.list_tasks_safe()
+    gcal_events, gcal_error = sources.calendar_events(conn, today)
+    todoist_tasks, todoist_error = sources.open_tasks(conn)
     events = [event.model_dump() for event in gcal_events]
     external = [task.model_dump() for task in todoist_tasks]
     connector_notes = [

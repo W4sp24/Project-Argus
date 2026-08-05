@@ -18,10 +18,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from backend.connectors import gcal
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.features.automations import sources
 from backend.vault.tasks import TaskItem, bucketed_tasks, parse_task_line, refresh_cache
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ def briefing_data(
             name: [task for task in items if note_visible(task.path)]
             for name, items in buckets.items()
         }
-    events, _gcal_error = gcal.list_events_safe(today)
+    events, _gcal_error = sources.calendar_events(conn, today)
     return BriefingData(
         date=today.isoformat(),
         events=events,

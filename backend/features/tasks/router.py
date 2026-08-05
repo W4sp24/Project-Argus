@@ -18,6 +18,7 @@ from backend.connectors import gcal, todoist
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.features.automations import sources
 from backend.vault import writer
 from backend.vault.errors import raise_http
 from backend.vault.tasks import TaskItem, bucket_of, bucketed_tasks, refresh_cache
@@ -75,17 +76,20 @@ def build_tasks_router(settings: Settings) -> APIRouter:
         try:
             refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn, today=target)
+            # Read the external sources while the connection is still open:
+            # they consult the automations widget store first and fall back to
+            # the native connectors, so they need it.
+            todoist_tasks, todoist_error = sources.open_tasks(conn)
+            events, gcal_error = sources.calendar_events(conn, target)
         finally:
             conn.close()
 
         vault_today = buckets["overdue"] + buckets["today"]
-        todoist_tasks, todoist_error = todoist.list_tasks_safe()
         external = [task for task in todoist_tasks if not task.done]
         due_external = [task for task in external if task.due and task.due <= target.isoformat()]
         day_tasks = vault_today + due_external
         top = day_tasks[:3] if day_tasks else buckets["week"][:3]
 
-        events, gcal_error = gcal.list_events_safe(target)
         connector_errors: dict[str, str] = {}
         if gcal_error:
             connector_errors["gcal"] = gcal_error
@@ -107,10 +111,10 @@ def build_tasks_router(settings: Settings) -> APIRouter:
         try:
             refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn)
+            todoist_tasks, _todoist_error = sources.open_tasks(conn)
         finally:
             conn.close()
         today = date.today()
-        todoist_tasks, _todoist_error = todoist.list_tasks_safe()
         for task in todoist_tasks:
             if not task.done:
                 buckets[bucket_of(task, today)].append(task)
