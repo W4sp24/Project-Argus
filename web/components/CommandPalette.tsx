@@ -3,8 +3,19 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/Toast";
-import { apiFetch, reindexVault, searchVault, useVault, type SearchResult } from "@/lib/api";
+import {
+  apiFetch,
+  reindexVault,
+  runAutomation,
+  searchVault,
+  useAutomations,
+  useVault,
+  type AutomationCard,
+  type SearchResult,
+} from "@/lib/api";
 import { useChat } from "@/lib/chat";
+import AutomationForm from "@/components/automations/AutomationForm";
+import WidgetRenderer from "@/components/automations/WidgetRenderer";
 import { MODE_ROUTES, type Mode } from "@/lib/mode";
 import { useUi } from "@/lib/ui";
 
@@ -188,6 +199,18 @@ export default function CommandPalette() {
   const [searching, setSearching] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Automations: the palette's two new modes. `formCard` holds the automation
+  // whose fields are being filled in; `detail` holds a returned widget being
+  // read. Both mirror searchMode's shape — the panel switches what it renders
+  // rather than opening a second overlay, which is what keeps one Escape
+  // contract across every mode.
+  const { data: automations, mutate: mutateAutomations } = useAutomations();
+  const [formCard, setFormCard] = useState<AutomationCard | null>(null);
+  const [running, setRunning] = useState(false);
+  const [detail, setDetail] = useState<{ title: string; kind: string; payload: unknown } | null>(
+    null,
+  );
+
   const vaultName = vault?.name ?? "vault";
 
   // Global shortcut — listener always mounted, UI only when open.
@@ -197,12 +220,23 @@ export default function CommandPalette() {
         event.preventDefault();
         setPaletteOpen(!paletteOpen);
       } else if (event.key === "Escape" && paletteOpen) {
+        // Same two-level contract search mode has: the first Escape backs out
+        // of a sub-mode, and only the second closes the palette. Losing a
+        // half-filled form to a stray Escape would be its own small betrayal.
+        if (detail) {
+          setDetail(null);
+          return;
+        }
+        if (formCard) {
+          setFormCard(null);
+          return;
+        }
         setPaletteOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [paletteOpen, setPaletteOpen]);
+  }, [paletteOpen, setPaletteOpen, formCard, detail]);
 
   // Focus management: remember the opener, trap focus in the input while
   // open (rows are arrow-key driven), restore focus on close.
@@ -244,10 +278,34 @@ export default function CommandPalette() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, searchMode]);
 
-  if (!paletteOpen) return null;
+  if (!paletteOpen) {
+    // Never reopen into a stale sub-mode.
+    if (formCard || detail || running) {
+      if (formCard) setFormCard(null);
+      if (detail) setDetail(null);
+      if (running) setRunning(false);
+    }
+    return null;
+  }
 
   const needle = query.trim().toLowerCase();
-  const filtered = PALETTE_ACTIONS.filter(
+  // Static-plus-dynamic: the constant list merged with whatever is registered
+  // right now. Still a plain array built at render time — no registry, no
+  // command-framework dependency, which is the module's stated principle.
+  const automationActions: PaletteAction[] = (automations?.workflows ?? [])
+    .filter((card: AutomationCard) => card.kind !== "none")
+    .map((card: AutomationCard) => ({
+      kind: "AUTO",
+      label: card.name ?? card.id,
+      hint: card.confirm
+        ? "confirm"
+        : card.fields && card.fields.length
+          ? `${card.fields.length} field${card.fields.length === 1 ? "" : "s"}`
+          : "run",
+      run: () => undefined, // intercepted by kind in runAction, like SEARCH
+    }));
+  const allActions = [...PALETTE_ACTIONS, ...automationActions];
+  const filtered = allActions.filter(
     (action) =>
       !needle ||
       action.label.toLowerCase().includes(needle) ||
@@ -277,9 +335,74 @@ export default function CommandPalette() {
     window.location.href = `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(result.source_path)}`;
   }
 
+  function findCard(label: string): AutomationCard | undefined {
+    return (automations?.workflows ?? []).find(
+      (card: AutomationCard) => (card.name ?? card.id) === label,
+    );
+  }
+
+  /** Fire an automation and route its result by mode (see §5.4 of the plan). */
+  async function fire(card: AutomationCard, payload: Record<string, string>) {
+    setRunning(true);
+    try {
+      const result = await runAutomation(card.id, payload);
+      void mutateAutomations();
+
+      if (result.mode === "widget" && result.payload) {
+        // A returned widget earns a panel; ack and status do not.
+        const widget = result.payload as { widget?: unknown; kind?: unknown };
+        setFormCard(null);
+        setDetail({
+          title: card.name ?? card.id,
+          kind: String(widget.kind ?? widget.widget ?? "text"),
+          payload: result.payload,
+        });
+        return;
+      }
+
+      setFormCard(null);
+      setPaletteOpen(false);
+      if (result.status === "ok") {
+        show(`automations :: ${card.name ?? card.id} — ${result.message ?? "fired"}`);
+      } else {
+        // A failure is worth more than a red toast: n8n's execution is where
+        // it would actually be debugged, so name it.
+        show(
+          `automations :: ${card.name ?? card.id} failed — ${result.message ?? result.status}` +
+            (result.execution_url ? " (see n8n)" : ""),
+          { tone: "error" },
+        );
+      }
+    } catch (error) {
+      show(
+        `automations :: ${card.name ?? card.id} — ${
+          error instanceof Error ? error.message : "could not run"
+        }`,
+        { tone: "error" },
+      );
+    } finally {
+      setRunning(false);
+    }
+  }
+
   function runAction(action: PaletteAction) {
     if (action.kind === "SEARCH") {
       enterSearchMode();
+      return;
+    }
+    if (action.kind === "AUTO") {
+      const card = findCard(action.label);
+      // The one AUTO row that is a plain navigation, not an automation.
+      if (!card) {
+        setPaletteOpen(false);
+        action.run(ctx);
+        return;
+      }
+      if (card.fields && card.fields.length > 0) {
+        setFormCard(card);
+        return;
+      }
+      void fire(card, {});
       return;
     }
     setPaletteOpen(false);
@@ -299,6 +422,34 @@ export default function CommandPalette() {
         aria-label="Command palette"
         className="animate-palette mx-auto mt-[16vh] w-[520px] max-w-[calc(100vw-2rem)] border border-lineHi bg-panel"
       >
+        {detail ? (
+          // Detail mode: a returned widget, read once and thrown away. Nothing
+          // is persisted unless it is explicitly pinned, so a one-off lookup
+          // never clutters the dashboard.
+          <div className="px-4 py-3">
+            <div className="mb-2 flex items-center gap-2">
+              <p className="min-w-0 flex-1 truncate font-mono text-meta uppercase tracking-[0.14em] text-[var(--ac)]">
+                {detail.title}
+              </p>
+              <button
+                type="button"
+                onClick={() => setDetail(null)}
+                className="font-mono text-micro uppercase tracking-[0.14em] text-ink-faint hover:text-ink"
+              >
+                ESC
+              </button>
+            </div>
+            <WidgetRenderer kind={detail.kind} payload={detail.payload} />
+          </div>
+        ) : formCard ? (
+          <AutomationForm
+            card={formCard}
+            busy={running}
+            onCancel={() => setFormCard(null)}
+            onSubmit={(payload) => void fire(formCard, payload)}
+          />
+        ) : (
+        <>
         <input
           ref={inputRef}
           value={query}
@@ -425,6 +576,8 @@ export default function CommandPalette() {
               </li>
             ))}
           </ul>
+        )}
+        </>
         )}
       </div>
     </div>
