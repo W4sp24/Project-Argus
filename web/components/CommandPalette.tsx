@@ -157,6 +157,14 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
         .catch(() => ctx.toast("reindex :: failed — is the backend running?"));
     },
   },
+  {
+    // Management only (install/health/fix) — a later chunk owns the
+    // palette's own form/detail modes for actually running an automation.
+    kind: "AUTO",
+    label: "manage automations",
+    hint: "/automations",
+    run: (ctx) => ctx.push("/automations"),
+  },
 ];
 
 /** Debounce delay (ms) before `search vault` mode fires GET /api/search. */

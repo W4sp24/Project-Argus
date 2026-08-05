@@ -62,7 +62,7 @@ export class ApiError extends Error {
 export async function mutateJSON<T>(
   url: string,
   body: unknown,
-  method: "POST" | "PUT" | "DELETE" = "POST",
+  method: "POST" | "PUT" | "PATCH" | "DELETE" = "POST",
 ): Promise<T> {
   const response = await apiFetch(url, {
     method,
@@ -1006,4 +1006,227 @@ export function updateQuickLink(
 /** Delete a quick link. DELETE /api/quick-links/{id}. */
 export function deleteQuickLink(id: number) {
   return mutateJSON<{ ok: boolean }>(`/api/quick-links/${id}`, undefined, "DELETE");
+}
+
+// --- Automations (n8n) ---------------------------------------------------
+//
+// Mirrors backend/features/automations/router.py exactly — see that file's
+// response models for the source of truth. Two directions of credential are
+// in play here and must never be conflated: `AutomationInstance`/the
+// register|test|delete flow is Argus calling *out* to n8n (n8n's API key);
+// n8n calling *back into* Argus (the external/tunnel bearer token) belongs to
+// a different, not-yet-built surface — see ConnectN8nDialog's step 3.
+
+/** The single registered n8n instance. Never carries its API key (I4). */
+export interface AutomationInstance {
+  name: string;
+  base_url: string;
+  has_key: boolean;
+  key_state: KeyState;
+}
+
+/** Mirrors N8nProbeResult — what the "Test connection" step renders. */
+export interface N8nProbeResult {
+  ok: boolean;
+  detail: string;
+  latency_ms: number | null;
+  workflow_count: number | null;
+}
+
+/** One parsed Form Trigger field — `dataclasses.asdict(FormField)` on the wire. */
+export interface AutomationField {
+  name: string;
+  label: string;
+  type: string;
+  required: boolean;
+  placeholder: string | null;
+  default: string | null;
+  options: string[] | null;
+  multiple: boolean;
+  html: string | null;
+  secret: boolean;
+  hidden: boolean;
+  unrecognized: boolean;
+  raw_type: string | null;
+}
+
+/** One row of `automation_runs`. */
+export interface AutomationRun {
+  id: string;
+  workflow_id: string;
+  workflow_name: string | null;
+  started_at: string;
+  finished_at: string | null;
+  /** "running" | "ok" | "failed" | "timeout" */
+  status: string;
+  /** "ack" | "status" | "widget" | null */
+  mode: string | null;
+  message: string | null;
+  execution_id: string | null;
+  payload: unknown;
+}
+
+/** One cached workflow, parsed for the dashboard/management page. */
+export interface AutomationCard {
+  id: string;
+  name: string | null;
+  tags: string[];
+  /** "form" | "button" | "none" */
+  kind: string;
+  fields: AutomationField[];
+  webhook_id: string | null;
+  webhook_path: string | null;
+  basic_auth: boolean;
+  /** argus:confirm — the UI must gate firing behind a ConfirmDialog. */
+  confirm: boolean;
+  /** argus:async, wire key "async" (FastAPI serializes by alias). */
+  async: boolean;
+  active: boolean;
+  last_seen_at: string;
+  last_run: AutomationRun | null;
+}
+
+export interface AutomationsResponse {
+  instance: AutomationInstance | null;
+  workflows: AutomationCard[];
+  /** Whether n8n answered the live reachability check on this request — false
+   * (with cached cards still populated) is a normal, fully-supported state. */
+  connected: boolean;
+  detail: string;
+}
+
+/** Computed, not stored — see backend store.widget_state. */
+export type WidgetState = "live" | "stale" | "empty" | "waiting";
+
+export interface AutomationWidget {
+  slug: string;
+  title: string | null;
+  /** "metric" | "list" | "table" | "timeline" | "text" | "chart" */
+  kind: string;
+  payload: unknown;
+  last_seen_at: string | null;
+  expected_interval_seconds: number | null;
+  created_at: string;
+  position: number | null;
+  pinned: boolean;
+  hidden: boolean;
+  state: WidgetState;
+}
+
+export interface AutomationRefreshResult {
+  ok: boolean;
+  count: number;
+  dropped: number;
+}
+
+/** Mirrors RunResponse — the result of firing one workflow. */
+export interface AutomationRunResult {
+  run_id: string;
+  /** "running" | "ok" | "failed" | "timeout" */
+  status: string;
+  /** "ack" | "status" | "widget" | null */
+  mode: string | null;
+  message: string | null;
+  execution_id: string | null;
+  execution_url: string | null;
+  payload: unknown;
+}
+
+/** Registered automations + the instance's live connection state. GET /api/automations. */
+export function useAutomations() {
+  return useSWR<AutomationsResponse>("/api/automations", fetcher);
+}
+
+/** Run history, newest first, optionally scoped to one workflow. GET /api/automations/runs. */
+export function useAutomationRuns(workflowId?: string, limit?: number) {
+  const params = new URLSearchParams();
+  if (workflowId) params.set("workflow_id", workflowId);
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  return useSWR<AutomationRun[]>(`/api/automations/runs${qs ? `?${qs}` : ""}`, fetcher);
+}
+
+/** Dashboard widgets pushed by workflows, with computed state. GET /api/automations/widgets. */
+export function useAutomationWidgets() {
+  return useSWR<AutomationWidget[]>("/api/automations/widgets", fetcher);
+}
+
+/** Probe an n8n instance without saving anything — the TEST CONNECTION step. */
+export function testN8nInstance(body: { base_url: string; api_key: string }) {
+  return mutateJSON<N8nProbeResult>("/api/automations/instance/test", body);
+}
+
+/** Register the n8n instance. The backend re-probes before it saves (409 if one exists, 422 on probe failure). */
+export function registerN8nInstance(body: { name: string; base_url: string; api_key: string }) {
+  return mutateJSON<AutomationInstance>("/api/automations/instance", body);
+}
+
+/** Forget the registered n8n instance and its stored API key. */
+export function deleteN8nInstance() {
+  return mutateJSON<ConnectResult>("/api/automations/instance", undefined, "DELETE");
+}
+
+/** Re-pull workflows tagged `argus` from n8n and reconcile the cache. */
+export function refreshAutomations() {
+  return mutateJSON<AutomationRefreshResult>("/api/automations/refresh", undefined);
+}
+
+/** Fire one workflow's trigger. `payload` is forwarded verbatim as the form/webhook body. */
+export function runAutomation(workflowId: string, payload: Record<string, unknown> = {}) {
+  return mutateJSON<AutomationRunResult>(
+    `/api/automations/${encodeURIComponent(workflowId)}/run`,
+    { payload },
+  );
+}
+
+/** Pin/hide/reorder a widget. Any call marks the dashboard layout as user-controlled. */
+export function patchAutomationWidget(
+  slug: string,
+  body: { pinned?: boolean; hidden?: boolean; position?: number },
+) {
+  return mutateJSON<AutomationWidget>(
+    `/api/automations/widgets/${encodeURIComponent(slug)}`,
+    body,
+    "PATCH",
+  );
+}
+
+/** The inbound surface's configuration — never its token. */
+export interface ExternalSurfaceInfo {
+  enabled: boolean;
+  port: number;
+  base_url: string;
+  token_state: KeyState;
+}
+
+/** A freshly issued bearer token. The only response that ever carries its value. */
+export interface ExternalTokenResult {
+  token: string;
+  rotated: boolean;
+  header_name: string;
+  header_value: string;
+  base_url: string;
+}
+
+export function useExternalSurface() {
+  return useSWR<ExternalSurfaceInfo>("/api/automations/external", fetcher);
+}
+
+/**
+ * Issue or rotate the token n8n uses to call back into Argus.
+ *
+ * The value comes back exactly once — the keyring holds the only copy and
+ * there is no read-it-back endpoint — so the caller must show it immediately.
+ */
+export function issueExternalToken() {
+  return mutateJSON<ExternalTokenResult>("/api/automations/external/token", undefined);
+}
+
+/** Remove a widget from the dashboard. */
+export function deleteAutomationWidget(slug: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/automations/widgets/${encodeURIComponent(slug)}`,
+    undefined,
+    "DELETE",
+  );
 }
