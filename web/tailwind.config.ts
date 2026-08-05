@@ -25,6 +25,11 @@ const config: Config = {
         },
         ok: "#34d399",
         danger: "#fb7185",
+        // Warning semantic token. Same hue family as mode.system's amber, but
+        // named for what it means (STALE chrome, P2 priority, "needs setup")
+        // rather than for the System mode that happens to share the color —
+        // three call sites used the literal `amber-400` before this existed.
+        warn: "#fbbf24",
         // mode accents (CSS var driven at runtime — see --ac in globals.css)
         mode: {
           general: "#a78bfa",

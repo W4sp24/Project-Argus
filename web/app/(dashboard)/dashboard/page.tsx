@@ -5,6 +5,7 @@ import AgentUsage from "@/components/AgentUsage";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
 import ActivityFeed from "@/components/dashboard/ActivityFeed";
+import AutomationWidgets from "@/components/dashboard/AutomationWidgets";
 import BriefingCard from "@/components/dashboard/BriefingCard";
 import Heatmap from "@/components/dashboard/Heatmap";
 import IngestPanel from "@/components/dashboard/IngestPanel";
@@ -62,6 +63,7 @@ export default function DashboardPage() {
             {/* Chat moved to the ChatDrawer (TopBar CHAT / ⌘K), shared with /chat. */}
             <BriefingCard />
             <QuickLinks />
+            <AutomationWidgets />
             <TokenUsage />
             <AgentUsage />
             <ActivityFeed />

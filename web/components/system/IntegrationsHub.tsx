@@ -38,8 +38,8 @@ import { formatRelativeTime } from "@/lib/relativeTime";
 const STATUS_STYLE: Record<string, string> = {
   WIRED: "border-ok text-ok",
   "NOT CONNECTED": "border-ink-faint text-ink-faint",
-  "NEEDS SETUP": "border-amber-400 text-amber-400",
-  MANUAL: "border-amber-400 text-amber-400",
+  "NEEDS SETUP": "border-warn text-warn",
+  MANUAL: "border-warn text-warn",
   LOADING: "border-ink-faint text-ink-faint",
   FAILING: "border-danger text-danger",
 };

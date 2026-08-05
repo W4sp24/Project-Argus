@@ -50,7 +50,7 @@ function spliceDescription(raw: string, text: string): string | null {
 
 function priorityMeta(priority: string | null): { label: string; colorClass: string } | null {
   if (priority === "highest") return { label: "P1", colorClass: "border-danger text-danger" };
-  if (priority === "high") return { label: "P2", colorClass: "border-amber-400 text-amber-400" };
+  if (priority === "high") return { label: "P2", colorClass: "border-warn text-warn" };
   if (priority === "medium" || priority === "low") return { label: "P3", colorClass: "border-ink-faint text-ink-faint" };
   return null;
 }
