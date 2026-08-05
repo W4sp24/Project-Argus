@@ -44,7 +44,7 @@ from backend.agent.credentials import (
 )
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.features.automations import store
+from backend.features.automations import catalog, store
 from backend.features.automations.n8n_client import (
     N8nClient,
     N8nError,
@@ -63,6 +63,7 @@ from backend.features.automations.schema import (
     requires_confirmation,
     validate_widget_payload,
 )
+from backend.features.external import auth as external_auth
 
 #: The synchronous run budget. n8n owns the workflow either way — this bounds
 #: only how long Argus's HTTP layer waits for a response before reporting
@@ -227,6 +228,71 @@ class WidgetPatchRequest(BaseModel):
     pinned: bool | None = None
     hidden: bool | None = None
     position: int | None = None
+
+
+class TemplateOut(BaseModel):
+    """Mirrors :class:`backend.features.automations.catalog.Template`, plus
+    ``installed`` — computed here, not stored on the catalog entry itself,
+    since "installed" is a fact about the *cached workflow list*, not about
+    the template."""
+
+    id: str
+    name: str
+    description: str
+    kind: str
+    widget_slug: str | None = None
+    replaces: str | None = None
+    requires: list[str] = []
+    installed: bool = False
+
+    @classmethod
+    def from_template(cls, template: catalog.Template, *, installed: bool) -> TemplateOut:
+        return cls(
+            id=template.id,
+            name=template.name,
+            description=template.description,
+            kind=template.kind,
+            widget_slug=template.widget_slug,
+            replaces=template.replaces,
+            requires=list(template.requires),
+            installed=installed,
+        )
+
+
+class ExternalSurfaceInfo(BaseModel):
+    """The inbound surface's configuration, minus its secret."""
+
+    enabled: bool
+    port: int
+    #: The public URL the user's tunnel forwards from. Empty until configured,
+    #: and templates cannot be installed while it is, because a workflow
+    #: posting to nowhere fails silently later.
+    base_url: str
+    #: Tri-state, as everywhere else a key is reported: present / absent /
+    #: unknown. "unknown" means the keyring could not be read, which must
+    #: never be shown as "no token".
+    token_state: str
+
+
+class ExternalTokenResult(BaseModel):
+    """A freshly issued token — the only response that ever carries its value."""
+
+    token: str
+    rotated: bool
+    header_name: str
+    header_value: str
+    base_url: str
+
+
+class InstallResult(BaseModel):
+    workflow_id: str
+    #: Deep link to the newly-created workflow in n8n's own UI — where the
+    #: user grants the credential this template `requires`. That hand-off is
+    #: the one genuinely-can't-automate-it step: OAuth needs a real browser
+    #: round trip, and doing the equivalent for an API-key credential type
+    #: would mean handing Argus the third-party secret again, which is the
+    #: exact thing this whole n8n migration exists to stop.
+    open_in_n8n: str
 
 
 # --- small pure helpers -------------------------------------------------
@@ -771,6 +837,128 @@ def build_automations_router(
         finally:
             conn.close()
         return ConnectResult(ok=True, detail=f"{slug} removed")
+
+    # --- template gallery --------------------------------------------------
+    #
+    # Two routes only, appended for the catalog.py chunk (the shipped
+    # workflow template gallery): list the bundled templates, and install one
+    # into the registered n8n instance. See catalog.py's module docstring for
+    # why every bundled template's trigger sets an explicit respond mode, and
+    # InstallResult.open_in_n8n's docstring above for why credential granting
+    # is the one step this can't finish on the user's behalf.
+
+    @router.get("/automations/templates", response_model=list[TemplateOut])
+    def list_templates_route() -> list[TemplateOut]:
+        conn = db()
+        try:
+            # "Installed" is judged against the cached workflow list (the
+            # same cache the dashboard cards render from), not a live n8n
+            # call — this endpoint must render instantly and offline exactly
+            # like GET /automations does, not block on network reachability.
+            cached_names = {row["name"] for row in store.list_workflows(conn) if row["name"]}
+        finally:
+            conn.close()
+        return [
+            TemplateOut.from_template(template, installed=template.name in cached_names)
+            for template in catalog.list_templates()
+        ]
+
+    @router.post(
+        "/automations/templates/{template_id}/install",
+        response_model=InstallResult,
+        status_code=201,
+    )
+    async def install_template(template_id: str) -> InstallResult:
+        try:
+            catalog.load_definition(template_id)
+        except catalog.UnknownTemplate as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        # The callback URL comes from the user-supplied public tunnel, not
+        # from this n8n instance's own base_url — installing a template that
+        # posts back to an empty string would fail the first time it fires,
+        # invisibly (n8n owns the workflow at that point; nothing surfaces
+        # the failure back to Argus). Refusing now, loudly, beats that.
+        if not settings.external_base_url:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "the public callback URL is not configured yet — set it before "
+                    "installing a template that posts back to Argus"
+                ),
+            )
+
+        instance = _require_instance()
+        api_key = _resolve_key(instance)
+
+        token = external_auth.get_token()
+        if token is None:
+            token = external_auth.generate_token()
+
+        definition = catalog.render_definition(
+            template_id, callback_url=settings.external_base_url, token=token
+        )
+
+        client = factory(instance, api_key)
+        try:
+            created = await client.create_workflow(definition)
+            workflow_id = str(created.get("id"))
+            await client.activate_workflow(workflow_id)
+        except N8nError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"could not install template in n8n: {exc}"
+            ) from exc
+
+        # Reuse discovery's own cache-refresh pass rather than duplicating its
+        # upsert/drop logic here: the newly-created workflow only becomes a
+        # dashboard card once it has been through the same pass every other
+        # refresh runs.
+        await refresh()
+
+        open_in_n8n = f"{instance['base_url'].rstrip('/')}/workflow/{workflow_id}"
+        return InstallResult(workflow_id=workflow_id, open_in_n8n=open_in_n8n)
+
+    # --- the inbound surface's own credential -------------------------------
+    #
+    # These live on the LOCAL /api (localhost, unauthenticated like the rest of
+    # it) and describe the *external* surface. They are not mounted on the
+    # external app itself — a public endpoint that hands out the credential
+    # guarding it would defeat the point.
+
+    @router.get("/automations/external", response_model=ExternalSurfaceInfo)
+    def external_surface() -> ExternalSurfaceInfo:
+        """What the user needs in order to point a tunnel at Argus.
+
+        Deliberately does NOT include the token value. Reading this is a page
+        load; handing out a live credential on every dashboard render is not
+        something to do casually, so the value is only ever returned by the
+        explicit issue/rotate action below.
+        """
+        return ExternalSurfaceInfo(
+            enabled=settings.external_enabled,
+            port=settings.external_port,
+            base_url=settings.external_base_url,
+            token_state=external_auth.token_state(),
+        )
+
+    @router.post("/automations/external/token", response_model=ExternalTokenResult)
+    def issue_external_token() -> ExternalTokenResult:
+        """Issue or rotate the bearer token, returning it **once** for copying.
+
+        Rotating invalidates the old token immediately, which is the point:
+        the recovery for a leaked token is to press this and re-paste the
+        credential into n8n. The value is returned here and never again — the
+        keyring holds the only copy, and there is no read-it-back endpoint.
+        """
+        rotated = external_auth.token_state() == KEY_PRESENT
+        token = external_auth.rotate_token()
+        return ExternalTokenResult(
+            token=token,
+            rotated=rotated,
+            header_name="Authorization",
+            header_value=f"Bearer {token}",
+            base_url=settings.external_base_url,
+        )
 
     return router
 
