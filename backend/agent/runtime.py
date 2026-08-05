@@ -283,6 +283,13 @@ class ChatAgent:
             ready=self._ready,
             course=course,
         )
+        # Registered automations are callable from chat too, so "run my meeting
+        # prep" works in the dock as well as by button. Chat only — these are
+        # write actions and are deliberately absent from the MCP allow-list;
+        # see backend/features/automations/tools.py.
+        from backend.features.automations.tools import build_automation_tools
+
+        tools = tools + build_automation_tools(self._settings)
 
         recorded = False
         try:
