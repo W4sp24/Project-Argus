@@ -172,6 +172,23 @@ CREATE TABLE IF NOT EXISTS automation_prefs (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- The workflow cache: the last known shape of every argus-tagged n8n
+-- workflow, refreshed by POST /automations/refresh. When n8n is unreachable
+-- the dashboard still renders cards from this table (marked DISCONNECTED,
+-- RUN disabled) instead of going blank because a second service is down.
+-- `schema_json` holds the *raw* workflow definition n8n returned (not a
+-- pre-parsed schema): re-running schema.parse_workflow on it at read time is
+-- cheap and keeps the cache from drifting out of sync with that module's own
+-- parsing rules as they evolve.
+CREATE TABLE IF NOT EXISTS automation_workflows (
+    id           TEXT PRIMARY KEY,
+    name         TEXT,
+    tags         TEXT,
+    schema_json  TEXT,
+    active       INTEGER NOT NULL DEFAULT 0,
+    last_seen_at TEXT NOT NULL
+);
 """
 
 

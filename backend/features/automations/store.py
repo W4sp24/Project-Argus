@@ -307,6 +307,16 @@ def finish_run(
     conn.commit()
 
 
+def get_run(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
+    """One run by id, or ``None``.
+
+    Used by the external surface to confirm a ``?run={id}`` push belongs to a
+    run that actually exists before it is recorded against one.
+    """
+    row = conn.execute("SELECT * FROM automation_runs WHERE id = ?", (run_id,)).fetchone()
+    return None if row is None else _run_row_to_dict(row)
+
+
 def list_runs(
     conn: sqlite3.Connection, *, limit: int = 50, workflow_id: str | None = None
 ) -> list[dict[str, Any]]:
@@ -345,6 +355,101 @@ def expire_stale_runs(
         "WHERE status = 'running' AND started_at < ?",
         (cutoff,),
     )
+    conn.commit()
+    return cursor.rowcount
+
+
+# --- workflow cache ---------------------------------------------------------
+#
+# Added for the router chunk (backend.features.automations.router): the last
+# known shape of every argus-tagged n8n workflow, so the dashboard can render
+# cards from cache — marked DISCONNECTED, RUN disabled — when n8n itself is
+# unreachable. Same plain-dict-CRUD style as the widgets/runs above; nothing
+# here changes their behaviour.
+
+
+def _workflow_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "tags": json.loads(row["tags"]) if row["tags"] else [],
+        "schema_json": json.loads(row["schema_json"]) if row["schema_json"] else None,
+        "active": bool(row["active"]),
+        "last_seen_at": row["last_seen_at"],
+    }
+
+
+def upsert_workflow(
+    conn: sqlite3.Connection,
+    workflow_id: str,
+    *,
+    name: str | None,
+    tags: list[str],
+    schema_json: dict[str, Any] | None,
+    active: bool,
+    now: Callable[[], datetime] = _utcnow,
+) -> dict[str, Any]:
+    """Insert or refresh the cached row for ``workflow_id``.
+
+    Always a full overwrite (no COALESCE-and-retain like ``upsert_widget``):
+    every field here comes from the same discovery response n8n just gave us,
+    so there is nothing stale worth preserving across the write.
+    """
+    ts = _isoformat(now())
+    conn.execute(
+        "INSERT INTO automation_workflows (id, name, tags, schema_json, active, last_seen_at) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET name = excluded.name, tags = excluded.tags, "
+        "schema_json = excluded.schema_json, active = excluded.active, "
+        "last_seen_at = excluded.last_seen_at",
+        (
+            workflow_id,
+            name,
+            json.dumps(list(tags), ensure_ascii=False),
+            None if schema_json is None else json.dumps(schema_json, ensure_ascii=False),
+            1 if active else 0,
+            ts,
+        ),
+    )
+    conn.commit()
+    workflow = get_workflow(conn, workflow_id)
+    assert workflow is not None  # just written above
+    return workflow
+
+
+def get_workflow(conn: sqlite3.Connection, workflow_id: str) -> dict[str, Any] | None:
+    """The cached row for ``workflow_id``, or ``None`` if it isn't cached."""
+    row = conn.execute(
+        "SELECT * FROM automation_workflows WHERE id = ?", (workflow_id,)
+    ).fetchone()
+    return None if row is None else _workflow_row_to_dict(row)
+
+
+def list_workflows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """All cached workflows, ordered by name (nulls last) then id."""
+    rows = conn.execute(
+        "SELECT * FROM automation_workflows ORDER BY name IS NULL, name, id"
+    ).fetchall()
+    return [_workflow_row_to_dict(row) for row in rows]
+
+
+def delete_missing_workflows(conn: sqlite3.Connection, seen_ids: list[str]) -> int:
+    """Drop every cached workflow whose id is not in ``seen_ids``.
+
+    Called after a discovery pass with the ids n8n just returned for
+    ``?tags=argus`` — anything cached but not seen this time either lost the
+    tag or was deleted in n8n, and its card must disappear. An empty
+    ``seen_ids`` (nothing tagged ``argus`` anymore, or the instance was just
+    unregistered) clears the whole cache. Returns the number of rows dropped.
+    """
+    if not seen_ids:
+        cursor = conn.execute("DELETE FROM automation_workflows")
+    else:
+        placeholders = ", ".join("?" for _ in seen_ids)
+        cursor = conn.execute(
+            f"DELETE FROM automation_workflows WHERE id NOT IN ({placeholders})",
+            list(seen_ids),
+        )
     conn.commit()
     return cursor.rowcount
 
