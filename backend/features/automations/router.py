@@ -58,6 +58,7 @@ from backend.features.automations.n8n_client import probe as n8n_probe
 from backend.features.automations.schema import (
     AutomationSchema,
     WidgetValidationError,
+    has_tag,
     is_async_workflow,
     parse_workflow,
     requires_confirmation,
@@ -140,12 +141,44 @@ class ConnectResult(BaseModel):
     detail: str
 
 
+class DiscoverRequest(BaseModel):
+    """Same shape as :class:`ProbeRequest` — a not-yet-registered instance's
+    credentials, for the connect dialog's discover step."""
+
+    base_url: str
+    api_key: str
+
+
+class DiscoveredWorkflowOut(BaseModel):
+    """One ``argus``-tagged workflow on a not-yet-registered instance, shaped
+    for a picker — see ``POST /automations/instances/discover``."""
+
+    id: str
+    name: str | None = None
+    active: bool = False
+    #: "action" when the trigger is something Argus can fire from a card (a
+    #: form or a bare webhook button — see schema.parse_workflow's `kind`);
+    #: "display" otherwise (schedule/cron/manual-triggered, so its only way
+    #: of reaching Argus is pushing a widget on its own cadence).
+    kind: str
+    #: Whether the workflow actually carries the `argus` tag. Every entry
+    #: this endpoint returns does — it only ever queries n8n for
+    #: `?tags=argus` — so this is always `True` in practice; kept as an
+    #: explicit field (rather than assumed) because it is what a picker
+    #: checks, not an implementation detail the frontend should have to infer.
+    tagged: bool
+
+
 class RunOut(BaseModel):
     """One row of ``automation_runs``, as returned to the client."""
 
     id: str
     workflow_id: str
     workflow_name: str | None = None
+    #: Additive (B3): defaults to ``""``, the "not yet attributed" sentinel,
+    #: so a pre-multi-instance frontend that doesn't know this field exists
+    #: keeps compiling and behaving identically.
+    instance_id: str = ""
     started_at: str
     finished_at: str | None = None
     status: str
@@ -161,6 +194,8 @@ class WorkflowCard(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
+    #: Additive (B3) — see RunOut.instance_id.
+    instance_id: str = ""
     name: str | None = None
     tags: list[str] = []
     #: "form" | "button" | "none" — see schema.parse_workflow.
@@ -226,6 +261,8 @@ class RunResponse(BaseModel):
 
 class WidgetOut(BaseModel):
     slug: str
+    #: Additive (B3) — see RunOut.instance_id.
+    instance_id: str = ""
     title: str | None = None
     kind: str
     payload: Any
@@ -393,6 +430,10 @@ def build_automations_router(
     def db() -> sqlite3.Connection:
         conn = connect(settings.db_path)
         init_schema(conn)
+        # B3: cheap (a read, once nothing is left to backfill — see the
+        # function's own docstring) and idempotent per connection, the same
+        # guard-then-noop idiom init_schema's own migrations use above.
+        store.ensure_instance_attribution(conn, settings.automations_file)
         return conn
 
     def _instance_info(entry: dict[str, Any], *, connected: bool = True) -> InstanceInfo:
@@ -407,15 +448,35 @@ def build_automations_router(
             connected=connected,
         )
 
-    def _require_instance() -> dict[str, Any]:
-        """The first registered instance, matching the old single-instance
-        API's ``load_instance`` — used by run dispatch and template install,
-        neither of which is instance-aware yet (that is later work; see the
-        module docstring). Not a compat shim itself, so F9 does not remove
-        this."""
+    def _resolve_instance(instance_id: str) -> dict[str, Any]:
+        """The registered instance at ``instance_id``, or 404."""
+        instances = store.load_instances(settings.automations_file)
+        entry = next((e for e in instances if e.get("id") == instance_id), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"no n8n instance {instance_id}")
+        return entry
+
+    def _only_instance() -> dict[str, Any]:
+        """The sole registered instance — 409 unless there is *exactly* one.
+
+        B3 narrowed this from the old ``_require_instance`` (which used to
+        return ``instances[0]`` for 2+ registered, silently picking one).
+        Used only by routes that are genuinely "the one instance" shims —
+        today, ``POST /automations/templates/{id}/install`` — never by
+        anything instance-aware, which resolves via ``_resolve_instance``
+        (a path parameter) instead.
+        """
         instances = store.load_instances(settings.automations_file)
         if not instances:
             raise HTTPException(status_code=409, detail="no n8n instance registered")
+        if len(instances) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "multiple n8n instances registered — use "
+                    "POST /automations/instances/{instance_id}/templates/{template_id}/install"
+                ),
+            )
         return instances[0]
 
     def _resolve_key(instance: dict[str, Any]) -> str:
@@ -459,10 +520,15 @@ def build_automations_router(
     def _card_from_row(conn: sqlite3.Connection, row: dict[str, Any]) -> WorkflowCard:
         definition = row["schema_json"] or {}
         parsed = parse_workflow(definition)
-        recent = store.recent_runs_for(conn, row["id"], limit=1)
+        # Scoped to this row's own instance: workflow ids are only unique
+        # within an instance, so an unscoped lookup could surface a
+        # same-numbered but unrelated workflow's last run from a different
+        # instance.
+        recent = store.recent_runs_for(conn, row["id"], limit=1, instance_id=row["instance_id"])
         last_run = RunOut(**recent[0]) if recent else None
         return WorkflowCard(
             id=row["id"],
+            instance_id=row["instance_id"],
             name=row["name"],
             tags=row["tags"],
             kind=parsed.kind,
@@ -585,16 +651,10 @@ def build_automations_router(
 
         conn = db()
         try:
-            # B3: scoped to this instance's real id, not the '' sentinel
-            # every cached workflow row still carries until a later chunk
-            # backfills real instance ids into automation_workflows (the
-            # writer, store.upsert_workflow, is not instance-aware yet — see
-            # _refresh_instance below). That makes this call a no-op against
-            # today's data rather than an invented backfill, but it is still
-            # the correct call to make: unlike the '' sentinel the singular
-            # compat route below still uses, scoping to a real id can never
-            # delete a workflow that in fact belongs to a *different*
-            # instance.
+            # Scoped to this instance's real id: refresh/discovery writes
+            # every cached workflow under its own instance's real id (see
+            # _refresh_instance), so this clears exactly this instance's
+            # cache and nothing else's.
             store.delete_missing_workflows(conn, [], instance_id=instance_id)
         finally:
             conn.close()
@@ -621,6 +681,52 @@ def build_automations_router(
         finally:
             conn.close()
         return ConnectResult(ok=True, detail=f"{target['name']} disconnected")
+
+    # --- pre-registration discovery ------------------------------------------
+    #
+    # B3: the connect dialog's discover step. Deliberately independent of the
+    # registry: it must work on a base_url/api_key pair the user just typed,
+    # before anything is persisted, so the picker can show which workflows
+    # exist before the user commits to registering the instance at all.
+
+    @router.post("/automations/instances/discover", response_model=list[DiscoveredWorkflowOut])
+    async def discover_instance_workflows(request: DiscoverRequest) -> list[DiscoveredWorkflowOut]:
+        """The ``argus``-tagged workflows on a not-yet-registered instance.
+
+        Persists nothing — no sqlite write, no registry write — and does not
+        require (or check for) an existing registration; it exists so the
+        connect dialog can show the user what they're about to register
+        *before* they commit to it. Reuses ``schema.parse_workflow``/
+        ``schema.has_tag`` (the same parsing every cached-workflow card goes
+        through) rather than duplicating either.
+        """
+        base_url = request.base_url.strip()
+        api_key = request.api_key.strip()
+        client = factory({"base_url": base_url}, api_key)
+        try:
+            workflows = await client.list_workflows(tags=DISCOVERY_TAG)
+        except N8nError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"could not reach n8n: {exc}"
+            ) from exc
+
+        results: list[DiscoveredWorkflowOut] = []
+        for workflow in workflows:
+            raw_id = workflow.get("id")
+            if raw_id is None:
+                continue
+            parsed = parse_workflow(workflow)
+            name = workflow.get("name")
+            results.append(
+                DiscoveredWorkflowOut(
+                    id=str(raw_id),
+                    name=str(name) if name else None,
+                    active=bool(workflow.get("active", False)),
+                    kind="action" if parsed.kind in ("form", "button") else "display",
+                    tagged=has_tag(workflow, DISCOVERY_TAG),
+                )
+            )
+        return results
 
     # --- discovery -----------------------------------------------------------
 
@@ -682,17 +788,13 @@ def build_automations_router(
         """One instance's refresh pass: pull ``?tags=argus`` workflows from
         n8n, upsert the cache, and drop anything cached but no longer seen.
 
-        B3: still writes/reads ``automation_workflows`` under the shared ''
-        sentinel (``store.upsert_workflow``'s default), not this instance's
-        real id — ``run_workflow``'s lookup (``store.get_workflow``) is not
-        instance-aware yet, so scoping only this write would silently break
-        the RUN button for the first/only registered instance. Until that
-        lookup is threaded through too, every registered instance's refresh
-        shares one cache namespace; a later chunk backfills real ids
-        end-to-end (writer and reader together).
+        Scoped to this instance's real id end-to-end (the write here and the
+        read in ``_run_workflow_core``/``_card_from_row`` alike) — refreshing
+        instance A can never write into or prune instance B's cached rows.
         """
         api_key = _resolve_key(instance)
         client = factory(instance, api_key)
+        instance_id = instance["id"]
         try:
             workflows = await client.list_workflows(tags=DISCOVERY_TAG)
         except N8nError as exc:
@@ -717,12 +819,14 @@ def build_automations_router(
                     tags=_tag_names(workflow),
                     schema_json=workflow,
                     active=bool(workflow.get("active", False)),
+                    instance_id=instance_id,
                     now=now,
                 )
             # Untagging a workflow in n8n (or deleting it) means it drops out
             # of this response — anything cached but not seen this pass loses
-            # its card.
-            dropped = store.delete_missing_workflows(conn, seen_ids)
+            # its card. Scoped to this instance: another instance's cache is
+            # never touched by this pass.
+            dropped = store.delete_missing_workflows(conn, seen_ids, instance_id=instance_id)
         finally:
             conn.close()
 
@@ -773,6 +877,8 @@ def build_automations_router(
         run_id: str,
         client: N8nClient,
         result: Any,
+        *,
+        instance_id: str,
     ) -> RunResponse:
         """Turn a completed :class:`N8nRunResult` into a finished run + response.
 
@@ -826,6 +932,7 @@ def build_automations_router(
                 conn, slug, validated.kind, validated.payload,
                 title=validated.title,
                 expected_interval_seconds=validated.expected_interval_seconds,
+                instance_id=instance_id,
                 now=now,
             )
             store.finish_run(
@@ -882,14 +989,26 @@ def build_automations_router(
         finally:
             conn.close()
 
-    @router.post("/automations/{workflow_id}/run", response_model=RunResponse)
-    async def run_workflow(workflow_id: str, request: RunRequest) -> RunResponse:
-        instance = _require_instance()
+    async def _run_workflow_core(
+        instance: dict[str, Any], workflow_id: str, request: RunRequest
+    ) -> RunResponse:
+        """Fire ``workflow_id`` on ``instance`` and record/return the outcome.
+
+        Shared by the instance-scoped route and the unscoped compat shim
+        below, once each has resolved which instance actually owns
+        ``workflow_id``.
+        """
         api_key = _resolve_key(instance)
+        instance_id = instance["id"]
+        # Not just workflow_id: the in-flight guard is scoped to
+        # (instance, workflow) too, so instance A and instance B firing a
+        # same-numbered workflow at the same moment cannot false-positive a
+        # 409 against each other.
+        inflight_key = f"{instance_id}:{workflow_id}"
 
         conn = db()
         try:
-            row = store.get_workflow(conn, workflow_id)
+            row = store.get_workflow(conn, workflow_id, instance_id=instance_id)
             if row is None:
                 raise HTTPException(status_code=404, detail=f"no known workflow {workflow_id}")
 
@@ -897,15 +1016,18 @@ def build_automations_router(
             parsed = parse_workflow(definition)
             url = _trigger_url(instance["base_url"], parsed)
 
-            if workflow_id in inflight:
+            if inflight_key in inflight:
                 raise HTTPException(
                     status_code=409,
                     detail=f"{workflow_id} already has a run in flight",
                 )
-            inflight.add(workflow_id)
+            inflight.add(inflight_key)
 
             run_id = str(uuid.uuid4())
-            store.record_run_started(conn, run_id, workflow_id, workflow_name=row["name"], now=now)
+            store.record_run_started(
+                conn, run_id, workflow_id, workflow_name=row["name"],
+                instance_id=instance_id, now=now,
+            )
 
             client = factory(instance, api_key)
             transport = client.transport
@@ -914,9 +1036,9 @@ def build_automations_router(
                 task = asyncio.create_task(_fire_async(run_id, url, request.payload, transport))
                 background_tasks.add(task)
 
-                def _on_done(t: asyncio.Task, _workflow_id: str = workflow_id) -> None:
+                def _on_done(t: asyncio.Task, _key: str = inflight_key) -> None:
                     background_tasks.discard(t)
-                    inflight.discard(_workflow_id)
+                    inflight.discard(_key)
 
                 task.add_done_callback(_on_done)
                 return RunResponse(run_id=run_id, status="running", mode=None)
@@ -937,11 +1059,63 @@ def build_automations_router(
                     _finish_failed(conn, run_id, status="failed", mode=None, message=str(exc))
                     return RunResponse(run_id=run_id, status="failed", mode=None, message=str(exc))
             finally:
-                inflight.discard(workflow_id)
+                inflight.discard(inflight_key)
 
-            return _dispatch_result(conn, run_id, client, result)
+            return _dispatch_result(conn, run_id, client, result, instance_id=instance_id)
         finally:
             conn.close()
+
+    @router.post(
+        "/automations/instances/{instance_id}/workflows/{workflow_id}/run",
+        response_model=RunResponse,
+    )
+    async def run_workflow_scoped(
+        instance_id: str, workflow_id: str, request: RunRequest
+    ) -> RunResponse:
+        instance = _resolve_instance(instance_id)
+        return await _run_workflow_core(instance, workflow_id, request)
+
+    @router.post("/automations/{workflow_id}/run", response_model=RunResponse)
+    async def run_workflow(workflow_id: str, request: RunRequest) -> RunResponse:
+        """Compat shim. F9 removes this in favor of the instance-scoped route
+        above.
+
+        Resolves ``workflow_id`` across every registered instance rather than
+        assuming "the one instance": B1's ``(instance_id, id)`` composite key
+        made a genuine cross-instance id collision *representable* instead of
+        silently wrong (the old single-column key could not even tell two
+        same-numbered workflows on different instances apart). A real
+        collision here means two different instances each cache a workflow
+        under this exact id — this 409s and points at the scoped route rather
+        than guessing which one the caller meant.
+        """
+        instances = store.load_instances(settings.automations_file)
+        if not instances:
+            raise HTTPException(status_code=409, detail="no n8n instance registered")
+
+        conn = db()
+        try:
+            matches = [
+                entry
+                for entry in instances
+                if store.get_workflow(conn, workflow_id, instance_id=entry["id"]) is not None
+            ]
+        finally:
+            conn.close()
+
+        if not matches:
+            raise HTTPException(status_code=404, detail=f"no known workflow {workflow_id}")
+        if len(matches) > 1:
+            names = ", ".join(f"{m['name']} ({m['id']})" for m in matches)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"workflow id {workflow_id!r} exists on multiple instances ({names}) — "
+                    f"use POST /automations/instances/{{instance_id}}/workflows/"
+                    f"{workflow_id}/run"
+                ),
+            )
+        return await _run_workflow_core(matches[0], workflow_id, request)
 
     # --- run history -----------------------------------------------------------
 
@@ -957,25 +1131,67 @@ def build_automations_router(
 
     # --- widgets ---------------------------------------------------------------
 
+    def _resolve_widget_instance(
+        conn: sqlite3.Connection, slug: str, instance_id: str | None
+    ) -> str:
+        """The real ``instance_id`` a bare widget ``slug`` refers to.
+
+        An explicit ``instance_id`` (query param) is trusted as-is — a wrong
+        one simply 404s downstream, same as an unknown slug always has.
+        Omitted, the slug is resolved across every instance that currently
+        has a widget at it: B1's ``(instance_id, slug)`` key means a bare
+        slug that used to be unambiguous no longer is, so this 409s rather
+        than silently picking one when more than one instance answers to it.
+        """
+        if instance_id is not None:
+            return instance_id
+        matches = [
+            w["instance_id"]
+            for w in store.list_widgets(conn, include_hidden=True)
+            if w["slug"] == slug
+        ]
+        if not matches:
+            raise HTTPException(status_code=404, detail=f"no widget {slug}")
+        if len(matches) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"widget {slug!r} exists on multiple instances — pass "
+                    "?instance_id= to disambiguate"
+                ),
+            )
+        return matches[0]
+
     @router.get("/automations/widgets", response_model=list[WidgetOut])
-    def list_widgets_route(include_hidden: bool = False) -> list[WidgetOut]:
+    def list_widgets_route(
+        include_hidden: bool = False, instance_id: str | None = None
+    ) -> list[WidgetOut]:
+        """Every instance's widgets by default — the dashboard shows
+        everything at once. Pass ``instance_id`` to scope to one instance."""
         conn = db()
         try:
-            rows = store.list_widgets(conn, include_hidden=include_hidden)
+            rows = store.list_widgets(
+                conn, include_hidden=include_hidden, instance_id=instance_id
+            )
             return [WidgetOut(**row, state=store.widget_state(row, now=now)) for row in rows]
         finally:
             conn.close()
 
     @router.patch("/automations/widgets/{slug}", response_model=WidgetOut)
-    def patch_widget(slug: str, request: WidgetPatchRequest) -> WidgetOut:
+    def patch_widget(
+        slug: str, request: WidgetPatchRequest, instance_id: str | None = None
+    ) -> WidgetOut:
         conn = db()
         try:
-            existing = store.get_widget(conn, slug)
+            resolved_id = _resolve_widget_instance(conn, slug, instance_id)
+            existing = store.get_widget(conn, slug, instance_id=resolved_id)
             if existing is None:
                 raise HTTPException(status_code=404, detail=f"no widget {slug}")
 
             store.set_widget_flags(
-                conn, slug, pinned=request.pinned, hidden=request.hidden, position=request.position
+                conn, slug,
+                pinned=request.pinned, hidden=request.hidden, position=request.position,
+                instance_id=resolved_id,
             )
             if request.pinned is not None or request.hidden is not None or (
                 request.position is not None
@@ -985,20 +1201,21 @@ def build_automations_router(
                 # reshuffle a card the user just placed by hand.
                 store.set_pref(conn, "layout_taken_control", "true")
 
-            row = store.get_widget(conn, slug)
+            row = store.get_widget(conn, slug, instance_id=resolved_id)
             assert row is not None  # just confirmed above
             return WidgetOut(**row, state=store.widget_state(row, now=now))
         finally:
             conn.close()
 
     @router.delete("/automations/widgets/{slug}", response_model=ConnectResult)
-    def delete_widget_route(slug: str) -> ConnectResult:
+    def delete_widget_route(slug: str, instance_id: str | None = None) -> ConnectResult:
         conn = db()
         try:
-            existing = store.get_widget(conn, slug)
+            resolved_id = _resolve_widget_instance(conn, slug, instance_id)
+            existing = store.get_widget(conn, slug, instance_id=resolved_id)
             if existing is None:
                 raise HTTPException(status_code=404, detail=f"no widget {slug}")
-            store.delete_widget(conn, slug)
+            store.delete_widget(conn, slug, instance_id=resolved_id)
         finally:
             conn.close()
         return ConnectResult(ok=True, detail=f"{slug} removed")
@@ -1028,12 +1245,15 @@ def build_automations_router(
             for template in catalog.list_templates()
         ]
 
-    @router.post(
-        "/automations/templates/{template_id}/install",
-        response_model=InstallResult,
-        status_code=201,
-    )
-    async def install_template(template_id: str) -> InstallResult:
+    async def _install_template_core(
+        template_id: str, resolve_instance: Callable[[], dict[str, Any]]
+    ) -> InstallResult:
+        """Shared install body. ``resolve_instance`` is a thunk, not an
+        already-resolved instance, so the unknown-template/missing-callback-
+        URL checks below run (and can 404/409 on their own terms) before
+        instance resolution is even attempted — preserving the original
+        single-instance route's check ordering for the scoped route and the
+        compat shim alike."""
         try:
             catalog.load_definition(template_id)
         except catalog.UnknownTemplate as exc:
@@ -1053,7 +1273,7 @@ def build_automations_router(
                 ),
             )
 
-        instance = _require_instance()
+        instance = resolve_instance()
         api_key = _resolve_key(instance)
 
         token = external_auth.get_token()
@@ -1085,6 +1305,24 @@ def build_automations_router(
 
         open_in_n8n = f"{instance['base_url'].rstrip('/')}/workflow/{workflow_id}"
         return InstallResult(workflow_id=workflow_id, open_in_n8n=open_in_n8n)
+
+    @router.post(
+        "/automations/instances/{instance_id}/templates/{template_id}/install",
+        response_model=InstallResult,
+        status_code=201,
+    )
+    async def install_template_scoped(instance_id: str, template_id: str) -> InstallResult:
+        return await _install_template_core(template_id, lambda: _resolve_instance(instance_id))
+
+    @router.post(
+        "/automations/templates/{template_id}/install",
+        response_model=InstallResult,
+        status_code=201,
+    )
+    async def install_template(template_id: str) -> InstallResult:
+        """Compat shim, valid only while exactly one instance is registered —
+        409 otherwise, pointing at the scoped route above. F9 removes this."""
+        return await _install_template_core(template_id, _only_instance)
 
     # --- the inbound surface's own credential -------------------------------
     #

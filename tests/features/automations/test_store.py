@@ -807,3 +807,105 @@ def test_set_pref_overwrites_existing_value(conn) -> None:
     store.set_pref(conn, "layout-custom", "true")
     store.set_pref(conn, "layout-custom", "false")
     assert store.get_pref(conn, "layout-custom") == "false"
+
+
+# --- ensure_instance_attribution (B3 backfill) ------------------------------
+
+
+def _register(path: Path, *entries: dict) -> None:
+    store.save_instances(path, list(entries))
+
+
+def test_ensure_instance_attribution_backfills_when_exactly_one_instance(
+    conn, tmp_path: Path
+) -> None:
+    """The one unambiguous case: sentinel rows move to the sole instance's real id."""
+    registry = tmp_path / "automations.json"
+    _register(registry, {"id": "inst-1", "kind": "LOCAL", "name": "home", "base_url": "http://x"})
+
+    store.upsert_widget(conn, "w", "metric", {"value": 1})  # instance_id="" (sentinel)
+    store.upsert_workflow(conn, "5", name="W", tags=[], schema_json=None, active=True)
+    store.record_run_started(conn, "run-1", "5")
+    store.record_event(conn, tag="RUN", text="ran")
+
+    store.ensure_instance_attribution(conn, registry)
+
+    assert store.get_widget(conn, "w", instance_id="inst-1") is not None
+    assert store.get_widget(conn, "w", instance_id="") is None
+    assert store.get_workflow(conn, "5", instance_id="inst-1") is not None
+    assert store.get_workflow(conn, "5", instance_id="") is None
+    assert store.list_runs(conn)[0]["instance_id"] == "inst-1"
+    assert store.list_events(conn)[0]["instance_id"] == "inst-1"
+
+
+def test_ensure_instance_attribution_leaves_sentinel_rows_alone_with_zero_instances(
+    conn, tmp_path: Path
+) -> None:
+    """The property that protects user data: no instance registered means no
+    id to assign, so sentinel rows must stay exactly as they are."""
+    registry = tmp_path / "automations.json"  # never written to -- zero instances
+
+    store.upsert_widget(conn, "w", "metric", {"value": 1})
+    store.upsert_workflow(conn, "5", name="W", tags=[], schema_json=None, active=True)
+
+    store.ensure_instance_attribution(conn, registry)
+
+    assert store.get_widget(conn, "w", instance_id="") is not None
+    assert store.get_workflow(conn, "5", instance_id="") is not None
+
+
+def test_ensure_instance_attribution_leaves_sentinel_rows_alone_with_two_instances(
+    conn, tmp_path: Path
+) -> None:
+    """The property that protects user data: with 2+ instances registered,
+    guessing which one a sentinel row belongs to would silently mis-attribute
+    it, so it must be left untouched — visible, but unattributed."""
+    registry = tmp_path / "automations.json"
+    _register(
+        registry,
+        {"id": "inst-1", "kind": "LOCAL", "name": "home", "base_url": "http://x"},
+        {"id": "inst-2", "kind": "REMOTE", "name": "work", "base_url": "http://y"},
+    )
+
+    store.upsert_widget(conn, "w", "metric", {"value": 1})
+    store.upsert_workflow(conn, "5", name="W", tags=[], schema_json=None, active=True)
+
+    store.ensure_instance_attribution(conn, registry)
+
+    assert store.get_widget(conn, "w", instance_id="") is not None
+    assert store.get_workflow(conn, "5", instance_id="") is not None
+
+
+def test_ensure_instance_attribution_is_idempotent_and_cheap_once_done(
+    conn, tmp_path: Path
+) -> None:
+    """A second call after everything is already backfilled must not error
+    (and, per the guarded UPDATEs, has nothing left to touch)."""
+    registry = tmp_path / "automations.json"
+    _register(registry, {"id": "inst-1", "kind": "LOCAL", "name": "home", "base_url": "http://x"})
+    store.upsert_widget(conn, "w", "metric", {"value": 1})
+
+    store.ensure_instance_attribution(conn, registry)
+    store.ensure_instance_attribution(conn, registry)  # must not raise
+
+    assert store.get_widget(conn, "w", instance_id="inst-1") is not None
+
+
+def test_ensure_instance_attribution_skips_a_slug_that_already_collides(
+    conn, tmp_path: Path
+) -> None:
+    """A sentinel widget row is left alone (not reassigned into a collision)
+    when a row already occupies (real_instance_id, slug) — the NOT EXISTS
+    guard, not an IntegrityError, is how that is avoided."""
+    registry = tmp_path / "automations.json"
+    _register(registry, {"id": "inst-1", "kind": "LOCAL", "name": "home", "base_url": "http://x"})
+
+    store.upsert_widget(conn, "w", "metric", {"value": "sentinel"})  # instance_id=""
+    store.upsert_widget(conn, "w", "metric", {"value": "real"}, instance_id="inst-1")
+
+    store.ensure_instance_attribution(conn, registry)
+
+    # The real-id row is untouched, and the sentinel row survives rather than
+    # raising or being silently dropped.
+    assert store.get_widget(conn, "w", instance_id="inst-1")["payload"] == {"value": "real"}
+    assert store.get_widget(conn, "w", instance_id="")["payload"] == {"value": "sentinel"}

@@ -434,14 +434,17 @@ def test_install_posts_to_n8n_and_returns_workflow_id_and_open_in_n8n_url(
     assert body["workflow_id"] == "wf-created-1"
     assert body["open_in_n8n"] == "http://n8n.test/workflow/wf-created-1"
 
-    # And the install's own refresh pass cached the new workflow.
+    # And the install's own refresh pass cached the new workflow, scoped to
+    # the instance it was installed into (B3) rather than the '' sentinel.
     conn = _conn(settings)
     try:
-        cached = store.get_workflow(conn, "wf-created-1")
+        cached_by_id = {row["id"]: row for row in store.list_workflows(conn)}
     finally:
         conn.close()
-    assert cached is not None
+    assert "wf-created-1" in cached_by_id
+    cached = cached_by_id["wf-created-1"]
     assert cached["name"] == created_name
+    assert cached["instance_id"] != ""
 
 
 def test_install_generates_a_token_when_none_exists_yet(

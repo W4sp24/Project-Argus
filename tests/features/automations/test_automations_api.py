@@ -759,6 +759,213 @@ def test_patch_widget_sets_layout_taken_control(
     assert client.delete("/api/automations/widgets/ghost").status_code == 404
 
 
+# --- B3: instance-scoped refresh/run/widgets/discover -----------------------
+
+
+def test_refresh_by_id_prunes_only_this_instances_stale_cache(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """Two instances that happen to cache the same n8n-numbered workflow: a
+    refresh that drops home's tag must never touch work's cached row for the
+    same id."""
+    home = _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    work = _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+
+    conn = _conn(settings)
+    try:
+        store.upsert_workflow(
+            conn, "shared-id", name="Home WF (about to lose the tag)", tags=["argus"],
+            schema_json=None, active=True, instance_id=home["id"], now=fixed_clock,
+        )
+        store.upsert_workflow(
+            conn, "shared-id", name="Work WF", tags=["argus"], schema_json=None,
+            active=True, instance_id=work["id"], now=fixed_clock,
+        )
+    finally:
+        conn.close()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "home.n8n.test":
+            return json_response(200, {"data": []})  # nothing tagged argus anymore
+        raise AssertionError("only home should be refreshed by this call")
+
+    client = app_with(settings, handler)
+    response = client.post(f"/api/automations/instances/{home['id']}/refresh")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "count": 0, "dropped": 1}
+
+    conn = _conn(settings)
+    try:
+        assert store.get_workflow(conn, "shared-id", instance_id=home["id"]) is None
+        assert store.get_workflow(conn, "shared-id", instance_id=work["id"]) is not None
+    finally:
+        conn.close()
+
+
+def test_run_compat_shim_409s_on_cross_instance_id_collision_but_works_without_one(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    home = _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    work = _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+
+    conn = _conn(settings)
+    try:
+        # "5" is cached on both instances -- a genuine collision.
+        store.upsert_workflow(
+            conn, "5", name="Home WF", tags=["argus"], schema_json=WORKFLOW_DEF,
+            active=True, instance_id=home["id"], now=fixed_clock,
+        )
+        store.upsert_workflow(
+            conn, "5", name="Work WF", tags=["argus"], schema_json=WORKFLOW_DEF,
+            active=True, instance_id=work["id"], now=fixed_clock,
+        )
+        # "unique-1" only lives on home -- no collision.
+        store.upsert_workflow(
+            conn, "unique-1", name="Send Report", tags=["argus"], schema_json=WORKFLOW_DEF,
+            active=True, instance_id=home["id"], now=fixed_clock,
+        )
+    finally:
+        conn.close()
+
+    client = app_with(settings, lambda request: httpx.Response(200, content=b""))
+
+    collision = client.post("/api/automations/5/run", json={"payload": {}})
+    assert collision.status_code == 409
+    assert "instances" in collision.json()["detail"]
+
+    ok = client.post("/api/automations/unique-1/run", json={"payload": {}})
+    assert ok.status_code == 200
+    assert ok.json()["status"] == "ok"
+
+
+def test_run_scoped_route_runs_on_exactly_the_named_instance(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    home = _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    work = _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+
+    conn = _conn(settings)
+    try:
+        store.upsert_workflow(
+            conn, "5", name="Home WF", tags=["argus"], schema_json=WORKFLOW_DEF,
+            active=True, instance_id=home["id"], now=fixed_clock,
+        )
+        store.upsert_workflow(
+            conn, "5", name="Work WF", tags=["argus"], schema_json=WORKFLOW_DEF,
+            active=True, instance_id=work["id"], now=fixed_clock,
+        )
+    finally:
+        conn.close()
+
+    seen_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_hosts.append(request.url.host)
+        return httpx.Response(200, content=b"")
+
+    client = app_with(settings, handler)
+    response = client.post(
+        f"/api/automations/instances/{home['id']}/workflows/5/run", json={"payload": {}}
+    )
+
+    assert response.status_code == 200
+    assert seen_hosts == ["home.n8n.test"]
+
+    runs = client.get("/api/automations/runs").json()
+    assert runs[0]["instance_id"] == home["id"]
+
+
+def test_patch_and_delete_widget_ambiguous_slug_409s_but_scoped_instance_id_works(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    conn = _conn(settings)
+    try:
+        store.upsert_widget(conn, "w", "metric", {"value": 1}, instance_id="a", now=fixed_clock)
+        store.upsert_widget(conn, "w", "metric", {"value": 2}, instance_id="b", now=fixed_clock)
+    finally:
+        conn.close()
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    ambiguous_patch = client.patch("/api/automations/widgets/w", json={"pinned": True})
+    assert ambiguous_patch.status_code == 409
+
+    scoped_patch = client.patch(
+        "/api/automations/widgets/w", json={"pinned": True}, params={"instance_id": "a"}
+    )
+    assert scoped_patch.status_code == 200
+    assert scoped_patch.json()["instance_id"] == "a"
+    assert scoped_patch.json()["pinned"] is True
+
+    # "b" untouched by the scoped patch above.
+    conn = _conn(settings)
+    try:
+        assert store.get_widget(conn, "w", instance_id="b")["pinned"] is False
+    finally:
+        conn.close()
+
+    ambiguous_delete = client.delete("/api/automations/widgets/w")
+    assert ambiguous_delete.status_code == 409
+
+    scoped_delete = client.delete("/api/automations/widgets/w", params={"instance_id": "b"})
+    assert scoped_delete.status_code == 200
+
+    conn = _conn(settings)
+    try:
+        assert store.get_widget(conn, "w", instance_id="b") is None
+        assert store.get_widget(conn, "w", instance_id="a") is not None  # untouched
+    finally:
+        conn.close()
+
+
+def test_discover_returns_tagged_workflows_without_persisting_anything(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(
+            200,
+            {
+                "data": [
+                    {
+                        "id": "wf1",
+                        "name": "Send Report",
+                        "active": True,
+                        "tags": [{"name": "argus"}],
+                        "nodes": [
+                            {"type": "n8n-nodes-base.webhook", "parameters": {"path": "x"}}
+                        ],
+                    },
+                    {
+                        "id": "wf2",
+                        "name": "Cron Push",
+                        "active": False,
+                        "tags": [{"name": "argus"}],
+                        "nodes": [{"type": "n8n-nodes-base.cron", "parameters": {}}],
+                    },
+                ]
+            },
+        )
+
+    client = app_with(settings, handler)
+    response = client.post(
+        "/api/automations/instances/discover",
+        json={"base_url": "http://n8n.test", "api_key": "key"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {w["id"] for w in body} == {"wf1", "wf2"}
+    by_id = {w["id"]: w for w in body}
+    assert by_id["wf1"]["kind"] == "action"
+    assert by_id["wf2"]["kind"] == "display"
+    assert all(w["tagged"] is True for w in body)
+
+    # Not registered, and nothing was persisted by discovering it.
+    assert not settings.automations_file.exists()
+    assert not settings.db_path.exists()
+
+
 # --- wiring ---------------------------------------------------------------
 
 

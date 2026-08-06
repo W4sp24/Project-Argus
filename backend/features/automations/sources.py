@@ -49,21 +49,19 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _fresh_widget(
-    conn: sqlite3.Connection, slug: str, *, now: Callable[[], datetime] = _utcnow
-) -> dict[str, Any] | None:
-    """The widget at ``slug`` only if it is currently trustworthy.
+def _is_trustworthy(row: dict[str, Any], *, now: Callable[[], datetime]) -> bool:
+    """Whether ``row`` is currently fit to serve as this consumer's source of truth.
 
-    Returns ``None`` for a widget that has never been pushed to or that has
-    gone stale, so the caller falls back rather than serving old data as if it
-    were current.
+    ``False`` for a widget that has never been pushed to, that has gone
+    stale per its declared cadence, or (for a widget that declares no
+    cadence at all) has gone past :data:`DEFAULT_FRESHNESS_SECONDS` — see
+    the module docstring for why that ceiling exists.
     """
-    row = store.get_widget(conn, slug)
-    if row is None or not row.get("last_seen_at"):
-        return None
+    if not row.get("last_seen_at"):
+        return False
 
     if store.widget_state(row, now=now) == "stale":
-        return None
+        return False
 
     # widget_state cannot mark a widget with no declared cadence as stale,
     # because nothing was declared to compare against. Outside the dashboard
@@ -72,9 +70,30 @@ def _fresh_widget(
     if row.get("expected_interval_seconds") is None:
         age = (now() - datetime.fromisoformat(row["last_seen_at"])).total_seconds()
         if age > DEFAULT_FRESHNESS_SECONDS:
-            return None
+            return False
 
-    return row
+    return True
+
+
+def _fresh_widget(
+    conn: sqlite3.Connection, slug: str, *, now: Callable[[], datetime] = _utcnow
+) -> dict[str, Any] | None:
+    """The freshest currently-trustworthy widget at ``slug``, across every instance.
+
+    B1's ``(instance_id, slug)`` key means the same slug can now carry a
+    separate row per registered n8n instance — this consumer does not care
+    which instance answered, only which one has the most recent good data, so
+    every candidate is filtered through :func:`_is_trustworthy` first (a
+    stale or long-dead instance's row must never win just for being present)
+    and the freshest survivor by ``last_seen_at`` wins. Returns ``None`` when
+    no instance's row is currently trustworthy, so the caller falls back
+    rather than serving old data as if it were current.
+    """
+    candidates = [w for w in store.list_widgets(conn, include_hidden=True) if w["slug"] == slug]
+    trustworthy = [w for w in candidates if _is_trustworthy(w, now=now)]
+    if not trustworthy:
+        return None
+    return max(trustworthy, key=lambda w: datetime.fromisoformat(w["last_seen_at"]))
 
 
 def calendar_events(

@@ -163,6 +163,53 @@ def test_one_bad_entry_does_not_sink_the_rest(conn) -> None:
     assert [e.title for e in events] == ["Good"]
 
 
+# --- B3: a slug spread across instances ----------------------------------
+
+
+def test_freshest_of_two_instances_wins(conn) -> None:
+    """A slug pushed by two different n8n instances: the freshest trustworthy
+    push wins, regardless of which instance it came from."""
+    store.upsert_widget(
+        conn, sources.CALENDAR_SLUG, "timeline",
+        {"entries": [{"at": f"{DAY.isoformat()}T09:00:00", "text": "Stale instance"}]},
+        expected_interval_seconds=900, instance_id="instance-a",
+        now=_clock(NOW - timedelta(minutes=30)),
+    )
+    store.upsert_widget(
+        conn, sources.CALENDAR_SLUG, "timeline",
+        {"entries": [{"at": f"{DAY.isoformat()}T09:00:00", "text": "Fresh instance"}]},
+        expected_interval_seconds=900, instance_id="instance-b",
+        now=_clock(NOW - timedelta(minutes=1)),
+    )
+
+    events, error = sources.calendar_events(conn, DAY, now=_clock(NOW))
+
+    assert error is None
+    assert [e.title for e in events] == ["Fresh instance"]
+
+
+def test_freshest_of_two_instances_falls_back_when_past_the_ceiling(conn) -> None:
+    """Both instances pushed with no declared cadence; the freshest of the two
+    is still past DEFAULT_FRESHNESS_SECONDS, so neither may mask the
+    connector — the ceiling applies per-candidate, not just to the winner."""
+    long_ago = NOW - timedelta(seconds=sources.DEFAULT_FRESHNESS_SECONDS + 3600)
+    longer_ago = NOW - timedelta(seconds=sources.DEFAULT_FRESHNESS_SECONDS + 7200)
+    store.upsert_widget(
+        conn, sources.CALENDAR_SLUG, "timeline",
+        {"entries": [{"at": f"{DAY.isoformat()}T09:00:00", "text": "Dead A"}]},
+        expected_interval_seconds=None, instance_id="instance-a", now=_clock(longer_ago),
+    )
+    store.upsert_widget(
+        conn, sources.CALENDAR_SLUG, "timeline",
+        {"entries": [{"at": f"{DAY.isoformat()}T09:00:00", "text": "Dead B (freshest)"}]},
+        expected_interval_seconds=None, instance_id="instance-b", now=_clock(long_ago),
+    )
+
+    events, _ = sources.calendar_events(conn, DAY, now=_clock(NOW))
+
+    assert events == ["FROM_GCAL"]
+
+
 def test_events_are_filtered_to_the_requested_day(conn) -> None:
     store.upsert_widget(
         conn,

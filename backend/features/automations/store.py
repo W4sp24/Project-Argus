@@ -83,6 +83,81 @@ def save_instances(path: Path, instances: list[dict[str, Any]]) -> None:
     save_json(path, instances)
 
 
+def ensure_instance_attribution(conn: sqlite3.Connection, automations_file: Path) -> None:
+    """Backfill ``''``-sentinel rows to the single registered instance's real id.
+
+    B1 gave ``automation_widgets``/``automation_workflows``/``automation_runs``/
+    ``automation_events`` an ``instance_id`` column, but every row written
+    before that chunk (and everything written since through a not-yet-scoped
+    call site) still carries the ``''`` "not yet attributed" sentinel. This is
+    the one place that gets backfilled to a real id — and only in the one
+    case where the right answer is unambiguous: **exactly one** instance
+    registered. With zero registered there is no id to assign; with two or
+    more, guessing which instance a sentinel row belongs to would silently
+    mis-attribute a user's data, so those rows are left exactly as they are
+    — still visible (every ``list_*``/``get_*`` helper here defaults to
+    listing across every instance, sentinel included) but not backfilled
+    until the ambiguity is resolved by hand (e.g. deleting the extra
+    instance).
+
+    Cheap on the common path, matching the guard-then-noop idiom
+    ``backend.core.db.init_schema`` already uses for its own migrations: the
+    existence check below is a single indexed read, and once nothing carries
+    the sentinel anymore this function never issues a write again for that
+    database. Called from the routers' ``db()`` helper on every connection,
+    so it does not need its own caching beyond that cheap check.
+
+    The per-table ``UPDATE``s are guarded with ``NOT EXISTS`` against the
+    table the row is being moved into: ``automation_widgets``/
+    ``automation_workflows`` are keyed on ``(instance_id, slug|id)``, so if a
+    real-instance-id row already occupies the slot a sentinel row would move
+    into (e.g. a scoped run already pushed to that slug before this backfill
+    ran), blindly reassigning the sentinel row would raise
+    ``sqlite3.IntegrityError`` instead of quietly leaving it alone.
+    ``automation_runs``/``automation_events`` have no such key collision risk
+    (``instance_id`` is not part of either table's primary key) and are
+    reassigned unconditionally.
+    """
+    pending = conn.execute(
+        "SELECT 1 FROM automation_widgets WHERE instance_id = '' "
+        "UNION ALL SELECT 1 FROM automation_workflows WHERE instance_id = '' "
+        "UNION ALL SELECT 1 FROM automation_runs WHERE instance_id = '' "
+        "UNION ALL SELECT 1 FROM automation_events WHERE instance_id = '' "
+        "LIMIT 1"
+    ).fetchone()
+    if pending is None:
+        return  # nothing left to backfill — the common path, and a read only
+
+    instances = load_instances(automations_file)
+    if len(instances) != 1:
+        return  # ambiguous (0 or 2+) — leave the sentinel rows alone
+
+    instance_id = instances[0]["id"]
+    conn.execute(
+        "UPDATE automation_widgets SET instance_id = ? "
+        "WHERE instance_id = '' AND NOT EXISTS ("
+        "  SELECT 1 FROM automation_widgets AS existing "
+        "  WHERE existing.slug = automation_widgets.slug AND existing.instance_id = ?"
+        ")",
+        (instance_id, instance_id),
+    )
+    conn.execute(
+        "UPDATE automation_workflows SET instance_id = ? "
+        "WHERE instance_id = '' AND NOT EXISTS ("
+        "  SELECT 1 FROM automation_workflows AS existing "
+        "  WHERE existing.id = automation_workflows.id AND existing.instance_id = ?"
+        ")",
+        (instance_id, instance_id),
+    )
+    conn.execute(
+        "UPDATE automation_runs SET instance_id = ? WHERE instance_id = ''", (instance_id,)
+    )
+    conn.execute(
+        "UPDATE automation_events SET instance_id = ? WHERE instance_id = ''", (instance_id,)
+    )
+    conn.commit()
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -447,10 +522,21 @@ def list_runs(
 
 
 def recent_runs_for(
-    conn: sqlite3.Connection, workflow_id: str, limit: int = 5
+    conn: sqlite3.Connection,
+    workflow_id: str,
+    limit: int = 5,
+    *,
+    instance_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """The most recent runs for one workflow — e.g. "last 5 runs, 2 failed"."""
-    return list_runs(conn, limit=limit, workflow_id=workflow_id)
+    """The most recent runs for one workflow — e.g. "last 5 runs, 2 failed".
+
+    ``instance_id`` unset (the default) matches every instance, same as
+    :func:`list_runs`'s own default — a workflow id is only unique within an
+    instance, so a caller that knows which instance it means should pass it
+    to avoid pulling in an unrelated same-numbered workflow's runs from a
+    different instance.
+    """
+    return list_runs(conn, limit=limit, workflow_id=workflow_id, instance_id=instance_id)
 
 
 def expire_stale_runs(
