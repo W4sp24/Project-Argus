@@ -120,11 +120,21 @@ def _seed_instance(
 ) -> None:
     """Register an instance directly through the store/keyring, bypassing the
     HTTP endpoint — matches test_automations_api.py's helper of the same name."""
+    import uuid
+
     from backend.agent.credentials import store_key
 
     key_ref = store.key_ref_for(name)
-    entry = {"name": name, "base_url": base_url, "key_ref": key_ref}
-    store.save_instance(settings.automations_file, entry)
+    entry = {
+        "id": uuid.uuid4().hex,
+        "name": name,
+        "kind": "REMOTE",
+        "base_url": base_url,
+        "key_ref": key_ref,
+    }
+    instances = store.load_instances(settings.automations_file)
+    instances.append(entry)
+    store.save_instances(settings.automations_file, instances)
     store_key(key_ref, api_key)
 
 

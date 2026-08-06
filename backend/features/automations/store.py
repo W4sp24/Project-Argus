@@ -83,34 +83,6 @@ def save_instances(path: Path, instances: list[dict[str, Any]]) -> None:
     save_json(path, instances)
 
 
-# --- B1 compatibility wrappers ----------------------------------------------
-#
-# router.py is unchanged in this chunk and still calls the single-instance
-# API below. B2 removes these three functions once the router is migrated to
-# load_instances/save_instances directly.
-
-
-def load_instance(path: Path) -> dict[str, Any] | None:
-    """The first registered n8n instance, or ``None`` when there isn't one."""
-    instances = load_instances(path)
-    return instances[0] if instances else None
-
-
-def save_instance(path: Path, entry: dict[str, Any]) -> None:
-    """Persist ``entry`` as the sole registered instance.
-
-    Callers only ever reach this when no instance is registered yet (see
-    ``register_instance``'s 409 guard in the router), so replacing the whole
-    list with a single entry matches the old single-dict overwrite exactly.
-    """
-    save_instances(path, [entry])
-
-
-def delete_instance(path: Path) -> None:
-    """Clear the registered instance. The caller is responsible for the keyring entry."""
-    save_instances(path, [])
-
-
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 

@@ -89,19 +89,27 @@ def _default_client_factory(instance: dict[str, Any], api_key: str) -> N8nClient
 
 
 class InstanceInfo(BaseModel):
-    """The single registered n8n instance. Never carries its API key (I4) —
+    """One registered n8n instance. Never carries its API key (I4) —
     only ``has_key``/``key_state``, exactly like ``McpServerInfo``."""
 
+    id: str
     name: str
+    #: "LOCAL" | "REMOTE".
+    kind: str = "REMOTE"
     base_url: str
     has_key: bool = False
     key_state: str = "absent"
+    #: Live reachability. Defaults True (a fresh registration was just probed
+    #: ok); GET /automations/instances overrides this with a real, concurrent
+    #: probe per instance — see list_instances/_reachability below.
+    connected: bool = True
 
 
 class InstanceRequest(BaseModel):
     name: str
     base_url: str
     api_key: str
+    kind: str = "REMOTE"
 
 
 class ProbeRequest(BaseModel):
@@ -175,6 +183,13 @@ class WorkflowCard(BaseModel):
 
 class AutomationsResponse(BaseModel):
     instance: InstanceInfo | None
+    #: F9 removes ``instance`` in favor of this. Until then it is derived
+    #: from this list — ``instances[0] if len(instances) == 1 else None`` —
+    #: so a pre-multi-instance frontend keeps rendering exactly what it
+    #: always has for 0 or 1 registered instances, and degrades to its "no
+    #: instance registered" empty state for 2+ rather than showing stale or
+    #: wrong data.
+    instances: list[InstanceInfo] = []
     workflows: list[WorkflowCard]
     #: Whether n8n answered the live reachability check made on this request.
     #: False (with cached cards still populated) is a normal, fully-supported
@@ -380,20 +395,28 @@ def build_automations_router(
         init_schema(conn)
         return conn
 
-    def _instance_info(entry: dict[str, Any]) -> InstanceInfo:
+    def _instance_info(entry: dict[str, Any], *, connected: bool = True) -> InstanceInfo:
         state = key_state(entry.get("key_ref"))
         return InstanceInfo(
+            id=entry["id"],
             name=entry["name"],
+            kind=entry.get("kind", "REMOTE"),
             base_url=entry["base_url"],
             has_key=state == KEY_PRESENT,
             key_state=state,
+            connected=connected,
         )
 
     def _require_instance() -> dict[str, Any]:
-        instance = store.load_instance(settings.automations_file)
-        if instance is None:
+        """The first registered instance, matching the old single-instance
+        API's ``load_instance`` — used by run dispatch and template install,
+        neither of which is instance-aware yet (that is later work; see the
+        module docstring). Not a compat shim itself, so F9 does not remove
+        this."""
+        instances = store.load_instances(settings.automations_file)
+        if not instances:
             raise HTTPException(status_code=409, detail="no n8n instance registered")
-        return instance
+        return instances[0]
 
     def _resolve_key(instance: dict[str, Any]) -> str:
         key = get_key(instance.get("key_ref"))
@@ -414,6 +437,24 @@ def build_automations_router(
         """
         client = factory({"base_url": base_url}, api_key)
         return await n8n_probe(base_url, api_key, transport=client.transport)
+
+    async def _reachability(instance: dict[str, Any]) -> tuple[bool, str]:
+        """A live, non-blocking reachability check for one registered instance.
+
+        Never raises — a down n8n degrades to ``(False, detail)``, never to a
+        slow, empty, or failed response. Shared by ``GET /automations`` (the
+        single-instance view) and ``GET /automations/instances`` (every
+        instance, probed concurrently — see ``list_instances``).
+        """
+        key = get_key(instance.get("key_ref"))
+        if key is None:
+            return False, "n8n instance is registered but has no stored API key"
+        client = factory(instance, key)
+        try:
+            await client.list_workflows(tags=DISCOVERY_TAG)
+            return True, "connected"
+        except N8nError as exc:
+            return False, str(exc)
 
     def _card_from_row(conn: sqlite3.Connection, row: dict[str, Any]) -> WorkflowCard:
         definition = row["schema_json"] or {}
@@ -438,17 +479,19 @@ def build_automations_router(
 
     # --- instance registry --------------------------------------------------
 
-    @router.post("/automations/instance/test", response_model=ProbeResultOut)
+    @router.post("/automations/instances/test", response_model=ProbeResultOut)
+    @router.post("/automations/instance/test", response_model=ProbeResultOut)  # F9 removes this
     async def test_instance(request: ProbeRequest) -> ProbeResultOut:
         """Probe only — persists nothing, registered or not."""
         result = await _probe(request.base_url.strip(), request.api_key.strip())
         return ProbeResultOut.from_result(result)
 
-    @router.post("/automations/instance", response_model=InstanceInfo, status_code=201)
+    @router.post("/automations/instances", response_model=InstanceInfo, status_code=201)
     async def register_instance(request: InstanceRequest) -> InstanceInfo:
         name = request.name.strip()
         base_url = request.base_url.strip()
         api_key = request.api_key.strip()
+        kind = request.kind.strip().upper() or "REMOTE"
 
         if not store.INSTANCE_NAME_RE.match(name):
             raise HTTPException(status_code=422, detail="invalid instance name")
@@ -456,12 +499,16 @@ def build_automations_router(
             raise HTTPException(status_code=422, detail="base_url must be an http(s) URL")
         if not api_key:
             raise HTTPException(status_code=422, detail="api_key is required")
+        if kind not in ("LOCAL", "REMOTE"):
+            raise HTTPException(status_code=422, detail="kind must be 'LOCAL' or 'REMOTE'")
 
-        existing = store.load_instance(settings.automations_file)
-        if existing is not None:
+        instances = store.load_instances(settings.automations_file)
+        # 409 means a duplicate NAME now, not "an instance already exists" —
+        # registering a second, distinctly-named instance is the whole point
+        # of this endpoint.
+        if any(entry["name"] == name for entry in instances):
             raise HTTPException(
-                status_code=409,
-                detail=f"an n8n instance is already registered ({existing['name']})",
+                status_code=409, detail=f"an n8n instance named {name!r} already exists"
             )
 
         # Verification before persistence: storing a base_url/key that turns
@@ -480,77 +527,170 @@ def build_automations_router(
         # user can see and retry, never an orphaned keyring secret nothing in
         # the registry points at.
         key_ref = store.key_ref_for(name)
-        entry = {"name": name, "base_url": base_url, "key_ref": key_ref}
-        store.save_instance(settings.automations_file, entry)
+        entry = {
+            "id": uuid.uuid4().hex,
+            "name": name,
+            "kind": kind,
+            "base_url": base_url,
+            "key_ref": key_ref,
+        }
+        instances.append(entry)
+        store.save_instances(settings.automations_file, instances)
         try:
             store_key(key_ref, api_key)
         except CredentialError as exc:
-            store.delete_instance(settings.automations_file)
+            # Roll back only the row just added — reload first, since another
+            # request could have registered/removed a different instance
+            # between the append above and this failure, and the other
+            # instances' rows (and keyring secrets) must be untouched.
+            remaining = [
+                e
+                for e in store.load_instances(settings.automations_file)
+                if e["id"] != entry["id"]
+            ]
+            store.save_instances(settings.automations_file, remaining)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         return _instance_info(entry)
 
-    @router.delete("/automations/instance", response_model=ConnectResult)
-    def delete_instance_route() -> ConnectResult:
-        instance = store.load_instance(settings.automations_file)
-        if instance is None:
-            raise HTTPException(status_code=404, detail="no n8n instance registered")
+    @router.post("/automations/instance", response_model=InstanceInfo, status_code=201)
+    async def register_instance_compat(request: InstanceRequest) -> InstanceInfo:
+        """Compat shim: 409 if the list is non-empty — identical observable
+        behaviour to before multi-instance support for anyone who only ever
+        registers one. F9 removes this in favor of POST /automations/instances."""
+        existing = store.load_instances(settings.automations_file)
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"an n8n instance is already registered ({existing[0]['name']})",
+            )
+        return await register_instance(request)
+
+    @router.delete("/automations/instances/{instance_id}", response_model=ConnectResult)
+    def delete_instance_by_id(instance_id: str) -> ConnectResult:
+        instances = store.load_instances(settings.automations_file)
+        target = next((entry for entry in instances if entry.get("id") == instance_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"no n8n instance {instance_id}")
 
         # Keyring first, then registry: an orphaned secret would outlive the
         # thing it belonged to. A crash after this leaves a listed instance
         # the user can delete again, not a secret nothing points at anymore.
-        # Mirrors delete_mcp_server exactly.
-        delete_key(instance.get("key_ref"))
-        store.delete_instance(settings.automations_file)
+        # Mirrors delete_mcp_server exactly. Only this instance's row is
+        # dropped — the rest of the list (and their keyring secrets, never
+        # touched here) is written back unchanged.
+        delete_key(target.get("key_ref"))
+        remaining = [entry for entry in instances if entry.get("id") != instance_id]
+        store.save_instances(settings.automations_file, remaining)
+
+        conn = db()
+        try:
+            # B3: scoped to this instance's real id, not the '' sentinel
+            # every cached workflow row still carries until a later chunk
+            # backfills real instance ids into automation_workflows (the
+            # writer, store.upsert_workflow, is not instance-aware yet — see
+            # _refresh_instance below). That makes this call a no-op against
+            # today's data rather than an invented backfill, but it is still
+            # the correct call to make: unlike the '' sentinel the singular
+            # compat route below still uses, scoping to a real id can never
+            # delete a workflow that in fact belongs to a *different*
+            # instance.
+            store.delete_missing_workflows(conn, [], instance_id=instance_id)
+        finally:
+            conn.close()
+        return ConnectResult(ok=True, detail=f"{target['name']} disconnected")
+
+    @router.delete("/automations/instance", response_model=ConnectResult)
+    def delete_instance_route() -> ConnectResult:
+        """Compat shim: deletes ``instances[0]``, 404 when empty — identical
+        observable behaviour to before multi-instance support. F9 removes
+        this in favor of DELETE /automations/instances/{id}."""
+        instances = store.load_instances(settings.automations_file)
+        if not instances:
+            raise HTTPException(status_code=404, detail="no n8n instance registered")
+        target = instances[0]
+
+        # Keyring first, then registry — same ordering and reasoning as
+        # delete_instance_by_id above.
+        delete_key(target.get("key_ref"))
+        store.save_instances(settings.automations_file, instances[1:])
 
         conn = db()
         try:
             store.delete_missing_workflows(conn, [])
         finally:
             conn.close()
-        return ConnectResult(ok=True, detail=f"{instance['name']} disconnected")
+        return ConnectResult(ok=True, detail=f"{target['name']} disconnected")
 
     # --- discovery -----------------------------------------------------------
 
+    @router.get("/automations/instances", response_model=list[InstanceInfo])
+    async def list_instances() -> list[InstanceInfo]:
+        """Every registered instance, each with its own live reachability.
+
+        Probed concurrently (``asyncio.gather``), not in series — N
+        instances must not mean N sequential timeouts. A down n8n degrades
+        that one row to ``connected: false`` (see ``_reachability``, which
+        never raises); it never fails, empties, or slows this whole call.
+        """
+        instances = store.load_instances(settings.automations_file)
+        if not instances:
+            return []
+        results = await asyncio.gather(*(_reachability(entry) for entry in instances))
+        return [
+            _instance_info(entry, connected=connected)
+            for entry, (connected, _detail) in zip(instances, results, strict=True)
+        ]
+
     @router.get("/automations", response_model=AutomationsResponse)
     async def list_automations() -> AutomationsResponse:
-        instance = store.load_instance(settings.automations_file)
-        if instance is None:
+        instances = store.load_instances(settings.automations_file)
+        if not instances:
             return AutomationsResponse(
-                instance=None, workflows=[], connected=False, detail="no n8n instance registered"
+                instance=None,
+                instances=[],
+                workflows=[],
+                connected=False,
+                detail="no n8n instance registered",
             )
 
-        info = _instance_info(instance)
+        infos = [_instance_info(entry) for entry in instances]
+        # F9 removes this: the old singular `instance` field, byte-identical
+        # to before multi-instance support for 0 or 1 registered instances,
+        # degrading to None for 2+ — which the pre-migration frontend already
+        # renders as its "no instance registered" empty state.
+        single = infos[0] if len(infos) == 1 else None
+
         conn = db()
         try:
             cards = [_card_from_row(conn, row) for row in store.list_workflows(conn)]
         finally:
             conn.close()
 
-        connected = False
-        detail = "n8n instance is registered but has no stored API key"
-        key = get_key(instance.get("key_ref"))
-        if key is not None:
-            client = factory(instance, key)
+        if single is not None:
             # A live reachability check, but never a blocking one: the cards
             # above already came from cache regardless of what happens here.
-            # A down n8n degrades this endpoint to connected: false, not to a
-            # slow, empty, or failed dashboard load.
-            try:
-                await client.list_workflows(tags=DISCOVERY_TAG)
-                connected = True
-                detail = "connected"
-            except N8nError as exc:
-                connected = False
-                detail = str(exc)
+            connected, detail = await _reachability(instances[0])
+        else:
+            connected, detail = False, "multiple n8n instances registered"
 
         return AutomationsResponse(
-            instance=info, workflows=cards, connected=connected, detail=detail
+            instance=single, instances=infos, workflows=cards, connected=connected, detail=detail
         )
 
-    @router.post("/automations/refresh", response_model=RefreshResult)
-    async def refresh() -> RefreshResult:
-        instance = _require_instance()
+    async def _refresh_instance(instance: dict[str, Any]) -> RefreshResult:
+        """One instance's refresh pass: pull ``?tags=argus`` workflows from
+        n8n, upsert the cache, and drop anything cached but no longer seen.
+
+        B3: still writes/reads ``automation_workflows`` under the shared ''
+        sentinel (``store.upsert_workflow``'s default), not this instance's
+        real id — ``run_workflow``'s lookup (``store.get_workflow``) is not
+        instance-aware yet, so scoping only this write would silently break
+        the RUN button for the first/only registered instance. Until that
+        lookup is threaded through too, every registered instance's refresh
+        shares one cache namespace; a later chunk backfills real ids
+        end-to-end (writer and reader together).
+        """
         api_key = _resolve_key(instance)
         client = factory(instance, api_key)
         try:
@@ -587,6 +727,31 @@ def build_automations_router(
             conn.close()
 
         return RefreshResult(ok=True, count=len(seen_ids), dropped=dropped)
+
+    @router.post("/automations/instances/{instance_id}/refresh", response_model=RefreshResult)
+    async def refresh_instance_by_id(instance_id: str) -> RefreshResult:
+        instances = store.load_instances(settings.automations_file)
+        target = next((entry for entry in instances if entry.get("id") == instance_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"no n8n instance {instance_id}")
+        return await _refresh_instance(target)
+
+    @router.post("/automations/refresh", response_model=RefreshResult)
+    async def refresh() -> RefreshResult:
+        """Compat shim: refreshes every registered instance concurrently and
+        aggregates the totals — byte-identical to the old single-instance
+        behaviour when exactly one instance is registered. F9 removes this
+        in favor of POST /automations/instances/{id}/refresh."""
+        instances = store.load_instances(settings.automations_file)
+        if not instances:
+            raise HTTPException(status_code=409, detail="no n8n instance registered")
+
+        results = await asyncio.gather(*(_refresh_instance(entry) for entry in instances))
+        return RefreshResult(
+            ok=all(result.ok for result in results),
+            count=sum(result.count for result in results),
+            dropped=sum(result.dropped for result in results),
+        )
 
     # --- run dispatch ---------------------------------------------------------
 
@@ -912,8 +1077,11 @@ def build_automations_router(
         # Reuse discovery's own cache-refresh pass rather than duplicating its
         # upsert/drop logic here: the newly-created workflow only becomes a
         # dashboard card once it has been through the same pass every other
-        # refresh runs.
-        await refresh()
+        # refresh runs. Scoped to the instance just installed into, not the
+        # POST /automations/refresh compat shim's refresh-everything — with
+        # 2+ instances registered, installing into one must not also pay for
+        # (or wait on) refreshing every other one.
+        await _refresh_instance(instance)
 
         open_in_n8n = f"{instance['base_url'].rstrip('/')}/workflow/{workflow_id}"
         return InstallResult(workflow_id=workflow_id, open_in_n8n=open_in_n8n)

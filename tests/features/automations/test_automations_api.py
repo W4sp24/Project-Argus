@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.agent.credentials import CredentialError
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.automations import store
@@ -125,16 +127,29 @@ def _seed_instance(
     name: str = "home",
     base_url: str = "http://n8n.test",
     api_key: str = "n8n-secret",
-) -> None:
+    kind: str = "REMOTE",
+) -> dict[str, Any]:
     """Register an instance directly through the store/keyring, bypassing the
     HTTP endpoint — for tests that care about something downstream of
-    registration, not registration itself."""
+    registration, not registration itself. Appends to whatever is already
+    registered (via ``store.save_instances``'s list shape) rather than
+    overwriting it, so this can be called more than once to seed several
+    instances. Returns the entry it wrote."""
     from backend.agent.credentials import store_key
 
     key_ref = store.key_ref_for(name)
-    entry = {"name": name, "base_url": base_url, "key_ref": key_ref}
-    store.save_instance(settings.automations_file, entry)
+    entry = {
+        "id": uuid.uuid4().hex,
+        "name": name,
+        "kind": kind,
+        "base_url": base_url,
+        "key_ref": key_ref,
+    }
+    instances = store.load_instances(settings.automations_file)
+    instances.append(entry)
+    store.save_instances(settings.automations_file, instances)
     store_key(key_ref, api_key)
+    return entry
 
 
 WORKFLOW_DEF: dict[str, Any] = {
@@ -170,7 +185,7 @@ def _seed_workflow(settings: Settings, definition: dict[str, Any] = WORKFLOW_DEF
         conn.close()
 
 
-# --- instance registration --------------------------------------------------
+# --- instance registration (plural, POST /automations/instances) -----------
 
 
 def test_register_probe_failure_persists_nothing(
@@ -181,12 +196,12 @@ def test_register_probe_failure_persists_nothing(
 
     client = app_with(settings, handler)
     response = client.post(
-        "/api/automations/instance",
+        "/api/automations/instances",
         json={"name": "home", "base_url": "http://n8n.test", "api_key": "bad"},
     )
 
     assert response.status_code == 422
-    assert store.load_instance(settings.automations_file) is None
+    assert store.load_instances(settings.automations_file) == []
     assert fake_keyring.values == {}
 
 
@@ -198,7 +213,7 @@ def test_register_success_persists_and_never_echoes_the_key(
 
     client = app_with(settings, handler)
     response = client.post(
-        "/api/automations/instance",
+        "/api/automations/instances",
         json={"name": "home", "base_url": "http://n8n.test", "api_key": "s3cret-key"},
     )
 
@@ -206,24 +221,60 @@ def test_register_success_persists_and_never_echoes_the_key(
     body = response.json()
     assert body["has_key"] is True
     assert body["key_state"] == "present"
+    assert body["kind"] == "REMOTE"  # the default
+    assert isinstance(body["id"], str) and body["id"]
     assert "s3cret-key" not in response.text
 
     on_disk = settings.automations_file.read_text(encoding="utf-8")
     assert "s3cret-key" not in on_disk
 
-    entry = store.load_instance(settings.automations_file)
-    assert entry is not None and entry["name"] == "home"
+    instances = store.load_instances(settings.automations_file)
+    assert len(instances) == 1
+    assert instances[0]["name"] == "home"
+    assert instances[0]["id"] == body["id"]
     assert fake_keyring.values[("argus-models", "n8n:home")] == "s3cret-key"
 
 
-def test_register_duplicate_is_rejected(settings: Settings, fake_keyring: _FakeKeyring) -> None:
+def test_register_duplicate_name_is_rejected_but_a_second_distinct_instance_succeeds(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """409 now means duplicate NAME, not "an instance already exists" —
+    registering a second, distinctly-named instance is the whole point of
+    this chunk."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return json_response(200, {"data": []})
 
     client = app_with(settings, handler)
-    body = {"name": "home", "base_url": "http://n8n.test", "api_key": "key"}
-    assert client.post("/api/automations/instance", json=body).status_code == 201
-    assert client.post("/api/automations/instance", json=body).status_code == 409
+    home = {"name": "home", "base_url": "http://n8n.test", "api_key": "key"}
+    first = client.post("/api/automations/instances", json=home)
+    assert first.status_code == 201
+
+    # Same name again: still 409.
+    assert client.post("/api/automations/instances", json=home).status_code == 409
+
+    # A second, distinctly-named instance: succeeds.
+    work = {"name": "work", "base_url": "http://work.n8n.test", "api_key": "key2"}
+    second = client.post("/api/automations/instances", json=work)
+    assert second.status_code == 201
+    assert second.json()["id"] != first.json()["id"]
+
+    instances = store.load_instances(settings.automations_file)
+    assert {entry["name"] for entry in instances} == {"home", "work"}
+
+
+def test_register_rejects_invalid_kind(settings: Settings, fake_keyring: _FakeKeyring) -> None:
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    response = client.post(
+        "/api/automations/instances",
+        json={
+            "name": "home",
+            "base_url": "http://n8n.test",
+            "api_key": "key",
+            "kind": "CLOUD",
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_register_keyring_failure_rolls_back_the_registry_row(
@@ -234,17 +285,66 @@ def test_register_keyring_failure_rolls_back_the_registry_row(
 
     client = app_with(settings, handler)
     response = client.post(
-        "/api/automations/instance",
+        "/api/automations/instances",
         json={"name": "home", "base_url": "http://n8n.test", "api_key": "key"},
     )
 
     assert response.status_code == 500
-    assert store.load_instance(settings.automations_file) is None, "the rollback must have run"
+    assert store.load_instances(settings.automations_file) == [], "the rollback must have run"
+
+
+def test_register_keyring_failure_rolls_back_only_the_new_row(
+    settings: Settings, fake_keyring: _FakeKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash storing the *second* instance's key must not disturb the first."""
+    _seed_instance(settings, name="home")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(200, {"data": []})
+
+    def _broken_store_key(ref: str, value: str) -> None:
+        raise CredentialError("the credential store is locked")
+
+    monkeypatch.setattr("backend.features.automations.router.store_key", _broken_store_key)
+
+    client = app_with(settings, handler)
+    response = client.post(
+        "/api/automations/instances",
+        json={"name": "work", "base_url": "http://work.n8n.test", "api_key": "key2"},
+    )
+
+    assert response.status_code == 500
+    instances = store.load_instances(settings.automations_file)
+    assert [entry["name"] for entry in instances] == ["home"]
+    assert fake_keyring.values[("argus-models", "n8n:home")] == "n8n-secret"
+
+
+# --- instance registry: singular compat shim ---------------------------------
+
+
+def test_register_compat_singular_matches_old_behaviour_for_one_instance(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(200, {"data": []})
+
+    client = app_with(settings, handler)
+    body = {"name": "home", "base_url": "http://n8n.test", "api_key": "key"}
+    first = client.post("/api/automations/instance", json=body)
+    assert first.status_code == 201
+    assert first.json()["has_key"] is True
+
+    # A second registration via the singular route is rejected even under a
+    # different name — "an instance already exists", not "duplicate name".
+    other = {"name": "other", "base_url": "http://other.n8n.test", "api_key": "key2"}
+    assert client.post("/api/automations/instance", json=other).status_code == 409
 
 
 def test_delete_removes_keyring_before_registry_and_clears_cache(
     settings: Settings, fake_keyring: _FakeKeyring
 ) -> None:
+    """The singular compat shim: byte-identical to before multi-instance
+    support for a single registered instance."""
     _seed_instance(settings)
     _seed_workflow(settings)
 
@@ -255,7 +355,7 @@ def test_delete_removes_keyring_before_registry_and_clears_cache(
     response = client.delete("/api/automations/instance")
 
     assert response.status_code == 200
-    assert store.load_instance(settings.automations_file) is None
+    assert store.load_instances(settings.automations_file) == []
     assert fake_keyring.values == {}
 
     conn = _conn(settings)
@@ -265,6 +365,69 @@ def test_delete_removes_keyring_before_registry_and_clears_cache(
         conn.close()
 
     assert client.delete("/api/automations/instance").status_code == 404
+
+
+# --- instance registry: plural routes (list / delete by id) -----------------
+
+
+def test_list_instances_returns_both(settings: Settings, fake_keyring: _FakeKeyring) -> None:
+    _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    response = client.get("/api/automations/instances")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {row["name"] for row in body} == {"home", "work"}
+    assert all(row["connected"] is True for row in body)
+
+
+def test_list_instances_probe_failure_on_one_does_not_fail_the_whole_call(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "work.n8n.test":
+            raise httpx.ConnectError("connection refused", request=request)
+        return json_response(200, {"data": []})
+
+    client = app_with(settings, handler)
+    response = client.get("/api/automations/instances")
+
+    assert response.status_code == 200
+    body = response.json()
+    by_name = {row["name"]: row for row in body}
+    assert by_name["home"]["connected"] is True
+    assert by_name["work"]["connected"] is False
+
+
+def test_delete_by_id_removes_only_that_instance_leaving_the_other_intact(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    home = _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    work = _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    response = client.delete(f"/api/automations/instances/{home['id']}")
+
+    assert response.status_code == 200
+    instances = store.load_instances(settings.automations_file)
+    assert [entry["id"] for entry in instances] == [work["id"]]
+
+    # home's keyring secret is gone...
+    assert fake_keyring.values.get(("argus-models", home["key_ref"])) is None
+    # ...but work's is untouched.
+    assert fake_keyring.values.get(("argus-models", work["key_ref"])) == "n8n-secret"
+
+
+def test_delete_by_id_unknown_id_404s(settings: Settings, fake_keyring: _FakeKeyring) -> None:
+    _seed_instance(settings)
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    response = client.delete("/api/automations/instances/does-not-exist")
+    assert response.status_code == 404
 
 
 # --- discovery -----------------------------------------------------------
@@ -290,6 +453,21 @@ def test_get_automations_returns_200_with_connected_false_when_n8n_is_unreachabl
     # still there.
     assert [w["id"] for w in body["workflows"]] == ["wf1"]
     assert body["instance"]["has_key"] is True
+
+
+def test_get_automations_returns_instance_null_but_populated_instances_with_two_registered(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    response = client.get("/api/automations")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["instance"] is None
+    assert {row["name"] for row in body["instances"]} == {"home", "work"}
 
 
 def test_refresh_drops_a_workflow_that_lost_the_tag(

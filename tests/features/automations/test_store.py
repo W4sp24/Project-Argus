@@ -127,51 +127,6 @@ def test_load_instances_self_heal_preserves_existing_key_ref(tmp_path: Path) -> 
     assert entry["key_ref"] == store.key_ref_for("home")
 
 
-# --- instance registry: B1 compatibility wrappers ---------------------------
-# router.py is unchanged this chunk and still calls these three functions.
-
-
-def test_load_instance_missing_file_returns_none(tmp_path: Path) -> None:
-    assert store.load_instance(tmp_path / "automations.json") is None
-
-
-def test_save_then_load_instance_round_trips(tmp_path: Path) -> None:
-    path = tmp_path / "automations.json"
-    entry = {"name": "home", "base_url": "https://n8n.example.com", "key_ref": "n8n:home"}
-
-    store.save_instance(path, entry)
-
-    assert store.load_instance(path) == entry
-
-
-def test_delete_instance_clears_the_registry(tmp_path: Path) -> None:
-    path = tmp_path / "automations.json"
-    store.save_instance(path, {"name": "home"})
-    assert store.load_instance(path) is not None
-
-    store.delete_instance(path)
-
-    assert store.load_instance(path) is None
-
-
-def test_load_instance_tolerates_corrupt_file(tmp_path: Path) -> None:
-    path = tmp_path / "automations.json"
-    path.write_text("{{{ not json", encoding="utf-8")
-
-    assert store.load_instance(path) is None
-    # Quarantined, so the next save cannot bury what the user registered.
-    assert not path.exists()
-    assert (tmp_path / "automations.json.corrupt").exists()
-
-
-def test_load_instance_rejects_non_dict_payload(tmp_path: Path) -> None:
-    """A stray list (or any non-dict JSON) is treated like "no instance", not a crash."""
-    path = tmp_path / "automations.json"
-    path.write_text("[1, 2, 3]", encoding="utf-8")
-
-    assert store.load_instance(path) is None
-
-
 # --- widgets: upsert / get / list -------------------------------------------
 
 
