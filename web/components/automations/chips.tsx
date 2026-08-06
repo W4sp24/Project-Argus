@@ -72,7 +72,7 @@ export function OriginChip({
   const color = originColor(instanceId);
   return (
     <span
-      className="border px-1 py-px font-mono text-micro uppercase tracking-[0.1em] opacity-85"
+      className="shrink-0 border px-1 py-px font-mono text-micro uppercase tracking-[0.1em] opacity-85"
       style={{ borderColor: color, color }}
       title={`From n8n instance: ${name}`}
     >
@@ -108,7 +108,7 @@ export function StateBadge({
     const label = age ? `STALE ${age}` : "STALE";
     return (
       <span
-        className="border border-warn px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-warn"
+        className="shrink-0 border border-warn px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-warn"
         title={age ? `Stale — last update ${age} ago, past its expected cadence` : "Stale — past its expected update cadence"}
       >
         {label}
@@ -119,7 +119,7 @@ export function StateBadge({
   // waiting
   return (
     <span
-      className="border border-auto-line px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-auto"
+      className="shrink-0 border border-auto-line px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-auto"
       title="Installed, but no data has arrived yet"
     >
       WAITING
@@ -139,7 +139,7 @@ export function StateBadge({
 export function AutoChip() {
   return (
     <span
-      className="border border-auto-line px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-auto"
+      className="shrink-0 border border-auto-line px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-auto"
       title="Fed by an automation (n8n), not a native Argus source"
     >
       AUTO
@@ -235,7 +235,7 @@ export function ActionStateBadge({ state }: { state: ActionState }) {
 export function AuthChip() {
   return (
     <span
-      className="border border-auto-line px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-auto"
+      className="shrink-0 border border-auto-line px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-auto"
       title="Protected by basic auth — the credential is resolved from the OS keyring server-side and never placed in the URL"
     >
       ⌁ AUTH

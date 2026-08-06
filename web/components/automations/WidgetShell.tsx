@@ -169,7 +169,13 @@ export default function WidgetShell({
       // exactly one caller.
       className={`h-full${stale ? " [&_.eyebrow]:text-warn" : ""}`}
       headerRight={
-        <div className="flex items-center gap-2">
+        // Wraps, and every child refuses to shrink. A one-column widget's
+        // header carries AUTO, an origin chip, a state badge, reorder,
+        // resize and the overflow menu — far more than ~200px of row. As a
+        // single non-wrapping line that overflowed the card and the chips
+        // landed on top of the controls, which made the resize button
+        // unclickable on exactly the narrow widgets that most need resizing.
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
           {/* Provenance. Native panels get no AUTO tag and no freshness line —
               which matters most after the migration, when the panels you rely
               on most are the ones fed by a second service staying alive. */}

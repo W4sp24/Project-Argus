@@ -241,3 +241,43 @@ test.describe("design review screenshots", () => {
     await page.screenshot({ path: path.join(dir, "dashboard.png"), fullPage: true });
   });
 });
+
+test("a widget can be resized, and the new span survives a reload", async ({ page }) => {
+  // Resize shipped with two affordances and no coverage: a pointer corner
+  // handle and this keyboard-reachable cycle button. The button is the one
+  // that can be driven headlessly, and it exercises the same applyPatch path
+  // the drag handle does — including the PATCH that marks the widget as
+  // user-controlled. Without this, "resizable" was only ever an assertion
+  // about the source.
+  await page.goto("/dashboard");
+
+  // Scope to ONE widget by its own accessible name. Two seeded widgets share
+  // the title "Upcoming events" (same slug, two instances — which is the
+  // point), so a positional locator is ambiguous by construction.
+  const button = () => page.getByRole("button", { name: /Resize Active tasks/ });
+  await expect(button()).toBeVisible();
+
+  const before = (await button().textContent())?.trim();
+
+  // Wait for the WRITE, not the label. The label moves optimistically the
+  // instant it is clicked, so reloading on that signal can abort the PATCH
+  // still in flight and the assertion then fails for a reason that has
+  // nothing to do with whether resize persists.
+  const saved = page.waitForResponse(
+    (r) => r.url().includes("/api/automations/widgets/tasks") && r.request().method() === "PATCH",
+  );
+  await button().click();
+  expect((await saved).status()).toBe(200);
+
+  const afterClick = (await button().textContent())?.trim();
+  expect(afterClick).not.toBe(before);
+
+  await page.reload();
+  await expect(button()).toBeVisible();
+  await expect
+    .poll(async () => (await button().textContent())?.trim(), { timeout: 10_000 })
+    .toBe(afterClick);
+
+  // The pointer affordance exists alongside it — neither is the only way in.
+  expect(await page.locator("[class*='cursor-nwse-resize']").count()).toBeGreaterThan(0);
+});

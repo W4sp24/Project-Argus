@@ -371,7 +371,7 @@ export default function AutomationWidgets() {
                 instanceBaseUrl={instance?.base_url}
                 controlled={widget.layout_locked}
                 actions={
-                  <div className="flex items-center gap-1">
+                  <div className="flex shrink-0 items-center gap-1">
                     <button
                       type="button"
                       aria-label={`Move ${title} earlier`}
