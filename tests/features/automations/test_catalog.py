@@ -519,3 +519,62 @@ def test_install_bakes_in_the_target_instances_own_token_not_another_instances(
     assert work_token is not None
     assert work_token != home_token
     assert captured["bearer"] == f"Bearer {work_token}"
+
+
+# --- gallery chips (B8) -----------------------------------------------------
+#
+# Chips are derived from each bundled definition rather than written by hand
+# in `_TEMPLATE_META`, for the same reason `name` is. These tests are the
+# thing that makes that worth doing: they compare the chip against the
+# definition's own schedule/form nodes, so a template whose interval is
+# edited without its card being updated cannot pass.
+
+
+def _definition_cadence(template_id: str) -> str:
+    definition = catalog.load_definition(template_id)
+    node = next(n for n in definition["nodes"] if "scheduleTrigger" in n["type"])
+    interval = node["parameters"]["rule"]["interval"][0]
+    field = interval["field"]
+    return f"every {interval[f'{field}Interval']}{field[0]}"
+
+
+def test_display_template_chips_name_the_renderer_it_pushes() -> None:
+    by_id = {t.id: t for t in catalog.list_templates()}
+    assert "timeline" in by_id["google-calendar"].chips
+    assert "list" in by_id["todoist"].chips
+    assert "metric" in by_id["weather"].chips
+
+
+def test_cadence_chip_matches_the_definitions_own_schedule_node() -> None:
+    for template in catalog.list_templates():
+        expected = None
+        definition = catalog.load_definition(template.id)
+        if any("scheduleTrigger" in n["type"] for n in definition["nodes"]):
+            expected = _definition_cadence(template.id)
+        if expected is not None:
+            assert expected in template.chips, f"{template.id} chips={template.chips}"
+
+
+def test_action_template_chips_count_its_form_fields() -> None:
+    by_id = {t.id: t for t in catalog.list_templates()}
+    for template_id in ("mobile-capture", "calendar-insert"):
+        definition = catalog.load_definition(template_id)
+        node = next(n for n in definition["nodes"] if "formTrigger" in n["type"])
+        count = len(node["parameters"]["formFields"]["values"])
+        assert f"{count} fields" in by_id[template_id].chips
+
+
+def test_chips_omit_what_a_template_does_not_declare() -> None:
+    """A form-only template has no schedule, so it gets no cadence chip —
+    filler like "every —" would be worse than a shorter card."""
+    by_id = {t.id: t for t in catalog.list_templates()}
+    assert not any(c.startswith("every ") for c in by_id["mobile-capture"].chips)
+
+
+def test_chips_reach_the_templates_route(settings: Settings) -> None:
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    body = client.get("/api/automations/templates").json()
+    by_id = {entry["id"]: entry for entry in body}
+
+    assert by_id["weather"]["chips"] == ["metric", "every 30m"]
+    assert by_id["mobile-capture"]["chips"] == ["2 fields"]

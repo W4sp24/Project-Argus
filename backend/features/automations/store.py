@@ -797,6 +797,39 @@ def list_events(
 
 # --- prefs ----------------------------------------------------------------
 
+#: The pre-B6 global "the user has arranged the dashboard by hand" flag.
+#: Superseded by each widget's own ``layout_locked``; retained only as the
+#: source for the one-time migration below.
+LEGACY_LAYOUT_PREF = "layout_taken_control"
+
+
+def migrate_global_layout_pref(conn: sqlite3.Connection) -> None:
+    """Fold the old global layout flag into each widget's ``layout_locked``.
+
+    Before B6 there was a single pref meaning "the user has taken control of
+    the dashboard", set the first time anyone pinned, hid or reordered
+    anything. That is now a per-widget fact, because a global flag makes the
+    first nudge freeze *everything*: every automation installed afterwards
+    would arrive needing manual placement, which defeats auto-place — the
+    thing that makes installing one cost zero configuration.
+
+    Someone who had taken control under the old model genuinely had arranged
+    every widget they could see, so the honest upgrade is to mark all
+    existing widgets locked and let anything installed later auto-place
+    normally. Runs once: the pref is deleted afterwards, so this is a single
+    indexed read on every subsequent call.
+    """
+    row = conn.execute(
+        "SELECT value FROM automation_prefs WHERE key = ?", (LEGACY_LAYOUT_PREF,)
+    ).fetchone()
+    if row is None:
+        return
+
+    if str(row["value"]).lower() == "true":
+        conn.execute("UPDATE automation_widgets SET layout_locked = 1")
+    conn.execute("DELETE FROM automation_prefs WHERE key = ?", (LEGACY_LAYOUT_PREF,))
+    conn.commit()
+
 
 def get_pref(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
     """The stored value for ``key``, or ``default`` when unset."""

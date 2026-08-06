@@ -29,6 +29,7 @@ template, by name, so a new template cannot forget it and pass anyway.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -104,6 +105,13 @@ class Template:
     #: could hold — see `router.install_template`'s docstring for why that
     #: hand-off has to happen in n8n's own UI and can't be automated away.
     requires: tuple[str, ...]
+    #: Short factual badges for the gallery card — the widget renderer this
+    #: pushes, how often it runs, how many fields its form asks for. Derived
+    #: from the bundled definition at catalog-build time rather than written
+    #: by hand here, for exactly the reason `name` is: a hand-copied "every
+    #: 15m" beside a workflow whose schedule node says 30 is a lie the
+    #: gallery tells confidently, and nothing would ever catch it.
+    chips: tuple[str, ...] = ()
 
 
 #: Static catalog metadata, keyed by template id. Deliberately not folded
@@ -209,6 +217,65 @@ def load_definition(template_id: str) -> dict[str, Any]:
     return json.loads(text)
 
 
+#: n8n spells a schedule as `{"field": "minutes", "minutesInterval": 15}`.
+_INTERVAL_SUFFIX = {"minutes": "m", "hours": "h", "days": "d", "weeks": "w"}
+
+
+def _cadence_chip(definition: dict[str, Any]) -> str | None:
+    """`"every 15m"` from the definition's own Schedule Trigger, or ``None``."""
+    for node in definition.get("nodes", []):
+        if "scheduleTrigger" not in str(node.get("type", "")):
+            continue
+        intervals = (node.get("parameters", {}).get("rule", {}) or {}).get("interval") or []
+        if not intervals:
+            continue
+        field = str(intervals[0].get("field", ""))
+        suffix = _INTERVAL_SUFFIX.get(field)
+        every = intervals[0].get(f"{field}Interval")
+        if suffix and isinstance(every, int):
+            return f"every {every}{suffix}"
+    return None
+
+
+def _renderer_chip(definition: dict[str, Any]) -> str | None:
+    """The widget kind this template pushes, read from the push node's body.
+
+    The body is an n8n expression, not JSON we can parse, so this matches the
+    declared `"widget": "<kind>"` key the render contract requires every push
+    to carry. Returns ``None`` rather than guessing when it isn't found.
+    """
+    for node in definition.get("nodes", []):
+        params = node.get("parameters", {})
+        if "/api/external/widget/" not in str(params.get("url", "")):
+            continue
+        match = re.search(r'"widget"\s*:\s*"(\w+)"', str(params.get("jsonBody", "")))
+        if match:
+            return match.group(1)
+    return None
+
+
+def _fields_chip(definition: dict[str, Any]) -> str | None:
+    """`"3 fields"` from the definition's own Form Trigger, or ``None``."""
+    for node in definition.get("nodes", []):
+        if "formTrigger" not in str(node.get("type", "")):
+            continue
+        values = (node.get("parameters", {}).get("formFields", {}) or {}).get("values") or []
+        count = len(values)
+        return f"{count} field{'' if count == 1 else 's'}"
+    return None
+
+
+def _derive_chips(definition: dict[str, Any]) -> tuple[str, ...]:
+    """Gallery badges read off the bundled workflow itself.
+
+    Every chip is a fact about the definition that ships beside it, so the
+    card cannot drift from the workflow it installs. A template that declares
+    none of these contributes no chips rather than a filler one.
+    """
+    chips = [_renderer_chip(definition), _fields_chip(definition), _cadence_chip(definition)]
+    return tuple(chip for chip in chips if chip)
+
+
 def list_templates() -> tuple[Template, ...]:
     """The full shipped gallery, in a stable order.
 
@@ -229,6 +296,7 @@ def list_templates() -> tuple[Template, ...]:
                 widget_slug=meta["widget_slug"],
                 replaces=meta["replaces"],
                 requires=meta["requires"],
+                chips=_derive_chips(definition),
             )
         )
     return tuple(templates)

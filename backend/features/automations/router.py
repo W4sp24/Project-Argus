@@ -285,6 +285,14 @@ class WidgetOut(BaseModel):
     position: int | None = None
     pinned: bool = False
     hidden: bool = False
+    #: Dashboard grid footprint, in cells (1..4 each). The renderer proposes a
+    #: default; the user's own resize overrides it.
+    grid_cols: int = 1
+    grid_rows: int = 1
+    #: Whether the user has taken control of *this* widget's placement.
+    #: Per-widget, not global: dragging one card must not freeze the rest, or
+    #: installing a new automation would stop being zero-configuration.
+    layout_locked: bool = False
     #: Computed, not stored — see store.widget_state.
     state: str
 
@@ -293,6 +301,8 @@ class WidgetPatchRequest(BaseModel):
     pinned: bool | None = None
     hidden: bool | None = None
     position: int | None = None
+    grid_cols: int | None = None
+    grid_rows: int | None = None
 
 
 class TemplateOut(BaseModel):
@@ -308,6 +318,9 @@ class TemplateOut(BaseModel):
     widget_slug: str | None = None
     replaces: str | None = None
     requires: list[str] = []
+    #: Short factual badges (renderer, field count, cadence), derived from the
+    #: bundled definition — see catalog.Template.chips.
+    chips: list[str] = []
     installed: bool = False
 
     @classmethod
@@ -320,6 +333,7 @@ class TemplateOut(BaseModel):
             widget_slug=template.widget_slug,
             replaces=template.replaces,
             requires=list(template.requires),
+            chips=list(template.chips),
             installed=installed,
         )
 
@@ -447,6 +461,10 @@ def build_automations_router(
         # function's own docstring) and idempotent per connection, the same
         # guard-then-noop idiom init_schema's own migrations use above.
         store.ensure_instance_attribution(conn, settings.automations_file)
+        # B6: one-time fold of the old global layout pref into per-widget
+        # layout_locked. Same guard-then-noop shape — the pref is deleted
+        # once folded, so this is a single indexed read from then on.
+        store.migrate_global_layout_pref(conn)
         return conn
 
     def _instance_info(entry: dict[str, Any], *, connected: bool = True) -> InstanceInfo:
@@ -1369,18 +1387,41 @@ def build_automations_router(
             if existing is None:
                 raise HTTPException(status_code=404, detail=f"no widget {slug}")
 
-            store.set_widget_flags(
-                conn, slug,
-                pinned=request.pinned, hidden=request.hidden, position=request.position,
-                instance_id=resolved_id,
+            touched = any(
+                field is not None
+                for field in (
+                    request.pinned,
+                    request.hidden,
+                    request.position,
+                    request.grid_cols,
+                    request.grid_rows,
+                )
             )
-            if request.pinned is not None or request.hidden is not None or (
-                request.position is not None
-            ):
-                # Any manual pin/hide/reorder is the user taking control of the
-                # dashboard layout — an auto-layout pass must not silently
-                # reshuffle a card the user just placed by hand.
-                store.set_pref(conn, "layout_taken_control", "true")
+            try:
+                store.set_widget_flags(
+                    conn,
+                    slug,
+                    pinned=request.pinned,
+                    hidden=request.hidden,
+                    position=request.position,
+                    grid_cols=request.grid_cols,
+                    grid_rows=request.grid_rows,
+                    # Any manual pin/hide/reorder/resize is the user taking
+                    # control of THIS widget — an auto-layout pass must not
+                    # silently reshuffle a card they just placed by hand.
+                    # Deliberately per-widget rather than the single global
+                    # `layout_taken_control` pref this replaces: freezing the
+                    # whole dashboard the first time someone nudges one card
+                    # would mean every later automation arrives needing manual
+                    # placement, and auto-place is the thing that makes
+                    # installing one cost zero configuration.
+                    layout_locked=True if touched else None,
+                    instance_id=resolved_id,
+                )
+            except ValueError as exc:
+                # Range violation on grid_cols/grid_rows. 422, not 500 — the
+                # request is malformed, not the server.
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
             row = store.get_widget(conn, slug, instance_id=resolved_id)
             assert row is not None  # just confirmed above

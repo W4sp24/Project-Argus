@@ -755,34 +755,106 @@ def test_double_fire_is_rejected_with_exactly_one_run_row(
 # --- widgets ---------------------------------------------------------------
 
 
-def test_patch_widget_sets_layout_taken_control(
-    settings: Settings, fake_keyring: _FakeKeyring
-) -> None:
+def _seed_widget(settings: Settings, slug: str = "inbox-count") -> None:
     conn = _conn(settings)
     try:
-        store.upsert_widget(
-            conn, "inbox-count", "metric", {"label": "x", "value": 1}, now=fixed_clock
-        )
+        store.upsert_widget(conn, slug, "metric", {"label": "x", "value": 1}, now=fixed_clock)
     finally:
         conn.close()
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return json_response(200, {"data": []})
 
-    client = app_with(settings, handler)
+def test_patch_widget_locks_only_that_widgets_layout(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """Taking control is per widget, not global. The old behaviour set one
+    `layout_taken_control` pref, which meant nudging one card froze the whole
+    dashboard and every automation installed afterwards arrived needing manual
+    placement — the opposite of auto-place."""
+    _seed_widget(settings)
+    _seed_widget(settings, "untouched")
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
     response = client.patch("/api/automations/widgets/inbox-count", json={"pinned": True})
     assert response.status_code == 200
     assert response.json()["pinned"] is True
+    assert response.json()["layout_locked"] is True
+
+    widgets = {w["slug"]: w for w in client.get("/api/automations/widgets").json()}
+    assert widgets["untouched"]["layout_locked"] is False
 
     conn = _conn(settings)
     try:
-        assert store.get_pref(conn, "layout_taken_control") == "true"
+        assert store.get_pref(conn, "layout_taken_control") is None
     finally:
         conn.close()
 
     assert client.delete("/api/automations/widgets/inbox-count").status_code == 200
-    assert client.get("/api/automations/widgets").json() == []
+    remaining = [w["slug"] for w in client.get("/api/automations/widgets").json()]
+    assert remaining == ["untouched"]
     assert client.delete("/api/automations/widgets/ghost").status_code == 404
+
+
+def test_patch_widget_persists_the_grid_footprint(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_widget(settings)
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    response = client.patch(
+        "/api/automations/widgets/inbox-count", json={"grid_cols": 2, "grid_rows": 3}
+    )
+    assert response.status_code == 200, response.text
+    assert (response.json()["grid_cols"], response.json()["grid_rows"]) == (2, 3)
+    assert response.json()["layout_locked"] is True
+
+    reread = client.get("/api/automations/widgets").json()[0]
+    assert (reread["grid_cols"], reread["grid_rows"]) == (2, 3)
+
+
+@pytest.mark.parametrize("bad", [0, 5, -1])
+def test_patch_widget_rejects_a_grid_footprint_off_the_board(
+    settings: Settings, fake_keyring: _FakeKeyring, bad: int
+) -> None:
+    """422, not 500: an out-of-range span is a malformed request, and the
+    fresh-DB CHECK cannot be retrofitted onto an ALTERed column, so the
+    range check has to hold here."""
+    _seed_widget(settings)
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    response = client.patch("/api/automations/widgets/inbox-count", json={"grid_cols": bad})
+    assert response.status_code == 422, response.text
+
+
+def test_legacy_global_layout_pref_is_folded_onto_existing_widgets(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """Someone who took control under the old global model had genuinely
+    arranged everything they could see, so every existing widget inherits the
+    lock — and the pref is consumed, so anything installed later still
+    auto-places."""
+    _seed_widget(settings, "old-one")
+    _seed_widget(settings, "old-two")
+    conn = _conn(settings)
+    try:
+        store.set_pref(conn, "layout_taken_control", "true")
+    finally:
+        conn.close()
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    widgets = client.get("/api/automations/widgets").json()
+    assert all(w["layout_locked"] is True for w in widgets)
+
+    conn = _conn(settings)
+    try:
+        assert store.get_pref(conn, "layout_taken_control") is None
+        store.upsert_widget(
+            conn, "installed-later", "metric", {"label": "x", "value": 1}, now=fixed_clock
+        )
+    finally:
+        conn.close()
+
+    later = {w["slug"]: w for w in client.get("/api/automations/widgets").json()}
+    assert later["installed-later"]["layout_locked"] is False
 
 
 # --- B3: instance-scoped refresh/run/widgets/discover -----------------------
