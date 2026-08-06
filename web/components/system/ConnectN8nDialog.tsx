@@ -79,6 +79,21 @@ export default function ConnectN8nDialog({
   const [credential, setCredential] = useState<ExternalTokenResult | null>(null);
   const [found, setFound] = useState<DiscoveredWorkflow[] | null>(null);
 
+  /** Copy, and only claim success if it actually happened.
+   *
+   * `navigator.clipboard` is undefined outside a secure context and can
+   * reject when the document is not focused. Optional-chaining it and
+   * toasting "copied" regardless is worse than not offering the button: the
+   * user pastes stale clipboard content into n8n and debugs the wrong thing. */
+  async function copy(value: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      show(`copied :: ${what} on the clipboard`);
+    } catch {
+      show(`copy failed :: select the ${what} and copy it by hand`, { tone: "error" });
+    }
+  }
+
   /** Any edit un-proves a previous green light. A token proven against one
    * instance means nothing about another, so progress resets to the start. */
   function invalidate() {
@@ -432,24 +447,45 @@ export default function ConnectN8nDialog({
               not silence the others.
             </p>
 
+            {/* `external_base_url` is empty until configured, and a default
+                install (the desktop app included) has not configured it. Left
+                alone this step renders a host-less path — a URL that looks
+                real, pastes cleanly into n8n, and then fails there rather
+                than here. Say it plainly instead. */}
+            {credential && !credential.base_url && (
+              <p className="border border-warn bg-sunken px-3 py-2 text-label leading-relaxed text-warn">
+                No inbound URL is configured yet, so there is nothing to paste into n8n. The
+                token below is real and saved — set{" "}
+                <code className="font-mono">ARGUS_EXTERNAL_BASE_URL</code> (and{" "}
+                <code className="font-mono">ARGUS_EXTERNAL_ENABLED=1</code>) to the address n8n
+                can reach Argus on, then reopen this step. Outbound automations — discovering
+                and running workflows — work without it; only pushed widgets need it.
+              </p>
+            )}
+
             <Field label="inbound endpoint" hint="Paste into the HTTP Request node at the end of each display workflow.">
               {(props) => (
                 <div className="flex gap-2">
                   <input
                     {...props}
                     readOnly
-                    value={credential ? `${credential.base_url}/api/external/widget/{slug}` : "—"}
+                    value={
+                      credential?.base_url
+                        ? `${credential.base_url}/api/external/widget/{slug}`
+                        : "— not configured yet"
+                    }
                     className={`${FIELD_CONTROL} font-mono text-meta`}
                   />
                   <Button
                     size="sm"
                     variant="secondary"
+                    disabled={!credential?.base_url}
                     onClick={() => {
-                      if (!credential) return;
-                      void navigator.clipboard?.writeText(
+                      if (!credential?.base_url) return;
+                      void copy(
                         `${credential.base_url}/api/external/widget/`,
+                        "inbound endpoint",
                       );
-                      show("copied :: inbound endpoint on the clipboard");
                     }}
                   >
                     COPY
@@ -475,12 +511,13 @@ export default function ConnectN8nDialog({
                   <Button
                     size="sm"
                     variant="secondary"
+                    disabled={!credential}
                     onClick={() => {
                       if (!credential) return;
-                      void navigator.clipboard?.writeText(
+                      void copy(
                         `${credential.header_name}: ${credential.header_value}`,
+                        "header",
                       );
-                      show("copied :: header on the clipboard");
                     }}
                   >
                     COPY
