@@ -1495,3 +1495,47 @@ def test_widget_mode_run_names_the_widget_it_wrote(
     # And the named widget is really there to be pinned.
     slugs = [w["slug"] for w in client.get("/api/automations/widgets").json()]
     assert "doi-lookup" in slugs
+
+
+class _UnreadableKeyring:
+    """A keyring whose reads always fail — the `keyring.backends.fail.Keyring`
+    state a machine with no usable credential store is actually in."""
+
+    def set_password(self, service: str, ref: str, value: str) -> None:
+        pass
+
+    def get_password(self, service: str, ref: str) -> str | None:
+        raise RuntimeError("No recommended backend was available")
+
+    def delete_password(self, service: str, ref: str) -> None:
+        pass
+
+
+def test_listing_instances_survives_an_unreadable_keyring(
+    settings: Settings, fake_keyring: _FakeKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken credential store must degrade one row, not erase the feature.
+
+    get_key raises rather than returning None when the keyring itself is
+    unreadable — deliberately, so "no key stored" and "cannot tell" are not
+    confused. But letting that escape the reachability probe 500s the whole
+    instance list, and the frontend reads a failed fetch as *no instances
+    registered*: the instance grid, the filter and the dashboard's ambient
+    readout all vanish while the instances are still registered. A machine
+    with an unreadable keyring is a state real users reach — the CI e2e job
+    installs no keyring backend on purpose for exactly this reason.
+    """
+    _seed_instance(settings, name="home")
+    _seed_instance(settings, name="work", base_url="http://n8n2.test")
+
+    # Swap in the broken keyring only now, so seeding could still store keys.
+    monkeypatch.setitem(sys.modules, "keyring", _UnreadableKeyring())
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    response = client.get("/api/automations/instances")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [entry["name"] for entry in body] == ["home", "work"]
+    # Degraded, and honest about why — not silently absent.
+    assert all(entry["connected"] is False for entry in body)

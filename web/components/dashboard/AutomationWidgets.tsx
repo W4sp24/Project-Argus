@@ -47,6 +47,34 @@ function widgetKey(w: Pick<AutomationWidget, "instance_id" | "slug">): string {
   return `${w.instance_id}:${w.slug}`;
 }
 
+/**
+ * The width a renderer asks for, in grid cells.
+ *
+ * The renderer proposes and the user disposes: a metric is one number and
+ * reads fine narrow, while a timeline, table or paragraph gets truncated into
+ * uselessness at one column ("Team s…", "1:1 with …"). So each kind carries a
+ * sensible default and the size control overrides it — which is why this is
+ * applied only while `layout_locked` is false. Once someone has sized a
+ * widget by hand, their choice wins and never gets silently re-proposed.
+ *
+ * Deliberately not a stored default: writing it at push time would bake one
+ * build's opinion into the database, and changing it later would then only
+ * affect widgets created afterwards.
+ */
+const PROPOSED_COLS: Record<string, number> = {
+  metric: 1,
+  list: 1,
+  timeline: 2,
+  table: 2,
+  text: 2,
+  chart: 2,
+};
+
+function proposedSpan(widget: AutomationWidget): { cols: number; rows: number } {
+  if (widget.layout_locked) return { cols: widget.grid_cols, rows: widget.grid_rows };
+  return { cols: PROPOSED_COLS[widget.kind] ?? 1, rows: widget.grid_rows };
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -174,7 +202,10 @@ export default function AutomationWidgets() {
   }
 
   function cycleWidth(widget: AutomationWidget) {
-    const nextCols = (widget.grid_cols % MAX_SPAN) + 1;
+    // Cycle from what is on screen, not from the stored value — otherwise the
+    // first press on an unlocked two-column widget jumps it to 2 and looks
+    // like nothing happened.
+    const nextCols = (proposedSpan(widget).cols % MAX_SPAN) + 1;
     void applyPatch(widget, { grid_cols: nextCols });
   }
 
@@ -311,8 +342,9 @@ export default function AutomationWidgets() {
           const key = widgetKey(widget);
           const instance = byId.get(widget.instance_id);
           const live = liveResize?.key === key ? liveResize : null;
-          const displayCols = Math.min(live?.cols ?? widget.grid_cols, columns);
-          const displayRows = live?.rows ?? widget.grid_rows;
+          const proposed = proposedSpan(widget);
+          const displayCols = Math.min(live?.cols ?? proposed.cols, columns);
+          const displayRows = live?.rows ?? proposed.rows;
           const title = widget.title || widget.slug;
 
           return (
@@ -360,12 +392,16 @@ export default function AutomationWidgets() {
                     </button>
                     <button
                       type="button"
-                      aria-label={`Resize ${title}, currently ${widget.grid_cols} columns by ${widget.grid_rows} rows. Activates to cycle width.`}
+                      // Reports the span actually on screen, which is the
+                      // renderer's proposal until the user overrides it —
+                      // showing the stored 1×1 under a two-column widget
+                      // would just be wrong.
+                      aria-label={`Resize ${title}, currently ${proposed.cols} columns by ${proposed.rows} rows. Activates to cycle width.`}
                       title="Cycle width — keyboard-reachable resize"
                       onClick={() => cycleWidth(widget)}
                       className="border border-line px-1 py-px font-mono text-micro text-ink-faint hover:border-lineHi hover:text-ink"
                     >
-                      {`${widget.grid_cols}×${widget.grid_rows}`}
+                      {`${proposed.cols}×${proposed.rows}`}
                     </button>
                   </div>
                 }

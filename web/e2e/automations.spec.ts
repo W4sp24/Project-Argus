@@ -1,0 +1,243 @@
+import { expect, test, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+
+/**
+ * F8: e2e coverage for the n8n automations feature — /automations, the
+ * dashboard widgets, and the AUTOMATIONS.HUD panel.
+ *
+ * State comes entirely from web/e2e/seed_automations.py (run once by
+ * start-backend.mjs before the shared throwaway-vault backend starts): two
+ * registered instances, widgets covering all four states, two cached
+ * "action" workflows with finished runs, and a spread of activity events.
+ * web/e2e/stub-n8n.mjs is wired in as a third playwright.config.ts
+ * webServer, but nothing here calls it — see the note below.
+ *
+ * Deliberately NOT covered, and why:
+ *   - Registering an n8n instance through the connect dialog, issuing/
+ *     rotating an external token, or firing a form/button trigger from the
+ *     command palette. The CI `e2e` job installs no `keyrings.alt`, so any
+ *     of those (they all write a credential, or need one already resolved)
+ *     would fail there even though they pass locally. That is why the
+ *     instances here are seeded straight into `.argus/automations.json`
+ *     instead of driven through the UI, and why stub-n8n.mjs — even though
+ *     it is wired into the harness and does work — is not exercised by any
+ *     spec in this file. This suite tests rendering, state and layout only.
+ *   - Drag/resize/reorder of dashboard widgets (AutomationWidgets.tsx) and
+ *     the WidgetInspectDialog raw-payload view. Both are plausible follow-up
+ *     coverage, not part of the F8 brief.
+ */
+
+function panel(page: Page, label: string) {
+  return page.locator("section").filter({ hasText: label });
+}
+
+/** InstanceGrid renders plain `<li>`s (no Panel wrapper) — scoped by the
+ * always-present "+ ADD INSTANCE" card, whose accessible name is
+ * "ADD INSTANCE" ("+" is `aria-hidden`). */
+function instanceGrid(page: Page) {
+  return page.locator("ul").filter({ has: page.getByRole("button", { name: "ADD INSTANCE" }) });
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/automations");
+});
+
+test("renders the instance cards, the tab switcher, and the instance filter", async ({ page }) => {
+  const grid = instanceGrid(page);
+  await expect(grid.getByText("alpha-n8n")).toBeVisible();
+  await expect(grid.getByText("bravo-n8n")).toBeVisible();
+  await expect(grid.getByText("http://127.0.0.1:5679")).toBeVisible();
+  await expect(grid.getByText("http://127.0.0.1:5680")).toBeVisible();
+
+  await expect(page.getByRole("button", { name: "ACTIVE" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "GALLERY" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ACTIVITY" })).toBeVisible();
+
+  // The instance filter only renders once there is more than one instance to
+  // tell apart — both seeded instances qualify, and ACTIVE (the default tab)
+  // is one of the two tabs it renders beside.
+  await expect(page.getByRole("button", { name: "ALL", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "alpha-n8n", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "bravo-n8n", exact: true })).toBeVisible();
+});
+
+test("the ACTIVE tab lists both displays and actions in one list", async ({ page }) => {
+  const registered = panel(page, "REGISTERED");
+  // 5 seeded widgets + 2 seeded cached workflows.
+  await expect(registered.getByText("REGISTERED · 7")).toBeVisible();
+
+  // Displays — including the same "calendar" slug pushed by both instances,
+  // rendered as two distinct rows under the composite (instance_id, slug) key.
+  await expect(registered.locator("li").filter({ hasText: "Upcoming events" })).toHaveCount(2);
+  await expect(registered.locator("li").filter({ hasText: "Active tasks" })).toHaveCount(1);
+  await expect(registered.locator("li").filter({ hasText: "Inbox zero" })).toHaveCount(1);
+  await expect(registered.locator("li").filter({ hasText: "Current temperature" })).toHaveCount(1);
+
+  // Actions.
+  await expect(registered.locator("li").filter({ hasText: "E2E Echo (seeded)" })).toHaveCount(1);
+  await expect(registered.locator("li").filter({ hasText: "E2E Button (seeded)" })).toHaveCount(1);
+
+  // One unified list — DISPLAY and ACTION kind chips both present, not two
+  // separate panels.
+  await expect(registered.getByText("DISPLAY").first()).toBeVisible();
+  await expect(registered.getByText("ACTION").first()).toBeVisible();
+
+  // State badges for the non-LIVE widgets.
+  await expect(
+    registered.locator("li").filter({ hasText: "Active tasks" }).getByText(/STALE/),
+  ).toBeVisible();
+  await expect(
+    registered.locator("li").filter({ hasText: "Current temperature" }).getByText("WAITING"),
+  ).toBeVisible();
+
+  // Action health, derived from each seeded workflow's own last run.
+  await expect(
+    registered.locator("li").filter({ hasText: "E2E Echo (seeded)" }).getByText("READY"),
+  ).toBeVisible();
+  await expect(
+    registered.locator("li").filter({ hasText: "E2E Button (seeded)" }).getByText("FAILING"),
+  ).toBeVisible();
+});
+
+test("the ACTIVITY tab shows seeded events and the tag filters narrow them", async ({ page }) => {
+  await page.getByRole("button", { name: "ACTIVITY" }).click();
+  const activity = panel(page, "ACTIVITY");
+
+  await expect(activity.getByText("ACTIVITY · 6")).toBeVisible();
+  await expect(activity.getByText("completed in 2.0s")).toBeVisible();
+  await expect(activity.getByText("completed in 0.8s")).toBeVisible();
+  await expect(activity.getByText("n8n returned 500")).toBeVisible();
+  await expect(activity.getByText("installed as workflow wf-installed-1")).toBeVisible();
+  await expect(activity.getByText("pushed 2 tasks")).toBeVisible();
+  await expect(activity.getByText("pushed 2 calendar entries")).toBeVisible();
+
+  // Narrow to RUN — exactly the 2 seeded RUN events, everything else drops out.
+  await activity.getByRole("button", { name: "run", exact: true }).click();
+  await expect(activity.getByText("ACTIVITY · 2")).toBeVisible();
+  await expect(activity.getByText("completed in 2.0s")).toBeVisible();
+  await expect(activity.getByText("completed in 0.8s")).toBeVisible();
+  await expect(activity.getByText("n8n returned 500")).toHaveCount(0);
+  await expect(activity.getByText("installed as workflow wf-installed-1")).toHaveCount(0);
+
+  // Narrow to FAIL — the one seeded FAIL event.
+  await activity.getByRole("button", { name: "fail", exact: true }).click();
+  await expect(activity.getByText("ACTIVITY · 1")).toBeVisible();
+  await expect(activity.getByText("n8n returned 500")).toBeVisible();
+  await expect(activity.getByText("completed in 2.0s")).toHaveCount(0);
+});
+
+test("the GALLERY tab lists bundled templates with their derived chips", async ({ page }) => {
+  await page.getByRole("button", { name: "GALLERY" }).click();
+  const gallery = panel(page, "GALLERY");
+
+  // Names come straight from each bundled workflow JSON's own "name" field —
+  // this is the tab that shipped as a placeholder once, so it must render
+  // real, definition-derived content, not just "a tab with something in it".
+  await expect(gallery.getByText("Argus: Google Calendar → Timeline Widget")).toBeVisible();
+  await expect(gallery.getByText("Argus: Todoist → Task List Widget")).toBeVisible();
+  await expect(gallery.getByText("Argus: Weather → Metric Widget")).toBeVisible();
+  await expect(gallery.getByText("Argus: Mobile Capture")).toBeVisible();
+  await expect(gallery.getByText("Argus: Add Calendar Event")).toBeVisible();
+
+  // exact: true throughout -- the card's own description prose also contains
+  // "timeline"/"metric" as ordinary words (e.g. "...as a timeline widget"),
+  // so a substring match would hit the description as well as the chip.
+  const calendarCard = gallery.locator("li").filter({ hasText: "Argus: Google Calendar" });
+  await expect(calendarCard.getByText("timeline", { exact: true })).toBeVisible();
+  await expect(calendarCard.getByText("every 15m", { exact: true })).toBeVisible();
+
+  const weatherCard = gallery.locator("li").filter({ hasText: "Argus: Weather" });
+  await expect(weatherCard.getByText("metric", { exact: true })).toBeVisible();
+  await expect(weatherCard.getByText("every 30m", { exact: true })).toBeVisible();
+
+  const captureCard = gallery.locator("li").filter({ hasText: "Argus: Mobile Capture" });
+  await expect(captureCard.getByText("2 fields", { exact: true })).toBeVisible();
+
+  await expect(gallery.getByRole("button", { name: "INSTALL", exact: true }).first()).toBeVisible();
+});
+
+test("the dashboard renders the automation widgets and each of the four states is visually distinguishable", async ({
+  page,
+}) => {
+  await page.goto("/dashboard");
+
+  // LIVE — fresh, within its declared cadence: real data, no state badge.
+  const live = panel(page, "Upcoming events").filter({ hasText: "alpha-n8n" });
+  await expect(live).toBeVisible();
+  await expect(live.getByText("Team sync")).toBeVisible();
+  await expect(live.getByText(/STALE|WAITING/)).toHaveCount(0);
+
+  // STALE — past 2.5x its cadence, but the last good push is still shown
+  // (dimmed and labelled), never hidden.
+  const stale = panel(page, "Active tasks");
+  await expect(stale).toBeVisible();
+  await expect(stale.getByText(/STALE/)).toBeVisible();
+  await expect(stale.getByText("Reply to registrar")).toBeVisible();
+
+  // EMPTY — a fresh push, genuinely zero items: reassurance copy, no badge
+  // (a badge on a healthy panel would be noise, per WidgetShell's own doc).
+  const empty = panel(page, "Inbox zero");
+  await expect(empty).toBeVisible();
+  await expect(empty.getByText("Nothing here.")).toBeVisible();
+  await expect(empty.getByText("reported empty")).toBeVisible();
+  await expect(empty.getByText(/STALE|WAITING/)).toHaveCount(0);
+
+  // WAITING — installed, never pushed.
+  const waiting = panel(page, "Current temperature");
+  await expect(waiting).toBeVisible();
+  await expect(waiting.getByText("WAITING")).toBeVisible();
+  await expect(waiting.getByText("No data received yet.")).toBeVisible();
+});
+
+test("the origin chip appears on dashboard widgets when two instances are registered", async ({ page }) => {
+  await page.goto("/dashboard");
+
+  // The "calendar" slug is pushed by both instances — same title
+  // ("Upcoming events") on both, distinguishable only by origin.
+  const calendarA = panel(page, "Upcoming events").filter({ hasText: "alpha-n8n" });
+  const calendarB = panel(page, "Upcoming events").filter({ hasText: "bravo-n8n" });
+  await expect(calendarA).toBeVisible();
+  await expect(calendarB).toBeVisible();
+});
+
+test("the AUTOMATIONS.HUD panel renders", async ({ page }) => {
+  await page.goto("/dashboard");
+  const hud = panel(page, "AUTOMATIONS.HUD");
+
+  await expect(hud).toBeVisible();
+  await expect(hud.getByRole("button", { name: "MANAGE →" })).toBeVisible();
+  await expect(hud.getByRole("button", { name: "RUN AN ACTION" })).toBeVisible();
+
+  // The most recent seeded event — a RUN at `now`, not the FAIL event from 5
+  // minutes earlier — proving the ambient readout really orders by time and
+  // not, say, severity.
+  await expect(hud.getByText(/E2E Echo \(seeded\)/)).toBeVisible();
+  await expect(hud.getByText(/completed in 0\.8s/)).toBeVisible();
+});
+
+test.describe("design review screenshots", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("captures full-page automations + dashboard screenshots", async ({ page }) => {
+    const dir = path.join(__dirname, ".screenshots");
+    fs.mkdirSync(dir, { recursive: true });
+
+    await page.goto("/automations");
+    await expect(page.getByRole("button", { name: "ACTIVE" })).toBeVisible();
+    await expect(panel(page, "REGISTERED")).toBeVisible();
+    await page.screenshot({ path: path.join(dir, "automations-active.png"), fullPage: true });
+
+    await page.getByRole("button", { name: "GALLERY" }).click();
+    await expect(page.getByText("Argus: Google Calendar → Timeline Widget")).toBeVisible();
+    await page.screenshot({ path: path.join(dir, "automations-gallery.png"), fullPage: true });
+
+    await page.getByRole("button", { name: "ACTIVITY" }).click();
+    await expect(page.getByText("ACTIVITY · 6")).toBeVisible();
+    await page.screenshot({ path: path.join(dir, "automations-activity.png"), fullPage: true });
+
+    await page.goto("/dashboard");
+    await expect(page.getByText("AUTOMATIONS.HUD")).toBeVisible();
+    await page.screenshot({ path: path.join(dir, "dashboard.png"), fullPage: true });
+  });
+});

@@ -38,6 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.agent.credentials import (
     KEY_PRESENT,
     CredentialError,
+    KeyringUnavailableError,
     delete_key,
     get_key,
     key_state,
@@ -554,8 +555,25 @@ def build_automations_router(
         slow, empty, or failed response. Shared by ``GET /automations`` (the
         single-instance view) and ``GET /automations/instances`` (every
         instance, probed concurrently — see ``list_instances``).
+
+        That includes an unreadable keyring. ``get_key`` raises
+        :class:`KeyringUnavailableError` when the credential store itself is
+        broken (deliberately, so "no key stored" and "cannot tell" are not
+        confused), and a machine in that state is one real users reach — the
+        CI e2e job installs no keyring backend on purpose, for exactly this
+        reason. Letting it escape here 500s the whole instance list, which
+        the frontend reads as *no instances registered*: the grid, the
+        instance filter and the dashboard's ambient readout all quietly
+        vanish while the instances are still perfectly well registered. A
+        broken credential store must degrade one row, not erase the feature.
         """
-        key = get_key(instance.get("key_ref"))
+        try:
+            key = get_key(instance.get("key_ref"))
+        except (KeyringUnavailableError, CredentialError) as exc:
+            # KeyringUnavailableError is not a CredentialError — both derive
+            # from RuntimeError independently — so catching one would leave
+            # this bug exactly where it was.
+            return False, f"could not read the stored API key: {exc}"
         if key is None:
             return False, "n8n instance is registered but has no stored API key"
         client = factory(instance, key)
