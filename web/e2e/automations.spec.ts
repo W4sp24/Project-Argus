@@ -333,3 +333,50 @@ test("the connect dialog says what it is waiting for instead of a dead button", 
   await page.getByLabel(/api key/i).fill("some-key");
   await expect(primary).toBeEnabled();
 });
+
+test("a failed connection test says so on the step the button is on", async ({ page }) => {
+  // The regression this guards: a not-ok probe left `probed` false, so the
+  // button label stayed "TEST CONNECTION" and nothing else on step 0
+  // changed. The request had run and been refused, but the dialog looked
+  // simply dead. Feedback has to land where the button is.
+  await page.route("**/api/automations/instance/test", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: false,
+        detail: "connection refused",
+        latency_ms: null,
+        workflow_count: null,
+      }),
+    }),
+  );
+  await page.goto("/automations");
+  await page.getByRole("button", { name: /ADD INSTANCE/i }).click();
+  await page.getByLabel(/n8n base url/i).fill("http://127.0.0.1:5678");
+  await page.getByLabel(/api key/i).fill("some-key");
+  await page.getByRole("button", { name: /TEST CONNECTION/i }).click();
+
+  await expect(page.getByText("✕ could not connect")).toBeVisible();
+  await expect(page.getByText("connection refused")).toBeVisible();
+});
+
+test("a passing connection test reports the tagged workflow count", async ({ page }) => {
+  await page.route("**/api/automations/instance/test", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, detail: "ok", latency_ms: 12, workflow_count: 3 }),
+    }),
+  );
+  await page.goto("/automations");
+  await page.getByRole("button", { name: /ADD INSTANCE/i }).click();
+  await page.getByLabel(/n8n base url/i).fill("http://127.0.0.1:5678");
+  await page.getByLabel(/api key/i).fill("some-key");
+  await page.getByRole("button", { name: /TEST CONNECTION/i }).click();
+
+  // The count is the proof the key works and that discovery will find
+  // something — a bare tick says neither.
+  await expect(page.getByText("✓ connected")).toBeVisible();
+  await expect(page.getByText(/3 workflows tagged argus/)).toBeVisible();
+});

@@ -399,6 +399,50 @@ export default function ConnectN8nDialog({
                 />
               )}
             </Field>
+
+            {/* The probe's answer, on the step the button lives on.
+                Without this a failed test changed nothing on screen — the
+                request ran, came back not-ok, and the button label stayed
+                put, which reads as a dead button rather than a refused
+                connection. Success is equally worth showing: the workflow
+                count is the proof the key works AND that discovery will find
+                something, which a green tick alone never says. */}
+            {testing && (
+              <p className="border border-line bg-sunken px-3 py-2 font-mono text-meta text-ink-muted">
+                testing {baseUrl.trim()} …
+              </p>
+            )}
+            {!testing && result && (
+              <div
+                className={`border px-3 py-2 ${
+                  result.ok ? "border-ok bg-sunken" : "border-danger bg-sunken"
+                }`}
+              >
+                <p
+                  className={`font-mono text-meta uppercase tracking-[0.14em] ${
+                    result.ok ? "text-ok" : "text-danger"
+                  }`}
+                >
+                  {result.ok ? "✓ connected" : "✕ could not connect"}
+                </p>
+                <p className="mt-1 text-label leading-relaxed text-ink-muted">
+                  {result.ok
+                    ? [
+                        `${result.workflow_count ?? 0} workflows tagged argus`,
+                        result.latency_ms !== null ? `${result.latency_ms} ms` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
+                    : result.detail}
+                </p>
+                {!result.ok && (
+                  <p className="mt-1 font-mono text-micro leading-relaxed text-ink-faint">
+                    Running n8n on this machine? Try 127.0.0.1 rather than localhost — n8n often
+                    binds IPv6 loopback only, and the two do not always resolve to each other.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

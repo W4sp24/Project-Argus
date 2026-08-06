@@ -1,5 +1,8 @@
 import { defineConfig } from "@playwright/test";
 
+/** Stub n8n port. Deliberately not 5679: a real local n8n already binds it. */
+const STUB_N8N_PORT = Number(process.env.STUB_N8N_PORT || 5799);
+
 /**
  * E2E: real backend (throwaway vault, provisioned by e2e/start-backend.mjs)
  * + next dev on 3100 (rewrites proxy /api to 127.0.0.1:8000).
@@ -46,11 +49,16 @@ export default defineConfig({
     // API shape), so `port` is used instead of `url`: Playwright just waits
     // for something to accept a TCP connection on it, which is all "is the
     // stub up" needs to mean here.
+    // Port is env-overridable and defaults OFF n8n's own range. n8n binds
+    // 5678 *and* 5679 (its task-runner broker), so hardcoding 5679 meant this
+    // suite could not run on a machine with n8n running — precisely the
+    // machine that develops this feature. STUB_N8N_PORT keeps it steerable.
     {
       command: "node e2e/stub-n8n.mjs",
-      port: 5679,
+      port: STUB_N8N_PORT,
       reuseExistingServer: false,
       timeout: 15_000,
+      env: { STUB_N8N_PORT: String(STUB_N8N_PORT) },
     },
     // A production build, not `next dev`. The dev server compiles routes on
     // demand and carries the webpack compiler and HMR runtime in-process, and
