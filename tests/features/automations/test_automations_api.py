@@ -1461,3 +1461,37 @@ def test_reset_layout_route_is_not_shadowed_by_the_slug_route(
     widget slug if this route were registered after PATCH/DELETE /{slug}."""
     client = app_with(settings, lambda request: json_response(200, {"data": []}))
     assert client.post("/api/automations/widgets/layout/reset").status_code == 200
+
+
+def test_widget_mode_run_names_the_widget_it_wrote(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """A widget-mode run's payload carries only the kind-specific fields —
+    ValidatedWidget strips slug and kind. Without naming them on the response
+    the caller knows a widget was pushed but not which one, so it cannot
+    offer to pin it. The palette's PIN TO DASHBOARD depends on this."""
+    instance = _seed_instance(settings)
+    _seed_workflow(settings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and "webhook" in request.url.path:
+            return json_response(
+                200,
+                {"widget": "metric", "slug": "doi-lookup", "label": "Cited by", "value": 412},
+            )
+        return json_response(200, {"data": []})
+
+    client = app_with(settings, handler)
+    response = client.post(
+        f"/api/automations/instances/{instance['id']}/workflows/wf1/run", json={"payload": {}}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "widget"
+    assert body["widget_slug"] == "doi-lookup"
+    assert body["widget_kind"] == "metric"
+    assert body["instance_id"] == instance["id"]
+
+    # And the named widget is really there to be pinned.
+    slugs = [w["slug"] for w in client.get("/api/automations/widgets").json()]
+    assert "doi-lookup" in slugs

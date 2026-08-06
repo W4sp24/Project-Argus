@@ -1155,6 +1155,12 @@ export interface AutomationRunResult {
   execution_id: string | null;
   execution_url: string | null;
   payload: unknown;
+  /** For a widget-mode run: which widget it wrote. `payload` carries only the
+   * kind-specific fields (the backend's ValidatedWidget strips slug and kind),
+   * so without these the result can be rendered but never acted on. */
+  widget_slug: string | null;
+  widget_kind: string | null;
+  instance_id: string | null;
 }
 
 /** Registered automations + the instance's live connection state. GET /api/automations. */
@@ -1162,13 +1168,33 @@ export function useAutomations() {
   return useSWR<AutomationsResponse>("/api/automations", fetcher);
 }
 
-/** Run history, newest first, optionally scoped to one workflow. GET /api/automations/runs. */
-export function useAutomationRuns(workflowId?: string, limit?: number) {
+/**
+ * Run history, newest first, optionally scoped to one workflow. GET
+ * /api/automations/runs.
+ *
+ * `options.refreshInterval` turns this into a poll — the command palette's
+ * RUN mode uses it to watch an `argus:async` workflow's fire-and-forget run
+ * settle, since the initial POST response for those never carries the final
+ * status (see `RunResponse.status === "running"`). `options.enabled: false`
+ * suppresses the request entirely (a `null` SWR key) rather than fetching
+ * and discarding — most callers of this hook don't want to poll at all.
+ */
+export function useAutomationRuns(
+  workflowId?: string,
+  limit?: number,
+  options?: { refreshInterval?: number; enabled?: boolean },
+) {
+  const enabled = options?.enabled ?? true;
   const params = new URLSearchParams();
   if (workflowId) params.set("workflow_id", workflowId);
   if (limit) params.set("limit", String(limit));
   const qs = params.toString();
-  return useSWR<AutomationRun[]>(`/api/automations/runs${qs ? `?${qs}` : ""}`, fetcher);
+  const key = enabled ? `/api/automations/runs${qs ? `?${qs}` : ""}` : null;
+  return useSWR<AutomationRun[]>(
+    key,
+    fetcher,
+    options?.refreshInterval ? { refreshInterval: options.refreshInterval } : undefined,
+  );
 }
 
 /** Dashboard widgets pushed by workflows, with computed state. GET /api/automations/widgets. */
@@ -1233,11 +1259,43 @@ export function refreshAutomationInstance(id: string) {
   );
 }
 
-/** Fire one workflow's trigger. `payload` is forwarded verbatim as the form/webhook body. */
-export function runAutomation(workflowId: string, payload: Record<string, unknown> = {}) {
-  return mutateJSON<AutomationRunResult>(
-    `/api/automations/${encodeURIComponent(workflowId)}/run`,
-    { payload },
+/**
+ * Fire one workflow's trigger. `payload` is forwarded verbatim as the
+ * form/webhook body.
+ *
+ * Pass `instanceId` (every `AutomationCard` carries one) to hit the
+ * instance-scoped route, `POST /automations/instances/{instance_id}/workflows/
+ * {workflow_id}/run` — required once two instances can register the same
+ * workflow id, and the route F9 keeps once the unscoped compat shim below is
+ * removed. `instanceId` is optional only so callers outside this chunk's
+ * scope that still invoke the two-argument form keep working unchanged
+ * against the compat route (`POST /automations/{workflow_id}/run`), which
+ * 409s if the id turns out to be ambiguous across instances rather than
+ * guessing.
+ */
+export function runAutomation(
+  workflowId: string,
+  payload: Record<string, unknown> = {},
+  instanceId?: string,
+) {
+  const path = instanceId
+    ? `/api/automations/instances/${encodeURIComponent(instanceId)}/workflows/${encodeURIComponent(workflowId)}/run`
+    : `/api/automations/${encodeURIComponent(workflowId)}/run`;
+  return mutateJSON<AutomationRunResult>(path, { payload });
+}
+
+/**
+ * Best-effort cancellation of a still-`running` run — stops it via n8n's
+ * stop API when an execution id was recorded, marks the run `failed` with a
+ * message saying a human stopped it (the backend never uses a `'cancelled'`
+ * status value; see `router.cancel_run`), and frees the workflow's in-flight
+ * lock so it can be re-run immediately.
+ */
+export function cancelAutomationRun(runId: string) {
+  return mutateJSON<AutomationRun>(
+    `/api/automations/runs/${encodeURIComponent(runId)}/cancel`,
+    undefined,
+    "POST",
   );
 }
 

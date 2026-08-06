@@ -112,7 +112,7 @@ export default function AutomationsPage() {
     }
     setRunningId(card.id);
     try {
-      const result = await runAutomation(card.id, {});
+      const result = await runAutomation(card.id, {}, card.instance_id);
       const label = (card.name ?? card.id).toLowerCase();
       show(`automations :: ${result.status} — ${label}${result.message ? ` (${result.message})` : ""}`);
       refreshAll();

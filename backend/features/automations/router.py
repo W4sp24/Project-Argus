@@ -270,6 +270,16 @@ class RunResponse(BaseModel):
     execution_id: str | None = None
     execution_url: str | None = None
     payload: Any | None = None
+    #: For ``mode="widget"`` runs only: which widget the run wrote. The
+    #: payload deliberately carries only the kind-specific fields (slug and
+    #: kind are stripped by ``ValidatedWidget``), so without these the caller
+    #: knows a widget was pushed but not *which* — and cannot act on it. The
+    #: palette needs exactly this to offer "pin to dashboard" on a result.
+    widget_slug: str | None = None
+    widget_kind: str | None = None
+    #: Which instance ran it. With several registered, "it worked" and "it
+    #: worked somewhere else" are different answers.
+    instance_id: str | None = None
 
 
 class WidgetOut(BaseModel):
@@ -1044,6 +1054,7 @@ def build_automations_router(
             return RunResponse(
                 run_id=run_id, status="ok", mode="widget", payload=validated.payload,
                 execution_id=execution_id, execution_url=link,
+                widget_slug=slug, widget_kind=validated.kind, instance_id=instance_id,
             )
 
         if isinstance(body, dict) and "ok" in body:
