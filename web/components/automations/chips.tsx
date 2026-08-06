@@ -189,6 +189,41 @@ export function KindChip({ kind }: { kind: WidgetKind }) {
 }
 
 // ---------------------------------------------------------------------------
+// ActionStateBadge
+
+export type ActionState = "ready" | "running" | "failing" | "never-run";
+
+const ACTION_STATE_STYLE: Record<ActionState, string> = {
+  ready: "border-ok text-ok",
+  running: "border-warn text-warn",
+  failing: "border-danger text-danger",
+  "never-run": "border-line text-ink-faint",
+};
+
+const ACTION_STATE_LABEL: Record<ActionState, string> = {
+  ready: "READY",
+  running: "RUNNING",
+  failing: "FAILING",
+  "never-run": "NEVER RUN",
+};
+
+/**
+ * An action workflow's health, derived from its own `last_run`. The action
+ * counterpart to `StateBadge` (which speaks for a display's freshness) —
+ * unlike `StateBadge`, this always renders: a workflow that has never run is
+ * exactly as worth saying as one that's failing, not a healthy default.
+ */
+export function ActionStateBadge({ state }: { state: ActionState }) {
+  return (
+    <span
+      className={`shrink-0 border px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] ${ACTION_STATE_STYLE[state]}`}
+    >
+      {ACTION_STATE_LABEL[state]}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // AuthChip
 
 /**

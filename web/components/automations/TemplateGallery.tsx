@@ -10,6 +10,7 @@ import {
   type AutomationTemplate,
 } from "@/lib/api";
 import { openExternalUrl } from "@/lib/quickLinks";
+import { KindChip } from "./chips";
 
 /**
  * The shipped workflow gallery.
@@ -23,14 +24,6 @@ import { openExternalUrl } from "@/lib/quickLinks";
  * whole arrangement exists to avoid. The UI therefore treats "installed" as
  * "created and activated", not as "working", and says so.
  */
-
-function KindTag({ kind }: { kind: AutomationTemplate["kind"] }) {
-  return (
-    <span className="border border-line px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-ink-faint">
-      {kind}
-    </span>
-  );
-}
 
 function TemplateCard({
   template,
@@ -62,12 +55,12 @@ function TemplateCard({
   }
 
   return (
-    <li className="flex flex-col gap-2 border border-line p-3.5 transition-colors hover:border-lineHi">
+    <li className="flex flex-col gap-2.5 border border-line p-3.5 transition-colors hover:border-lineHi">
       <div className="flex flex-wrap items-center gap-2">
+        <KindChip kind={template.kind} />
         <p className="min-w-0 flex-1 truncate font-mono text-label text-ink-bright">
           {template.name}
         </p>
-        <KindTag kind={template.kind} />
         {template.installed && (
           <span className="border border-ok px-1 py-px font-mono text-micro uppercase tracking-[0.14em] text-ok">
             INSTALLED
@@ -76,6 +69,19 @@ function TemplateCard({
       </div>
 
       <p className="text-label leading-relaxed text-ink-muted">{template.description}</p>
+
+      {template.chips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {template.chips.map((chip) => (
+            <span
+              key={chip}
+              className="border border-line px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] text-ink-faint"
+            >
+              {chip}
+            </span>
+          ))}
+        </div>
+      )}
 
       {template.requires.length > 0 && (
         <p className="text-meta text-ink-faint">
@@ -87,6 +93,11 @@ function TemplateCard({
           Replaces <span className="font-mono">{template.replaces}</span>.
         </p>
       )}
+      {template.widget_slug && (
+        <p className="text-meta text-ink-faint">
+          Pushes to <span className="font-mono">{template.widget_slug}</span>.
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="border border-danger px-3 py-2 text-label text-danger">
@@ -94,16 +105,9 @@ function TemplateCard({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Button onClick={() => void install()} disabled={installing}>
-          {installing ? "INSTALLING…" : template.installed ? "INSTALL AGAIN" : "INSTALL"}
-        </Button>
-        {template.widget_slug && (
-          <span className="font-mono text-meta text-ink-faint">
-            pushes to {template.widget_slug}
-          </span>
-        )}
-      </div>
+      <Button className="mt-1 w-full" onClick={() => void install()} disabled={installing}>
+        {installing ? "INSTALLING…" : template.installed ? "INSTALL AGAIN" : "INSTALL"}
+      </Button>
     </li>
   );
 }

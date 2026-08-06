@@ -1062,6 +1062,8 @@ export interface AutomationRun {
   id: string;
   workflow_id: string;
   workflow_name: string | null;
+  /** Which n8n instance this run belongs to — see AutomationCard.instance_id. */
+  instance_id: string;
   started_at: string;
   finished_at: string | null;
   /** "running" | "ok" | "failed" | "timeout" */
@@ -1076,6 +1078,9 @@ export interface AutomationRun {
 /** One cached workflow, parsed for the dashboard/management page. */
 export interface AutomationCard {
   id: string;
+  /** Which n8n instance this workflow was pulled from — the join key for the
+   * instance filter and for OriginChip. */
+  instance_id: string;
   name: string | null;
   tags: string[];
   /** "form" | "button" | "none" */
@@ -1095,6 +1100,9 @@ export interface AutomationCard {
 
 export interface AutomationsResponse {
   instance: AutomationInstance | null;
+  /** Every registered instance. Supersedes `instance`, which stays byte-
+   * identical for 0/1 registered instances and degrades to `null` for 2+. */
+  instances: AutomationInstance[];
   workflows: AutomationCard[];
   /** Whether n8n answered the live reachability check on this request — false
    * (with cached cards still populated) is a normal, fully-supported state. */
@@ -1179,19 +1187,50 @@ export function testN8nInstance(body: { base_url: string; api_key: string }) {
   return mutateJSON<N8nProbeResult>("/api/automations/instance/test", body);
 }
 
-/** Register the n8n instance. The backend re-probes before it saves (409 if one exists, 422 on probe failure). */
-export function registerN8nInstance(body: { name: string; base_url: string; api_key: string }) {
-  return mutateJSON<AutomationInstance>("/api/automations/instance", body);
+/**
+ * Register an n8n instance. The backend re-probes before it saves (409 on a
+ * duplicate name, 422 on probe failure) — `POST /api/automations/instances`,
+ * the multi-instance route (F5). `kind` defaults server-side to "REMOTE"
+ * when omitted.
+ */
+export function registerN8nInstance(body: {
+  name: string;
+  base_url: string;
+  api_key: string;
+  kind?: "LOCAL" | "REMOTE";
+}) {
+  return mutateJSON<AutomationInstance>("/api/automations/instances", body);
 }
 
-/** Forget the registered n8n instance and its stored API key. */
+/** Forget the registered n8n instance and its stored API key. Deletes
+ * `instances[0]`, 404 when empty — the pre-multi-instance compat route. */
 export function deleteN8nInstance() {
   return mutateJSON<ConnectResult>("/api/automations/instance", undefined, "DELETE");
+}
+
+/** Forget one registered n8n instance (by id) and its stored API key —
+ * `DELETE /api/automations/instances/{id}`. */
+export function deleteAutomationInstance(id: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/automations/instances/${encodeURIComponent(id)}`,
+    undefined,
+    "DELETE",
+  );
 }
 
 /** Re-pull workflows tagged `argus` from n8n and reconcile the cache. */
 export function refreshAutomations() {
   return mutateJSON<AutomationRefreshResult>("/api/automations/refresh", undefined);
+}
+
+/** Re-pull workflows tagged `argus` from one instance and reconcile its
+ * cache — `POST /api/automations/instances/{id}/refresh`. Also doubles as
+ * "try reconnecting": it re-runs the same call the reachability probe does. */
+export function refreshAutomationInstance(id: string) {
+  return mutateJSON<AutomationRefreshResult>(
+    `/api/automations/instances/${encodeURIComponent(id)}/refresh`,
+    undefined,
+  );
 }
 
 /** Fire one workflow's trigger. `payload` is forwarded verbatim as the form/webhook body. */
@@ -1248,6 +1287,9 @@ export interface AutomationTemplate {
   replaces: string | null;
   /** Credentials the user must grant in n8n — the one manual step by design. */
   requires: string[];
+  /** Short factual badges (renderer, field count, cadence) derived from the
+   * bundled definition — rendered as small bordered tags on the card. */
+  chips: string[];
   installed: boolean;
 }
 
@@ -1297,6 +1339,32 @@ export function useExternalSurface() {
  */
 export function issueExternalToken() {
   return mutateJSON<ExternalTokenResult>("/api/automations/external/token", undefined);
+}
+
+/** One row of `automation_events` — the ACTIVITY tab's real feed of pushes,
+ * runs, installs, and captures, not only runs. */
+export interface AutomationEvent {
+  ts: string;
+  instance_id: string;
+  /** "RUN" | "PUSH" | "FAIL" | "INSTALL" | "CAPTURE" */
+  tag: string;
+  /** The workflow/template name responsible, when known. */
+  subject: string | null;
+  text: string;
+}
+
+/**
+ * Activity feed, newest first — GET /api/automations/events. `tag` is sent
+ * as-is; the backend normalizes case before matching (`RUN`/`run` both
+ * work), so callers can pass the lowercase filter chip value directly.
+ */
+export function useAutomationEvents(tag?: string, instanceId?: string, limit?: number) {
+  const params = new URLSearchParams();
+  if (tag) params.set("tag", tag);
+  if (instanceId) params.set("instance_id", instanceId);
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  return useSWR<AutomationEvent[]>(`/api/automations/events${qs ? `?${qs}` : ""}`, fetcher);
 }
 
 /** Remove a widget from the dashboard. */
