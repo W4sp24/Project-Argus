@@ -17,17 +17,37 @@ content cannot escape through a nested key nobody thought to check.
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.agent.credentials import store_key
 from backend.core.config import Settings
+from backend.features.automations import store as automations_store
 from backend.features.external import auth
 from backend.features.external.app import create_external_app
 
 TOKEN = "test-token-value"
+INSTANCE_ID = "instance-a"
+
+
+class _FakeKeyring:
+    """A minimal in-memory stand-in for the ``keyring`` module."""
+
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str], str] = {}
+
+    def set_password(self, service: str, ref: str, value: str) -> None:
+        self.values[(service, ref)] = value
+
+    def get_password(self, service: str, ref: str) -> str | None:
+        return self.values.get((service, ref))
+
+    def delete_password(self, service: str, ref: str) -> None:
+        self.values.pop((service, ref), None)
 
 # Distinctive enough that a substring check cannot pass by accident.
 PRIVATE_MARKER = "ZZPRIVATEMARKERZZ"
@@ -103,8 +123,17 @@ def vault(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def client(vault: Path, monkeypatch) -> TestClient:
-    monkeypatch.setattr(auth, "verify", lambda presented: presented == TOKEN)
+    monkeypatch.setitem(sys.modules, "keyring", _FakeKeyring())
     settings = Settings(_vault_path=vault)
+    entry = {
+        "id": INSTANCE_ID,
+        "name": "home",
+        "kind": "REMOTE",
+        "base_url": "http://n8n.test",
+        "key_ref": automations_store.key_ref_for("home"),
+    }
+    automations_store.save_instances(settings.automations_file, [entry])
+    store_key(auth.token_ref_for(INSTANCE_ID), TOKEN)
     return TestClient(create_external_app(settings))
 
 

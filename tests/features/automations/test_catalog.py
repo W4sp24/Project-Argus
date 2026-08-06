@@ -117,9 +117,11 @@ def _seed_instance(
     name: str = "home",
     base_url: str = "http://n8n.test",
     api_key: str = "n8n-secret",
-) -> None:
+) -> dict[str, Any]:
     """Register an instance directly through the store/keyring, bypassing the
-    HTTP endpoint — matches test_automations_api.py's helper of the same name."""
+    HTTP endpoint — matches test_automations_api.py's helper of the same name.
+    Returns the entry it wrote, so a caller can key the per-instance external
+    token off its real ``id``."""
     import uuid
 
     from backend.agent.credentials import store_key
@@ -136,6 +138,7 @@ def _seed_instance(
     instances.append(entry)
     store.save_instances(settings.automations_file, instances)
     store_key(key_ref, api_key)
+    return entry
 
 
 def _seed_cached_workflow(settings: Settings, *, workflow_id: str, name: str) -> None:
@@ -450,8 +453,11 @@ def test_install_posts_to_n8n_and_returns_workflow_id_and_open_in_n8n_url(
 def test_install_generates_a_token_when_none_exists_yet(
     settings: Settings, fake_keyring: _FakeKeyring
 ) -> None:
-    _seed_instance(settings, base_url="http://n8n.test")
-    assert fake_keyring.values.get(("argus-models", "external:token")) is None
+    from backend.features.external import auth as external_auth
+
+    instance = _seed_instance(settings, base_url="http://n8n.test")
+    token_ref = external_auth.token_ref_for(instance["id"])
+    assert fake_keyring.values.get(("argus-models", token_ref)) is None
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -467,4 +473,49 @@ def test_install_generates_a_token_when_none_exists_yet(
     response = client.post("/api/automations/templates/weather/install")
 
     assert response.status_code == 201
-    assert fake_keyring.values.get(("argus-models", "external:token")) is not None
+    assert fake_keyring.values.get(("argus-models", token_ref)) is not None
+
+
+def test_install_bakes_in_the_target_instances_own_token_not_another_instances(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """Installing with instance B's bearer credential would make B's workflow
+    callbacks authenticate as A instead — mis-attributing every push it ever
+    makes. The token baked into the rendered definition must be B's own."""
+    from backend.features.external import auth as external_auth
+
+    home = _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    work = _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+
+    # home already has a token from an earlier action — distinct from
+    # whatever gets generated for work below.
+    home_token = external_auth.generate_token(home["id"])
+
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v1/workflows":
+            body = json.loads(request.content)
+            node = next(n for n in body["nodes"] if n["name"] == "Push Weather Widget")
+            headers = node["parameters"]["headerParameters"]["parameters"]
+            captured["bearer"] = next(h["value"] for h in headers if h["name"] == "Authorization")
+            return json_response(
+                200, {"id": "wf-work-1", "name": "x", "active": False, "tags": []}
+            )
+        if request.method == "POST" and path == "/api/v1/workflows/wf-work-1/activate":
+            return json_response(200, {"id": "wf-work-1", "active": True})
+        if request.method == "GET" and path == "/api/v1/workflows":
+            return json_response(200, {"data": []})
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.post(
+        f"/api/automations/instances/{work['id']}/templates/weather/install"
+    )
+    assert response.status_code == 201, response.text
+
+    work_token = external_auth.get_token(work["id"])
+    assert work_token is not None
+    assert work_token != home_token
+    assert captured["bearer"] == f"Bearer {work_token}"

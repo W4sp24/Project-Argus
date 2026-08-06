@@ -14,12 +14,14 @@ forever pretending it might still succeed.
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.agent.credentials import store_key
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.automations import store
@@ -27,6 +29,23 @@ from backend.features.external import auth
 from backend.features.external.app import create_external_app
 
 TOKEN = "integration-token"
+INSTANCE_ID = "instance-a"
+
+
+class _FakeKeyring:
+    """A minimal in-memory stand-in for the ``keyring`` module."""
+
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str], str] = {}
+
+    def set_password(self, service: str, ref: str, value: str) -> None:
+        self.values[(service, ref)] = value
+
+    def get_password(self, service: str, ref: str) -> str | None:
+        return self.values.get((service, ref))
+
+    def delete_password(self, service: str, ref: str) -> None:
+        self.values.pop((service, ref), None)
 
 
 @pytest.fixture()
@@ -47,7 +66,16 @@ def settings(vault: Path) -> Settings:
 
 @pytest.fixture()
 def external(settings: Settings, monkeypatch) -> TestClient:
-    monkeypatch.setattr(auth, "verify", lambda presented: presented == TOKEN)
+    monkeypatch.setitem(sys.modules, "keyring", _FakeKeyring())
+    entry = {
+        "id": INSTANCE_ID,
+        "name": "home",
+        "kind": "REMOTE",
+        "base_url": "http://n8n.test",
+        "key_ref": store.key_ref_for("home"),
+    }
+    store.save_instances(settings.automations_file, [entry])
+    store_key(auth.token_ref_for(INSTANCE_ID), TOKEN)
     return TestClient(create_external_app(settings))
 
 

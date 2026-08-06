@@ -3,16 +3,26 @@
 The privacy boundary is tested separately in ``test_external_privacy.py``.
 This file covers the other two things holding the line: the bearer token and
 the abuse limits, plus the endpoints themselves.
+
+B4: auth is per n8n instance now (``auth.verify`` is gone). Rather than
+monkeypatching a single global check, these tests register one or more real
+instances through :mod:`backend.features.automations.store` and seed their
+tokens through a fake in-memory keyring (matching
+``tests/features/automations/test_automations_api.py``'s pattern), so
+``auth.resolve_token`` runs for real against genuine per-instance credentials.
 """
 
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.agent.credentials import KeyringUnavailableError, delete_key, store_key
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.automations import store
@@ -20,6 +30,23 @@ from backend.features.external import auth
 from backend.features.external.app import create_external_app
 
 TOKEN = "correct-horse-battery-staple"
+INSTANCE_ID = "instance-a"
+
+
+class _FakeKeyring:
+    """A minimal in-memory stand-in for the ``keyring`` module."""
+
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str], str] = {}
+
+    def set_password(self, service: str, ref: str, value: str) -> None:
+        self.values[(service, ref)] = value
+
+    def get_password(self, service: str, ref: str) -> str | None:
+        return self.values.get((service, ref))
+
+    def delete_password(self, service: str, ref: str) -> None:
+        self.values.pop((service, ref), None)
 
 
 class _FakeClock:
@@ -60,8 +87,44 @@ def clock() -> _FakeClock:
 
 
 @pytest.fixture()
-def client(settings: Settings, clock: _FakeClock, monkeypatch) -> TestClient:
-    monkeypatch.setattr(auth, "verify", lambda presented: presented == TOKEN)
+def fake_keyring(monkeypatch: pytest.MonkeyPatch) -> _FakeKeyring:
+    fk = _FakeKeyring()
+    monkeypatch.setitem(sys.modules, "keyring", fk)
+    return fk
+
+
+def _register_instance(
+    settings: Settings, *, instance_id: str = INSTANCE_ID, name: str = "home"
+) -> dict[str, Any]:
+    """Append one instance to the registry, bypassing the HTTP endpoint."""
+    entry = {
+        "id": instance_id,
+        "name": name,
+        "kind": "REMOTE",
+        "base_url": "http://n8n.test",
+        "key_ref": store.key_ref_for(name),
+    }
+    instances = store.load_instances(settings.automations_file)
+    instances.append(entry)
+    store.save_instances(settings.automations_file, instances)
+    return entry
+
+
+def _seed_token(instance_id: str, token: str) -> None:
+    """Store a known token value for ``instance_id`` through the (fake) keyring."""
+    store_key(auth.token_ref_for(instance_id), token)
+
+
+@pytest.fixture()
+def instance(settings: Settings, fake_keyring: _FakeKeyring) -> dict[str, Any]:
+    """One registered instance whose token is the module-level ``TOKEN``."""
+    entry = _register_instance(settings)
+    _seed_token(entry["id"], TOKEN)
+    return entry
+
+
+@pytest.fixture()
+def client(settings: Settings, clock: _FakeClock, instance: dict[str, Any]) -> TestClient:
     limiter = auth.RateLimiter(clock=clock)
     return TestClient(create_external_app(settings, limiter=limiter))
 
@@ -106,34 +169,44 @@ def test_bearer_scheme_is_case_insensitive(client: TestClient) -> None:
     assert response.status_code == 200
 
 
-def test_a_non_ascii_token_is_rejected_not_crashed(monkeypatch) -> None:
+def test_a_non_ascii_token_is_rejected_not_crashed(instance: dict[str, Any]) -> None:
     """hmac.compare_digest raises TypeError on a str containing non-ASCII.
 
-    Asserted at this level rather than through the app because httpx refuses
-    to encode a non-ASCII header at all — but a raw socket, curl, or any
-    non-Python client will happily send those bytes. Reaching verify() with
-    non-ASCII must be a plain False, never an exception that becomes a 500
-    advertising an unhandled path.
+    Asserted against auth.resolve_token directly rather than through the app
+    because httpx refuses to encode a non-ASCII header at all — but a raw
+    socket, curl, or any non-Python client will happily send those bytes.
+    Reaching resolve_token() with non-ASCII must resolve to no match, never an
+    exception that becomes a 500 advertising an unhandled path.
     """
-    monkeypatch.setattr(auth, "get_key", lambda ref: TOKEN)
-    assert auth.verify("ééé") is False
-    assert auth.verify("\uffff") is False
-    assert auth.verify(TOKEN) is True
+    instances = [instance]
+    assert auth.resolve_token("ééé", instances) is None
+    assert auth.resolve_token("￿", instances) is None
+    assert auth.resolve_token(TOKEN, instances) == instance["id"]
 
 
-def test_verify_is_false_for_everything_when_no_token_is_stored(monkeypatch) -> None:
-    monkeypatch.setattr(auth, "get_key", lambda ref: None)
-    assert auth.verify("anything") is False
-    assert auth.verify("") is False
-    assert auth.verify(None) is False
+def test_resolve_token_is_none_for_everything_when_no_token_is_stored(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    entry = _register_instance(settings)  # registered, but no token ever issued
+    instances = [entry]
+    assert auth.resolve_token("anything", instances) is None
+    assert auth.resolve_token("", instances) is None
+    assert auth.resolve_token(None, instances) is None
 
 
-def test_verify_survives_an_unreadable_keyring(monkeypatch) -> None:
-    def boom(ref):
-        raise auth.KeyringUnavailableError("locked")
+def test_resolve_token_is_none_with_zero_instances_registered() -> None:
+    """Correct with nothing registered at all: no crash, no match."""
+    assert auth.resolve_token("anything", []) is None
+
+
+def test_resolve_token_survives_an_unreadable_keyring(
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(ref: str) -> str:
+        raise KeyringUnavailableError("locked")
 
     monkeypatch.setattr(auth, "get_key", boom)
-    assert auth.verify("anything") is False
+    assert auth.resolve_token(TOKEN, [instance]) is None
 
 
 # --- ping ---------------------------------------------------------------------
@@ -253,7 +326,7 @@ def test_a_valid_widget_push_is_stored(client: TestClient, settings: Settings) -
     assert response.status_code == 200, response.text
     conn = _db(settings)
     try:
-        stored = store.get_widget(conn, "weather")
+        stored = store.get_widget(conn, "weather", instance_id=INSTANCE_ID)
     finally:
         conn.close()
     assert stored is not None
@@ -289,7 +362,7 @@ def test_a_malformed_push_keeps_the_previous_good_payload(
 
     conn = _db(settings)
     try:
-        stored = store.get_widget(conn, "w")
+        stored = store.get_widget(conn, "w", instance_id=INSTANCE_ID)
     finally:
         conn.close()
     assert stored["payload"]["value"] == "31C"
@@ -317,7 +390,7 @@ def test_a_run_scoped_push_targets_the_run_not_the_dashboard(
         assert runs[0]["status"] == "ok"
         assert runs[0]["mode"] == "widget"
         # ...and no dashboard widget was created for it
-        assert store.get_widget(conn, "anything") is None
+        assert store.get_widget(conn, "anything", instance_id=INSTANCE_ID) is None
     finally:
         conn.close()
 
@@ -329,6 +402,76 @@ def test_a_push_for_an_unknown_run_is_404(client: TestClient) -> None:
         json={"widget": "text", "body": "hi"},
     )
     assert response.status_code == 404
+
+
+# --- B4: per-instance auth and attribution -------------------------------------
+
+
+def test_two_instances_two_tokens_each_authenticates_and_deleting_one_revokes_only_it(
+    settings: Settings, fake_keyring: _FakeKeyring, clock: _FakeClock
+) -> None:
+    """The whole point of this chunk: revoking one instance's token must not
+    silence any other instance's."""
+    instance_a = _register_instance(settings, instance_id="a", name="home")
+    instance_b = _register_instance(settings, instance_id="b", name="work")
+    _seed_token("a", "token-a")
+    _seed_token("b", "token-b")
+
+    limiter = auth.RateLimiter(clock=clock)
+    client = TestClient(create_external_app(settings, limiter=limiter))
+
+    assert client.get(
+        "/api/external/tasks", headers={"Authorization": "Bearer token-a"}
+    ).status_code == 200
+    assert client.get(
+        "/api/external/tasks", headers={"Authorization": "Bearer token-b"}
+    ).status_code == 200
+
+    # Delete instance a: its token leaves the keyring, and it leaves the
+    # registry — exactly what backend.features.automations.router's
+    # delete_instance_by_id does.
+    delete_key(auth.token_ref_for(instance_a["id"]))
+    remaining = [
+        entry
+        for entry in store.load_instances(settings.automations_file)
+        if entry["id"] != instance_a["id"]
+    ]
+    store.save_instances(settings.automations_file, remaining)
+
+    assert client.get(
+        "/api/external/tasks", headers={"Authorization": "Bearer token-a"}
+    ).status_code == 401
+    # b's token still works — deleting a must not have touched it.
+    assert client.get(
+        "/api/external/tasks", headers={"Authorization": "Bearer token-b"}
+    ).status_code == 200
+    assert instance_b["id"] == "b"  # sanity: b was never removed above
+
+
+def test_a_push_authenticated_with_bs_token_is_stored_with_bs_instance_id(
+    settings: Settings, fake_keyring: _FakeKeyring, clock: _FakeClock
+) -> None:
+    _register_instance(settings, instance_id="a", name="home")
+    _register_instance(settings, instance_id="b", name="work")
+    _seed_token("a", "token-a")
+    _seed_token("b", "token-b")
+
+    limiter = auth.RateLimiter(clock=clock)
+    client = TestClient(create_external_app(settings, limiter=limiter))
+
+    response = client.post(
+        "/api/external/widget/inbox",
+        headers={"Authorization": "Bearer token-b"},
+        json={"widget": "metric", "label": "Inbox", "value": 7},
+    )
+    assert response.status_code == 200, response.text
+
+    conn = _db(settings)
+    try:
+        assert store.get_widget(conn, "inbox", instance_id="b") is not None
+        assert store.get_widget(conn, "inbox", instance_id="a") is None
+    finally:
+        conn.close()
 
 
 # --- the surface is deliberately small ----------------------------------------

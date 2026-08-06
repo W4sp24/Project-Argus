@@ -11,9 +11,13 @@ logic so it can be unit tested without spinning up an app.
 
 Token storage mirrors :mod:`backend.connectors.todoist` and every model API
 key: the OS keyring only (invariant I4), never a file, never the JSON
-registry. There is exactly one token — Argus registers exactly one external
-surface — so the keyring reference is a fixed string, not derived from a
-name.
+registry. **Multi-instance (B4):** Argus can register N n8n instances, each
+with its own bearer token, so the keyring reference is derived from the
+instance id (:func:`token_ref_for`) rather than a single fixed string.
+Revoking one instance's token (deleting the instance, or rotating its token)
+must never affect any other instance's — every function here that reads or
+writes a token takes ``instance_id`` and touches only that instance's
+keyring entry.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from backend.agent.credentials import (
     KEY_ABSENT,
@@ -32,8 +37,10 @@ from backend.agent.credentials import (
     store_key,
 )
 
-#: The one keyring reference this whole module reads and writes.
-TOKEN_REF = "external:token"
+
+def token_ref_for(instance_id: str) -> str:
+    """Keyring reference for one n8n instance's inbound bearer token."""
+    return f"external:token:{instance_id}"
 
 #: Bytes of entropy in a generated token (secrets.token_urlsafe measures its
 #: argument in bytes before base64url-encoding it, not output characters).
@@ -47,66 +54,89 @@ RATE_LIMIT_CAPACITY = 60
 RATE_LIMIT_WINDOW_SECONDS = 60.0
 
 
-def generate_token() -> str:
-    """Generate a new 32-random-byte, URL-safe bearer token and persist it.
+def generate_token(instance_id: str) -> str:
+    """Generate a new 32-random-byte, URL-safe bearer token for ``instance_id``
+    and persist it.
 
-    Overwrites whatever was stored before — see :func:`rotate_token`, which is
-    just this function under a name that says what calling it again does.
+    Overwrites whatever was stored before for this instance only — see
+    :func:`rotate_token`, which is just this function under a name that says
+    what calling it again does. Another instance's token, stored under its
+    own :func:`token_ref_for`, is untouched.
     """
     token = secrets.token_urlsafe(TOKEN_BYTES)
-    store_key(TOKEN_REF, token)
+    store_key(token_ref_for(instance_id), token)
     return token
 
 
-def get_token() -> str | None:
-    """The currently active token, or ``None`` when none has been generated
-    (or the keyring cannot be read — a broken keyring must never look like a
-    valid token to a caller foolish enough to compare against ``None``, so
-    this is deliberately not the same as "token would verify")."""
+def get_token(instance_id: str) -> str | None:
+    """``instance_id``'s currently active token, or ``None`` when none has
+    been generated (or the keyring cannot be read — a broken keyring must
+    never look like a valid token to a caller foolish enough to compare
+    against ``None``, so this is deliberately not the same as "token would
+    verify")."""
     try:
-        return get_key(TOKEN_REF)
+        return get_key(token_ref_for(instance_id))
     except KeyringUnavailableError:
         return None
 
 
-def rotate_token() -> str:
-    """Generate a new token, invalidating the old one immediately.
+def rotate_token(instance_id: str) -> str:
+    """Generate a new token for ``instance_id``, invalidating its old one
+    immediately.
 
     ``store_key`` (via the keyring) replaces the credential outright — there
     is no window where both the old and new token verify, and no separate
-    "delete old, then write new" step that could leave neither stored.
+    "delete old, then write new" step that could leave neither stored. Only
+    ``instance_id``'s keyring entry is touched.
     """
-    return generate_token()
+    return generate_token(instance_id)
 
 
-def token_state() -> str:
-    """Tri-state presence of a stored token — see :func:`backend.agent.credentials.key_state`."""
-    return key_state(TOKEN_REF)
+def token_state(instance_id: str) -> str:
+    """Tri-state presence of ``instance_id``'s stored token — see
+    :func:`backend.agent.credentials.key_state`."""
+    return key_state(token_ref_for(instance_id))
 
 
-def verify(presented: str | None) -> bool:
-    """Constant-time check of a presented token against the stored one.
+def resolve_token(presented: str | None, instances: list[dict[str, Any]]) -> str | None:
+    """Which registered instance, if any, ``presented`` authenticates as.
 
-    Uses :func:`hmac.compare_digest` so a wrong-but-close guess takes no
-    longer to reject than a wildly wrong one. Every failure path here —
-    absent header, malformed header, wrong token, a keyring that cannot be
-    read — returns the same ``False``; the caller (the auth dependency in
-    :mod:`backend.features.external.router`) turns every ``False`` into the
-    same 401 body, so none of these reasons is distinguishable from outside.
+    Returns that instance's ``id``, or ``None`` when it matches none of them
+    (including when ``instances`` is empty).
+
+    **Constant-time against every candidate, not just until the first hit.**
+    Returning as soon as one instance's token matches would leak, via timing,
+    which instance matched and how many were checked before it — an attacker
+    holding a valid token for instance C could learn how many instances
+    precede it in the registry, or narrow down which slot their guess landed
+    in, purely from response latency. So every instance's token is compared
+    with :func:`hmac.compare_digest`, and only after the full pass does this
+    function decide what to return; nothing here short-circuits on a match.
+
+    Compares bytes, not `str`, for the same reason :func:`hmac.compare_digest`
+    always has here: it raises ``TypeError`` on a `str` containing non-ASCII,
+    and ``presented`` arrives straight off a public network. A token of "é"
+    must fail to resolve like any other wrong token, not raise and become a
+    500 that tells an attacker they found an unhandled path.
     """
     if not presented:
-        return False
-    try:
-        actual = get_key(TOKEN_REF)
-    except KeyringUnavailableError:
-        return False
-    if not actual:
-        return False
-    # Compare as bytes, not str: hmac.compare_digest raises TypeError on a
-    # str containing non-ASCII, and this input arrives straight off a public
-    # network. A token of "é" must be a 401 like every other wrong token, not
-    # a 500 that tells an attacker they found an unhandled path.
-    return hmac.compare_digest(presented.encode("utf-8"), actual.encode("utf-8"))
+        return None
+    presented_bytes = presented.encode("utf-8")
+
+    matched: str | None = None
+    for instance in instances:
+        instance_id = instance.get("id")
+        if not instance_id:
+            continue
+        try:
+            actual = get_key(token_ref_for(instance_id))
+        except KeyringUnavailableError:
+            actual = None
+        if not actual:
+            continue
+        if hmac.compare_digest(presented_bytes, actual.encode("utf-8")):
+            matched = instance_id
+    return matched
 
 
 @dataclass
@@ -152,11 +182,11 @@ __all__ = [
     "MAX_BODY_BYTES",
     "RATE_LIMIT_CAPACITY",
     "RATE_LIMIT_WINDOW_SECONDS",
-    "TOKEN_REF",
     "RateLimiter",
     "generate_token",
     "get_token",
+    "resolve_token",
     "rotate_token",
+    "token_ref_for",
     "token_state",
-    "verify",
 ]

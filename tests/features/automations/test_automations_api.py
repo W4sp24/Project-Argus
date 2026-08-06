@@ -423,6 +423,32 @@ def test_delete_by_id_removes_only_that_instance_leaving_the_other_intact(
     assert fake_keyring.values.get(("argus-models", work["key_ref"])) == "n8n-secret"
 
 
+def test_delete_by_id_also_revokes_only_that_instances_external_token(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """B4: deleting an instance must delete its inbound external token from
+    the keyring alongside its n8n API key, and must not touch any other
+    instance's token — this is the whole point of per-instance auth."""
+    from backend.features.external import auth as external_auth
+
+    home = _seed_instance(settings, name="home", base_url="http://home.n8n.test")
+    work = _seed_instance(settings, name="work", base_url="http://work.n8n.test")
+    home_token = external_auth.generate_token(home["id"])
+    work_token = external_auth.generate_token(work["id"])
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    response = client.delete(f"/api/automations/instances/{home['id']}")
+    assert response.status_code == 200
+
+    # home's token is gone — it no longer resolves against either instance...
+    remaining = store.load_instances(settings.automations_file)
+    assert external_auth.resolve_token(home_token, remaining) is None
+    home_ref = external_auth.token_ref_for(home["id"])
+    assert fake_keyring.values.get(("argus-models", home_ref)) is None
+    # ...but work's token is untouched.
+    assert external_auth.resolve_token(work_token, remaining) == work["id"]
+
+
 def test_delete_by_id_unknown_id_404s(settings: Settings, fake_keyring: _FakeKeyring) -> None:
     _seed_instance(settings)
     client = app_with(settings, lambda request: json_response(200, {"data": []}))

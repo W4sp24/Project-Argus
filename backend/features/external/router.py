@@ -13,6 +13,23 @@ here touches the filesystem directly. Every read goes through
 Auth, rate limiting and the body cap live in :mod:`.auth` and are applied as
 dependencies **before** any handler body runs, so no endpoint can be written
 later that forgets one.
+
+**Multi-instance auth (B4).** ``guard()`` authenticates *per instance*: the
+bearer token is checked against every registered n8n instance's own token
+(:func:`backend.features.external.auth.resolve_token`), and the dependency
+returns the id of whichever instance's token matched. Revoking one instance
+(deleting it, or rotating its token) therefore has no effect on any other
+instance's ability to authenticate. Every write this router makes threads
+that matched ``instance_id`` through, so an inbound push is attributed to the
+instance that actually sent it, not to whichever instance happened to be
+registered first.
+
+**Known, deliberately unfixed gap:** the rate limiter (``bucket``/`throttle`)
+stays a single global bucket across every instance — see
+:class:`backend.features.external.auth.RateLimiter`'s own docstring. A flood
+of requests carrying one leaked (or since-revoked) instance's token still
+consumes budget shared with every other instance's legitimate traffic. Making
+the limiter per-instance is future work, not this chunk's job.
 """
 
 from __future__ import annotations
@@ -82,7 +99,7 @@ def build_external_router(
         request: Request,
         authorization: str | None = Header(default=None),
         _throttled: None = Depends(throttle),
-    ) -> None:
+    ) -> str:
         """Body cap, then auth — after the rate limit has already ticked.
 
         Order is deliberate. The rate limit runs first (via ``throttle``) so a
@@ -91,6 +108,11 @@ def build_external_router(
         rejected requests would never consume budget. The body cap is enforced
         before the body is ever parsed, because an unbounded public endpoint
         writing into sqlite and a vault is a disk-fill vector.
+
+        Returns the id of the instance whose token was presented — every
+        write in this router threads that id through so an inbound push is
+        attributed to the instance that actually sent it, not to whichever
+        instance happened to be registered first.
         """
         declared = request.headers.get("content-length")
         if declared is not None:
@@ -100,8 +122,11 @@ def build_external_router(
             except ValueError:
                 raise HTTPException(status_code=413, detail="body too large") from None
 
-        if not auth.verify(_bearer(authorization)):
+        instances = store.load_instances(settings.automations_file)
+        instance_id = auth.resolve_token(_bearer(authorization), instances)
+        if instance_id is None:
             raise HTTPException(status_code=401, detail=_UNAUTHORIZED)
+        return instance_id
 
     guarded = [Depends(guard)]
     throttled = [Depends(throttle)]
@@ -120,8 +145,8 @@ def build_external_router(
 
     # --- writes -------------------------------------------------------------
 
-    @router.post("/capture", dependencies=guarded)
-    async def capture(payload: dict) -> dict:
+    @router.post("/capture")
+    async def capture(payload: dict, instance_id: str = Depends(guard)) -> dict:
         body = str(payload.get("body") or "").strip()
         if not body:
             raise HTTPException(status_code=422, detail="'body' is required")
@@ -136,8 +161,8 @@ def build_external_router(
             raise_http(exc)
         return {"ok": True, "path": path}
 
-    @router.post("/tasks", dependencies=guarded)
-    async def create_task(payload: dict) -> dict:
+    @router.post("/tasks")
+    async def create_task(payload: dict, instance_id: str = Depends(guard)) -> dict:
         text = str(payload.get("text") or "").strip()
         if not text:
             raise HTTPException(status_code=422, detail="'text' is required")
@@ -154,8 +179,10 @@ def build_external_router(
             raise_http(exc)
         return {"ok": True, "path": path}
 
-    @router.post("/widget/{slug}", dependencies=guarded)
-    async def push_widget(slug: str, payload: dict, run: str | None = None) -> dict:
+    @router.post("/widget/{slug}")
+    async def push_widget(
+        slug: str, payload: dict, run: str | None = None, instance_id: str = Depends(guard)
+    ) -> dict:
         try:
             widget = validate_widget_payload(payload)
         except WidgetValidationError as exc:
@@ -184,6 +211,7 @@ def build_external_router(
                 widget.payload,
                 title=widget.title,
                 expected_interval_seconds=widget.expected_interval_seconds,
+                instance_id=instance_id,
             )
         finally:
             conn.close()

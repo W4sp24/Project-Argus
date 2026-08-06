@@ -646,6 +646,11 @@ def build_automations_router(
         # dropped — the rest of the list (and their keyring secrets, never
         # touched here) is written back unchanged.
         delete_key(target.get("key_ref"))
+        # B4: this instance's inbound external token lives under its own
+        # keyring reference (external_auth.token_ref_for), separate from its
+        # n8n API key above — deleting an instance must revoke both, and
+        # must not touch any other instance's token (each is scoped by id).
+        delete_key(external_auth.token_ref_for(instance_id))
         remaining = [entry for entry in instances if entry.get("id") != instance_id]
         store.save_instances(settings.automations_file, remaining)
 
@@ -673,6 +678,7 @@ def build_automations_router(
         # Keyring first, then registry — same ordering and reasoning as
         # delete_instance_by_id above.
         delete_key(target.get("key_ref"))
+        delete_key(external_auth.token_ref_for(target["id"]))
         store.save_instances(settings.automations_file, instances[1:])
 
         conn = db()
@@ -1276,9 +1282,16 @@ def build_automations_router(
         instance = resolve_instance()
         api_key = _resolve_key(instance)
 
-        token = external_auth.get_token()
+        # B4: the token baked into the workflow must be *this* instance's own
+        # token, not any registered instance's. A workflow's callbacks all
+        # authenticate with whatever token gets baked in here — installing
+        # with another instance's token would make every callback from this
+        # workflow authenticate as the wrong instance, mis-attributing every
+        # push it ever makes.
+        instance_id = instance["id"]
+        token = external_auth.get_token(instance_id)
         if token is None:
-            token = external_auth.generate_token()
+            token = external_auth.generate_token(instance_id)
 
         definition = catalog.render_definition(
             template_id, callback_url=settings.external_base_url, token=token
@@ -1331,33 +1344,42 @@ def build_automations_router(
     # external app itself — a public endpoint that hands out the credential
     # guarding it would defeat the point.
 
-    @router.get("/automations/external", response_model=ExternalSurfaceInfo)
-    def external_surface() -> ExternalSurfaceInfo:
-        """What the user needs in order to point a tunnel at Argus.
+    def _external_surface_info(instance_id: str) -> ExternalSurfaceInfo:
+        return ExternalSurfaceInfo(
+            enabled=settings.external_enabled,
+            port=settings.external_port,
+            base_url=settings.external_base_url,
+            token_state=external_auth.token_state(instance_id),
+        )
+
+    @router.get(
+        "/automations/instances/{instance_id}/external", response_model=ExternalSurfaceInfo
+    )
+    def external_surface_scoped(instance_id: str) -> ExternalSurfaceInfo:
+        """What the user needs in order to point a tunnel at Argus, for one
+        specific instance's token.
 
         Deliberately does NOT include the token value. Reading this is a page
         load; handing out a live credential on every dashboard render is not
         something to do casually, so the value is only ever returned by the
         explicit issue/rotate action below.
         """
-        return ExternalSurfaceInfo(
-            enabled=settings.external_enabled,
-            port=settings.external_port,
-            base_url=settings.external_base_url,
-            token_state=external_auth.token_state(),
-        )
+        _resolve_instance(instance_id)  # 404 on an unknown instance
+        return _external_surface_info(instance_id)
 
-    @router.post("/automations/external/token", response_model=ExternalTokenResult)
-    def issue_external_token() -> ExternalTokenResult:
-        """Issue or rotate the bearer token, returning it **once** for copying.
+    # F9 removes this
+    @router.get("/automations/external", response_model=ExternalSurfaceInfo)
+    def external_surface() -> ExternalSurfaceInfo:
+        """Compat shim: identical behaviour to before multi-instance support
+        for exactly one registered instance, 409 otherwise — see
+        ``_only_instance``. F9 removes this in favor of the scoped route
+        above."""
+        instance = _only_instance()
+        return _external_surface_info(instance["id"])
 
-        Rotating invalidates the old token immediately, which is the point:
-        the recovery for a leaked token is to press this and re-paste the
-        credential into n8n. The value is returned here and never again — the
-        keyring holds the only copy, and there is no read-it-back endpoint.
-        """
-        rotated = external_auth.token_state() == KEY_PRESENT
-        token = external_auth.rotate_token()
+    def _issue_external_token(instance_id: str) -> ExternalTokenResult:
+        rotated = external_auth.token_state(instance_id) == KEY_PRESENT
+        token = external_auth.rotate_token(instance_id)
         return ExternalTokenResult(
             token=token,
             rotated=rotated,
@@ -1365,6 +1387,34 @@ def build_automations_router(
             header_value=f"Bearer {token}",
             base_url=settings.external_base_url,
         )
+
+    @router.post(
+        "/automations/instances/{instance_id}/external/token",
+        response_model=ExternalTokenResult,
+    )
+    def issue_external_token_scoped(instance_id: str) -> ExternalTokenResult:
+        """Issue or rotate one instance's bearer token, returning it **once**
+        for copying.
+
+        Rotating invalidates that instance's old token immediately, which is
+        the point: the recovery for a leaked token is to press this and
+        re-paste the credential into that instance's n8n workflows. The value
+        is returned here and never again — the keyring holds the only copy,
+        and there is no read-it-back endpoint. Only ``instance_id``'s token is
+        touched; every other instance keeps authenticating with its own.
+        """
+        _resolve_instance(instance_id)  # 404 on an unknown instance
+        return _issue_external_token(instance_id)
+
+    # F9 removes this
+    @router.post("/automations/external/token", response_model=ExternalTokenResult)
+    def issue_external_token() -> ExternalTokenResult:
+        """Compat shim: identical behaviour to before multi-instance support
+        for exactly one registered instance, 409 otherwise — see
+        ``_only_instance``. F9 removes this in favor of the scoped route
+        above."""
+        instance = _only_instance()
+        return _issue_external_token(instance["id"])
 
     return router
 
