@@ -120,6 +120,7 @@ export default function WidgetShell({
   instanceBaseUrl,
   actions,
   menuItems = [],
+  controlled = false,
 }: {
   widget: AutomationWidget;
   /** Origin label. Omit when only one instance is registered — a chip that
@@ -130,6 +131,10 @@ export default function WidgetShell({
   actions?: React.ReactNode;
   /** Extra entries for the ⋯ menu, appended after OPEN IN N8N. */
   menuItems?: { label: string; run: () => void }[];
+  /** The user has taken control of this widget's grid layout (dragged or
+   * resized it). Renders a `▣` marker on the freshness line rather than
+   * duplicating that line per caller — see AutomationWidgets.tsx. */
+  controlled?: boolean;
 }) {
   const age = ageOf(widget.last_seen_at);
   const cadence = cadenceOf(widget.expected_interval_seconds);
@@ -143,6 +148,13 @@ export default function WidgetShell({
     ...menuItems,
   ];
 
+  const controlMarker = controlled ? (
+    <>
+      <span aria-hidden="true">{"▣ "}</span>
+      <span className="sr-only">Under your control — </span>
+    </>
+  ) : null;
+
   return (
     <Panel
       label={widget.title || widget.slug}
@@ -150,7 +162,12 @@ export default function WidgetShell({
       // the label along with the data would make the warning itself harder to
       // read, which is backwards: the whole point of this state is that the
       // stale data stays visible and clearly marked as stale.
-      className={stale ? "[&_.eyebrow]:text-warn" : undefined}
+      //
+      // `h-full` so the panel fills its grid cell in AutomationWidgets' grid
+      // (a widget spanning 2 rows should not leave its own background short
+      // of the cell it was given). Harmless outside a grid — WidgetShell has
+      // exactly one caller.
+      className={`h-full${stale ? " [&_.eyebrow]:text-warn" : ""}`}
       headerRight={
         <div className="flex items-center gap-2">
           {/* Provenance. Native panels get no AUTO tag and no freshness line —
@@ -181,6 +198,7 @@ export default function WidgetShell({
             </button>
           )}
           <p className="font-mono text-meta text-ink-faint">
+            {controlMarker}
             {age ? `installed ${age}` : "installed"} · workflow may not be active
           </p>
         </div>
@@ -192,6 +210,7 @@ export default function WidgetShell({
           <p
             className={`mt-3 font-mono text-meta ${stale ? "text-warn" : "text-ink-faint"}`}
           >
+            {controlMarker}
             {stale
               ? [age ? `last push ${age}` : "last push unknown", cadence]
                   .filter(Boolean)

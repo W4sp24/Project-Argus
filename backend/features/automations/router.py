@@ -1376,6 +1376,23 @@ def build_automations_router(
         finally:
             conn.close()
 
+    @router.post("/automations/widgets/layout/reset", response_model=RefreshResult)
+    def reset_widget_layout() -> RefreshResult:
+        """Hand every widget back to auto-placement.
+
+        Registered *before* the `{slug}` routes below on purpose: FastAPI
+        matches in declaration order, and `layout` would otherwise be read as
+        a slug. Exists because every layout write implicitly locks the widget
+        it touches — correct, since nobody drags a card by accident, but a
+        mode with no way out is a trap.
+        """
+        conn = db()
+        try:
+            released = store.reset_layout(conn)
+            return RefreshResult(ok=True, count=released, dropped=0)
+        finally:
+            conn.close()
+
     @router.patch("/automations/widgets/{slug}", response_model=WidgetOut)
     def patch_widget(
         slug: str, request: WidgetPatchRequest, instance_id: str | None = None

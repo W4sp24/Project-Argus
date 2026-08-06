@@ -1425,3 +1425,39 @@ def test_routes_are_mounted_on_the_real_app(tmp_path: Path) -> None:
     response = client.get("/api/automations")
     assert response.status_code == 200
     assert response.json()["instance"] is None
+
+
+def test_reset_layout_hands_every_widget_back_to_auto_place(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """Every layout write implicitly locks the widget it touches, which is
+    right — nobody drags a card by accident — but a mode with no way out is a
+    trap. This is the way out, and it is all-or-nothing on purpose."""
+    _seed_widget(settings, "one")
+    _seed_widget(settings, "two")
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    client.patch("/api/automations/widgets/one", json={"grid_cols": 3, "grid_rows": 2})
+    locked = {w["slug"]: w for w in client.get("/api/automations/widgets").json()}
+    assert locked["one"]["layout_locked"] is True
+    assert locked["two"]["layout_locked"] is False
+
+    response = client.post("/api/automations/widgets/layout/reset")
+    assert response.status_code == 200, response.text
+    # Only the one actually under control is reported as released.
+    assert response.json()["count"] == 1
+
+    after = {w["slug"]: w for w in client.get("/api/automations/widgets").json()}
+    assert all(w["layout_locked"] is False for w in after.values())
+    # Sizes go back to the renderers' own defaults rather than freezing
+    # whatever span was last dragged to.
+    assert (after["one"]["grid_cols"], after["one"]["grid_rows"]) == (1, 1)
+
+
+def test_reset_layout_route_is_not_shadowed_by_the_slug_route(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """FastAPI matches in declaration order, so `layout` would be read as a
+    widget slug if this route were registered after PATCH/DELETE /{slug}."""
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    assert client.post("/api/automations/widgets/layout/reset").status_code == 200

@@ -316,6 +316,28 @@ def list_widgets(
     return [_widget_row_to_dict(row) for row in rows]
 
 
+def reset_layout(conn: sqlite3.Connection) -> int:
+    """Hand every widget back to auto-placement. Returns how many were released.
+
+    The counterpart to ``set_widget_flags``' implicit lock. Every write path
+    for layout marks the widget as user-controlled, which is right — you do
+    not drag a card by accident — but it leaves no way back, and a mode you
+    can enter and never leave is a trap. This is the way back, and it is
+    deliberately all-or-nothing: "restore auto-place" is one decision about
+    the dashboard, not a per-widget chore that would take as many clicks to
+    undo as it took to create.
+
+    Sizes return to 1x1 so the renderers' own defaults apply again, rather
+    than freezing whatever span the user last dragged to.
+    """
+    cursor = conn.execute(
+        "UPDATE automation_widgets SET layout_locked = 0, grid_cols = 1, grid_rows = 1 "
+        "WHERE layout_locked = 1"
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
 def set_widget_flags(
     conn: sqlite3.Connection,
     slug: str,

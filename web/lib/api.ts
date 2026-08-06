@@ -1121,6 +1121,13 @@ export interface AutomationWidget {
   pinned: boolean;
   hidden: boolean;
   state: WidgetState;
+  /** Grid span, 1..4. Auto-placed widgets still carry a sensible default —
+   * this is never null, unlike `position`. */
+  grid_cols: number;
+  grid_rows: number;
+  /** Has the user taken control of THIS widget's layout (drag/resize/reorder)?
+   * Per-widget, not global — see AutomationWidgets.tsx's "take control" model. */
+  layout_locked: boolean;
 }
 
 export interface AutomationRefreshResult {
@@ -1195,15 +1202,38 @@ export function runAutomation(workflowId: string, payload: Record<string, unknow
   );
 }
 
-/** Pin/hide/reorder a widget. Any call marks the dashboard layout as user-controlled. */
+/**
+ * Pin/hide/reorder/resize a widget. `instanceId` scopes the slug the same
+ * way `deleteAutomationWidget` does — a bare slug is ambiguous once two
+ * instances push the same one, and the backend has no default to fall back
+ * on for a PATCH the way it does for a DELETE.
+ *
+ * Any call marks that widget's `layout_locked` true server-side — this is
+ * unconditional and per-widget, never global (see AutomationWidgets.tsx's
+ * "take control" model). There is no documented way to clear it back through
+ * this endpoint; see the comment on `restoreAutoPlace` there.
+ */
 export function patchAutomationWidget(
   slug: string,
-  body: { pinned?: boolean; hidden?: boolean; position?: number },
+  instanceId: string,
+  body: { pinned?: boolean; hidden?: boolean; position?: number; grid_cols?: number; grid_rows?: number },
 ) {
   return mutateJSON<AutomationWidget>(
-    `/api/automations/widgets/${encodeURIComponent(slug)}`,
+    `/api/automations/widgets/${encodeURIComponent(slug)}?instance_id=${encodeURIComponent(instanceId)}`,
     body,
     "PATCH",
+  );
+}
+
+/** Hand every widget back to auto-placement.
+ *
+ * One route rather than a patch per widget: every layout write implicitly
+ * locks the widget it touches, so unlocking through that path is impossible
+ * by construction — sending the patch is what re-locks it. */
+export function resetAutomationLayout() {
+  return mutateJSON<AutomationRefreshResult>(
+    "/api/automations/widgets/layout/reset",
+    undefined,
   );
 }
 

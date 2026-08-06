@@ -62,6 +62,7 @@ export default function DashboardPage() {
         <div className="grid gap-4 lg:grid-cols-shell">
           <div className="flex min-w-0 flex-col gap-4">
             <PlannerTimeline />
+            <AutomationWidgets />
             <TasksPanel />
             <IngestPanel />
           </div>
@@ -70,7 +71,6 @@ export default function DashboardPage() {
             {/* Chat moved to the ChatDrawer (TopBar CHAT / ⌘K), shared with /chat. */}
             <BriefingCard />
             <QuickLinks />
-            <AutomationWidgets />
             <TokenUsage />
             <AgentUsage />
             <ActivityFeed />
