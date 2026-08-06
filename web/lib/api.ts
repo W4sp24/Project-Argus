@@ -1395,8 +1395,35 @@ export function useExternalSurface() {
  * The value comes back exactly once — the keyring holds the only copy and
  * there is no read-it-back endpoint — so the caller must show it immediately.
  */
-export function issueExternalToken() {
-  return mutateJSON<ExternalTokenResult>("/api/automations/external/token", undefined);
+export function issueExternalToken(instanceId?: string) {
+  // Scoped when we know which instance: each one carries its own token, so
+  // revoking one never silences the others. The unscoped compat route is
+  // only valid while exactly one instance is registered.
+  const path = instanceId
+    ? `/api/automations/instances/${encodeURIComponent(instanceId)}/external/token`
+    : "/api/automations/external/token";
+  return mutateJSON<ExternalTokenResult>(path, undefined);
+}
+
+/** One `argus`-tagged workflow found on an instance that is not registered yet. */
+export interface DiscoveredWorkflow {
+  id: string;
+  name: string | null;
+  active: boolean;
+  /** "display" | "action" */
+  kind: string;
+  tagged: boolean;
+}
+
+/**
+ * The `argus`-tagged workflows on an instance, before registering it.
+ *
+ * Persists nothing and needs no registration — it exists so the connect
+ * dialog can show what it is about to register before committing. Only
+ * tagged workflows come back: the tag is the consent.
+ */
+export function discoverN8nWorkflows(body: { base_url: string; api_key: string }) {
+  return mutateJSON<DiscoveredWorkflow[]>("/api/automations/instances/discover", body);
 }
 
 /** One row of `automation_events` — the ACTIVITY tab's real feed of pushes,
