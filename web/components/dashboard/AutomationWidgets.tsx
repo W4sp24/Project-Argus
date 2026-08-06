@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import WidgetShell from "@/components/automations/WidgetShell";
@@ -41,6 +42,9 @@ const MIN_SPAN = 1;
 // "sticky" past that point. A known approximation, not a bug: the corner
 // handle always has the cols×rows button as an exact, discrete fallback.
 const ROW_PX = 124;
+/** Dismissal of the zero-state hint. Scoped to this one line, not a general
+ * "hide automations" preference — the AUTO tab is unaffected either way. */
+const HINT_KEY = "argus-automations-hint-dismissed";
 const GAP_PX = 16; // gap-4, matching the dashboard's rhythm elsewhere on the page
 
 function widgetKey(w: Pick<AutomationWidget, "instance_id" | "slug">): string {
@@ -91,6 +95,34 @@ export default function AutomationWidgets() {
   const [liveResize, setLiveResize] = useState<{ key: string; cols: number; rows: number } | null>(
     null,
   );
+  // Read after mount, never during render: localStorage is unavailable on the
+  // server, so branching on it while rendering is a hydration mismatch. Both
+  // flags start false so the server renders nothing and the client decides —
+  // that costs one frame of absence rather than a flash of content that then
+  // disappears for someone who already dismissed it.
+  const [hintReady, setHintReady] = useState(false);
+  const [hintDismissed, setHintDismissed] = useState(false);
+
+  useEffect(() => {
+    try {
+      setHintDismissed(window.localStorage.getItem(HINT_KEY) === "1");
+    } catch {
+      // Private-browsing/embedded contexts throw. Showing the hint is the
+      // safe failure: worst case it reappears, which is recoverable — a
+      // silently hidden entry point is not.
+    }
+    setHintReady(true);
+  }, []);
+
+  function dismissHint() {
+    setHintDismissed(true);
+    try {
+      window.localStorage.setItem(HINT_KEY, "1");
+    } catch {
+      // Best-effort, exactly like ModeProvider's own persistence.
+    }
+  }
+
   useEffect(() => {
     const mq = window.matchMedia(NARROW_BREAKPOINT);
     const update = () => setColumns(mq.matches ? WIDE_COLUMNS : NARROW_COLUMNS);
@@ -282,7 +314,41 @@ export default function AutomationWidgets() {
     }
   }
 
-  if (!widgets || widgets.length === 0) return null;
+  // Nothing pushed yet. The original rule here was to render nothing at all,
+  // on the grounds that an empty panel announcing you have no automations is
+  // worse than the space it costs — which is still true of a *panel*. But
+  // rendering nothing meant the dashboard gave no hint the feature existed,
+  // and a widget can only appear after an n8n instance is registered *and*
+  // the inbound surface is switched on, so the zero state is where most
+  // people will sit. So: one muted line, the same weight as the layout line
+  // it replaces, and dismissible — because for someone who will never run
+  // n8n, a permanent hint is exactly the noise the original rule guarded
+  // against.
+  if (!widgets || widgets.length === 0) {
+    if (!hintReady || hintDismissed) return null;
+    return (
+      <div className="flex items-center gap-2 py-0.5">
+        <p className="min-w-0 font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">
+          automations · no live panels yet
+        </p>
+        <Link
+          href="/automations"
+          className="font-mono text-micro uppercase tracking-[0.14em] text-[var(--ac)] underline underline-offset-2 hover:text-ink-bright"
+        >
+          set one up →
+        </Link>
+        <button
+          type="button"
+          aria-label="Hide the automations hint"
+          title="Hide this — /automations stays in the top bar"
+          onClick={dismissHint}
+          className="ml-auto px-1 font-mono text-micro text-ink-faint hover:text-ink"
+        >
+          ✕
+        </button>
+      </div>
+    );
+  }
 
   async function remove(slug: string, instanceId: string, title: string) {
     // useConfirm resolves null on cancel and "" on a plain confirm.

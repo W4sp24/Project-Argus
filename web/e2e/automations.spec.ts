@@ -281,3 +281,32 @@ test("a widget can be resized, and the new span survives a reload", async ({ pag
   // The pointer affordance exists alongside it — neither is the only way in.
   expect(await page.locator("[class*='cursor-nwse-resize']").count()).toBeGreaterThan(0);
 });
+
+test("with no automations at all, the dashboard still points at the feature", async ({ page }) => {
+  // The zero state is where most people sit: a widget can only appear after an
+  // n8n instance is registered AND the inbound surface is switched on, so
+  // rendering nothing meant the dashboard never hinted the feature existed.
+  // The seeded vault has widgets, so empty is simulated at the network edge
+  // rather than by destroying shared fixture state other specs depend on.
+  await page.route("**/api/automations/widgets*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+  );
+  await page.goto("/dashboard");
+
+  const hint = page.getByText("automations · no live panels yet");
+  await expect(hint).toBeVisible();
+  const setUp = page.getByRole("link", { name: /set one up/i });
+  await expect(setUp).toBeVisible();
+  await expect(setUp).toHaveAttribute("href", "/automations");
+
+  // Dismissible, and it stays dismissed — a permanent hint for someone who
+  // will never run n8n is the noise the old render-nothing rule guarded against.
+  await page.getByRole("button", { name: "Hide the automations hint" }).click();
+  await expect(hint).toBeHidden();
+  await page.reload();
+  await expect(page.getByText("automations · no live panels yet")).toBeHidden();
+
+  // Dismissing the hint must not touch the way in that always exists.
+  // role="tab", set explicitly, so this is not a "button".
+  await expect(page.getByRole("tab", { name: /AUTO/ })).toBeVisible();
+});
