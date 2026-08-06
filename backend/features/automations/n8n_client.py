@@ -113,6 +113,11 @@ class N8nProbeResult:
     detail: str
     latency_ms: int | None
     workflow_count: int | None
+    #: Machine-readable failure class, so a UI can react to *what* went wrong
+    #: without pattern-matching `detail`, which is prose written for a human
+    #: and free to be reworded. "ok" | "auth" | "unreachable" | "timeout" |
+    #: "not_n8n" | "api_disabled" | "error".
+    reason: str = "ok"
 
 
 # --- url helpers ------------------------------------------------------------
@@ -463,6 +468,7 @@ async def _do_probe(
                 detail=f"connection refused — check the URL and that n8n is running ({exc})",
                 latency_ms=None,
                 workflow_count=None,
+                reason="unreachable",
             )
         except httpx.TimeoutException as exc:
             return N8nProbeResult(
@@ -470,10 +476,15 @@ async def _do_probe(
                 detail=f"timed out waiting for n8n to respond ({exc})",
                 latency_ms=None,
                 workflow_count=None,
+                reason="timeout",
             )
         except httpx.HTTPError as exc:
             return N8nProbeResult(
-                ok=False, detail=f"could not reach n8n: {exc}", latency_ms=None, workflow_count=None
+                ok=False,
+                detail=f"could not reach n8n: {exc}",
+                latency_ms=None,
+                workflow_count=None,
+                reason="unreachable",
             )
 
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -485,6 +496,7 @@ async def _do_probe(
             detail="n8n rejected the API key — check it and try again",
             latency_ms=latency_ms,
             workflow_count=None,
+            reason="auth",
         )
 
     if response.status_code == 404:
@@ -497,6 +509,7 @@ async def _do_probe(
                 detail="that URL doesn't look like an n8n instance (got an HTML page, not JSON)",
                 latency_ms=latency_ms,
                 workflow_count=None,
+                reason="not_n8n",
             )
         # A JSON 404 means something answered as n8n but the route is
         # missing — the most plausible cause is n8n's Public API being
@@ -509,6 +522,7 @@ async def _do_probe(
             ),
             latency_ms=latency_ms,
             workflow_count=None,
+            reason="api_disabled",
         )
 
     if response.status_code >= 400:
@@ -517,6 +531,7 @@ async def _do_probe(
             detail=f"n8n returned {response.status_code}: {_error_detail(response)}",
             latency_ms=latency_ms,
             workflow_count=None,
+            reason="error",
         )
 
     if "json" not in content_type:
@@ -561,8 +576,13 @@ async def probe(
             ),
             latency_ms=None,
             workflow_count=None,
+            reason="timeout",
         )
     except Exception as exc:  # noqa: BLE001 - the user sees the reason, not a 500
         return N8nProbeResult(
-            ok=False, detail=f"{type(exc).__name__}: {exc}", latency_ms=None, workflow_count=None
+            ok=False,
+            detail=f"{type(exc).__name__}: {exc}",
+            latency_ms=None,
+            workflow_count=None,
+            reason="error",
         )

@@ -192,6 +192,9 @@ export default function ConnectN8nDialog({
     } catch (err) {
       setResult({
         ok: false,
+        // The request never reached the probe route, so this is Argus's own
+        // backend being unreachable, not n8n's.
+        reason: "error",
         detail: err instanceof Error ? err.message : "the test could not run",
         latency_ms: null,
         workflow_count: null,
@@ -423,7 +426,13 @@ export default function ConnectN8nDialog({
                     result.ok ? "text-ok" : "text-danger"
                   }`}
                 >
-                  {result.ok ? "✓ connected" : "✕ could not connect"}
+                  {result.ok
+                    ? "✓ connected"
+                    : result.reason === "auth"
+                      ? "✕ reached n8n, key rejected"
+                      : result.reason === "api_disabled"
+                        ? "✕ reached n8n, public api off"
+                        : "✕ could not connect"}
                 </p>
                 <p className="mt-1 text-label leading-relaxed text-ink-muted">
                   {result.ok
@@ -435,10 +444,20 @@ export default function ConnectN8nDialog({
                         .join(" · ")
                     : result.detail}
                 </p>
-                {!result.ok && (
+                {/* Only suggest a URL fix when the URL is actually suspect.
+                    On an auth failure the URL is *proven* good — n8n answered
+                    — and telling someone to change it sends them to debug the
+                    one part that already works. */}
+                {!result.ok && result.reason === "unreachable" && (
                   <p className="mt-1 font-mono text-micro leading-relaxed text-ink-faint">
-                    Running n8n on this machine? Try 127.0.0.1 rather than localhost — n8n often
-                    binds IPv6 loopback only, and the two do not always resolve to each other.
+                    Nothing answered on that address. Check n8n is running, and if it is on this
+                    machine try 127.0.0.1 — localhost can resolve to IPv6 only.
+                  </p>
+                )}
+                {!result.ok && result.reason === "auth" && (
+                  <p className="mt-1 font-mono text-micro leading-relaxed text-ink-faint">
+                    The URL is fine — n8n answered. Create a fresh key in n8n → Settings → n8n
+                    API; keys stop working if they are revoked or the instance was reset.
                   </p>
                 )}
               </div>

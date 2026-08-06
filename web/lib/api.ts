@@ -1038,6 +1038,11 @@ export interface N8nProbeResult {
   detail: string;
   latency_ms: number | null;
   workflow_count: number | null;
+  /** Failure class, so the dialog can tell "wrong key" from "wrong URL"
+   * without pattern-matching `detail`, which is prose free to be reworded:
+   * "ok" | "auth" | "unreachable" | "timeout" | "not_n8n" | "api_disabled"
+   * | "error". */
+  reason: string;
 }
 
 /** One parsed Form Trigger field — `dataclasses.asdict(FormField)` on the wire. */

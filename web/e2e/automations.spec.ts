@@ -380,3 +380,31 @@ test("a passing connection test reports the tagged workflow count", async ({ pag
   await expect(page.getByText("✓ connected")).toBeVisible();
   await expect(page.getByText(/3 workflows tagged argus/)).toBeVisible();
 });
+
+test("a rejected key blames the key, not the url", async ({ page }) => {
+  // The URL is *proven* good when n8n answers 401 — it answered. Suggesting
+  // a different URL there sends the user to debug the one part that works.
+  await page.route("**/api/automations/instance/test", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: false,
+        reason: "auth",
+        detail: "n8n rejected the API key — check it and try again",
+        latency_ms: 9,
+        workflow_count: null,
+      }),
+    }),
+  );
+  await page.goto("/automations");
+  await page.getByRole("button", { name: /ADD INSTANCE/i }).click();
+  await page.getByLabel(/n8n base url/i).fill("http://localhost:5678");
+  await page.getByLabel(/api key/i).fill("stale-key");
+  await page.getByRole("button", { name: /TEST CONNECTION/i }).click();
+
+  await expect(page.getByText("✕ reached n8n, key rejected")).toBeVisible();
+  await expect(page.getByText(/The URL is fine — n8n answered/)).toBeVisible();
+  // And it must NOT tell them to change the URL.
+  await expect(page.getByText(/try 127\.0\.0\.1/)).toHaveCount(0);
+});

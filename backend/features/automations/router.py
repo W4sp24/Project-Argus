@@ -129,11 +129,15 @@ class ProbeResultOut(BaseModel):
     detail: str
     latency_ms: int | None = None
     workflow_count: int | None = None
+    #: Failure class, so the dialog can tell "wrong key" from "wrong URL"
+    #: without pattern-matching prose. See N8nProbeResult.reason.
+    reason: str = "ok"
 
     @classmethod
     def from_result(cls, result: N8nProbeResult) -> ProbeResultOut:
         return cls(
             ok=result.ok,
+            reason=result.reason,
             detail=result.detail,
             latency_ms=result.latency_ms,
             workflow_count=result.workflow_count,
