@@ -310,3 +310,26 @@ test("with no automations at all, the dashboard still points at the feature", as
   // role="tab", set explicitly, so this is not a "button".
   await expect(page.getByRole("tab", { name: /AUTO/ })).toBeVisible();
 });
+
+test("the connect dialog says what it is waiting for instead of a dead button", async ({ page }) => {
+  // A probe persists nothing, so it needs only a URL and a key. Gating it on
+  // the instance name too made TEST CONNECTION disabled while both fields
+  // that matter were filled — a button that does nothing and never says why,
+  // which is indistinguishable from a broken one.
+  await page.goto("/automations");
+  await page.getByRole("button", { name: /ADD INSTANCE/i }).click();
+
+  const primary = page.getByRole("button", { name: /TEST CONNECTION/i });
+  await expect(primary).toBeDisabled();
+  await expect(page.getByText("enter the n8n base url")).toBeVisible();
+
+  await page.getByLabel(/n8n base url/i).fill("localhost:5678");
+  await expect(page.getByText(/must start with http/i)).toBeVisible();
+
+  await page.getByLabel(/n8n base url/i).fill("http://127.0.0.1:5678");
+  await expect(page.getByText("paste an n8n api key")).toBeVisible();
+
+  // URL + key alone is enough to test. No instance name required.
+  await page.getByLabel(/api key/i).fill("some-key");
+  await expect(primary).toBeEnabled();
+});

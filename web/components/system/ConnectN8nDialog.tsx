@@ -108,9 +108,36 @@ export default function ConnectN8nDialog({
     setFurthest((f) => Math.max(f, next));
   }
 
-  const canTest =
-    baseUrl.trim().startsWith("http") && apiKey.trim().length > 0 && name.trim().length > 0;
+  // A probe persists nothing, so it needs only somewhere to call and
+  // something to call with. The name is what the *registration* needs, and
+  // gating the test on it made the button dead while the two fields that
+  // actually matter were filled in — with nothing on screen saying why.
+  const canTest = baseUrl.trim().startsWith("http") && apiKey.trim().length > 0;
   const probed = result?.ok === true;
+
+  /** Why the primary button is unavailable, or null when it is available.
+   * A disabled control that does not say what it is waiting for is
+   * indistinguishable from a broken one. */
+  function blockedReason(): string | null {
+    if (testing) return "testing…";
+    if (current === 0) {
+      if (!baseUrl.trim()) return "enter the n8n base url";
+      if (!baseUrl.trim().startsWith("http")) return "the base url must start with http:// or https://";
+      if (!apiKey.trim()) return "paste an n8n api key";
+      // Only once the probe has passed, because the name gates *continuing*,
+      // not testing — and this is the step the name field is on, so asking
+      // for it later would strand the user with nowhere to type it.
+      if (probed && !name.trim()) return "name this instance to continue";
+      return null;
+    }
+    if (current === 1) {
+      if (busy) return "registering…";
+      if (!probed) return "go back and run the connection test";
+      if (!name.trim()) return "go back and name this instance";
+      return null;
+    }
+    return null;
+  }
 
   /**
    * The four TEST lines, derived from one probe rather than four requests.
@@ -264,10 +291,8 @@ export default function ConnectN8nDialog({
           ? "DISCOVER →"
           : "DONE";
 
-  const primaryDisabled =
-    (current === 0 && !canTest) ||
-    (current === 1 && (!probed || busy)) ||
-    testing;
+  const blocked = blockedReason();
+  const primaryDisabled = blocked !== null;
 
   return (
     <Dialog
@@ -594,12 +619,18 @@ export default function ConnectN8nDialog({
               ← BACK
             </Button>
           )}
+          {blocked && (
+            <p className="min-w-0 font-mono text-micro text-ink-faint" role="status">
+              {blocked}
+            </p>
+          )}
           <Button
             size="sm"
             variant="primary"
             type="submit"
             className="ml-auto"
             disabled={primaryDisabled}
+            title={blocked ?? undefined}
           >
             {primaryLabel}
           </Button>
