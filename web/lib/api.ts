@@ -1019,10 +1019,17 @@ export function deleteQuickLink(id: number) {
 
 /** The single registered n8n instance. Never carries its API key (I4). */
 export interface AutomationInstance {
+  id: string;
   name: string;
+  /** "LOCAL" | "REMOTE" — where the instance runs, not how it is reached. */
+  kind: string;
   base_url: string;
   has_key: boolean;
   key_state: KeyState;
+  /** Live reachability, re-probed per instance on every list call. A false
+   * here is a normal degraded state, not an error: cached widgets and cards
+   * keep rendering regardless. */
+  connected: boolean;
 }
 
 /** Mirrors N8nProbeResult — what the "Test connection" step renders. */
@@ -1100,6 +1107,9 @@ export type WidgetState = "live" | "stale" | "empty" | "waiting";
 
 export interface AutomationWidget {
   slug: string;
+  /** Which n8n instance pushed this. The same slug on two instances is two
+   * widgets, not one, so this is part of the widget's identity — not a label. */
+  instance_id: string;
   title: string | null;
   /** "metric" | "list" | "table" | "timeline" | "text" | "chart" */
   kind: string;
@@ -1149,6 +1159,12 @@ export function useAutomationRuns(workflowId?: string, limit?: number) {
 /** Dashboard widgets pushed by workflows, with computed state. GET /api/automations/widgets. */
 export function useAutomationWidgets() {
   return useSWR<AutomationWidget[]>("/api/automations/widgets", fetcher);
+}
+
+/** Every registered n8n instance, each re-probed for reachability.
+ * GET /api/automations/instances. */
+export function useAutomationInstances() {
+  return useSWR<AutomationInstance[]>("/api/automations/instances", fetcher);
 }
 
 /** Probe an n8n instance without saving anything — the TEST CONNECTION step. */
@@ -1254,9 +1270,12 @@ export function issueExternalToken() {
 }
 
 /** Remove a widget from the dashboard. */
-export function deleteAutomationWidget(slug: string) {
+export function deleteAutomationWidget(slug: string, instanceId?: string) {
+  // A bare slug is ambiguous once two instances push the same one — the
+  // backend 409s rather than guessing, so scope it whenever we know.
+  const qs = instanceId ? `?instance_id=${encodeURIComponent(instanceId)}` : "";
   return mutateJSON<ConnectResult>(
-    `/api/automations/widgets/${encodeURIComponent(slug)}`,
+    `/api/automations/widgets/${encodeURIComponent(slug)}${qs}`,
     undefined,
     "DELETE",
   );
