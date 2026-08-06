@@ -226,3 +226,42 @@ def test_events_are_filtered_to_the_requested_day(conn) -> None:
     )
     events, _ = sources.calendar_events(conn, DAY, now=_clock(NOW))
     assert [e.title for e in events] == ["Today"]
+
+
+# --- provenance (F7) --------------------------------------------------------
+
+
+def test_answered_by_reports_the_same_path_the_data_came_from(conn) -> None:
+    """The dashboard's VIA N8N marker must agree with whichever path actually
+    supplied the data. Deriving it separately in the frontend would be a
+    second copy of this decision, free to drift from the real one."""
+    assert sources.answered_by(conn, sources.CALENDAR_SLUG, now=_clock(NOW)) == "connector"
+
+    store.upsert_widget(
+        conn,
+        sources.CALENDAR_SLUG,
+        "timeline",
+        {"entries": [{"time": "09:00", "text": "Lecture"}]},
+        expected_interval_seconds=900,
+        now=_clock(NOW),
+    )
+    assert sources.answered_by(conn, sources.CALENDAR_SLUG, now=_clock(NOW)) == "n8n"
+
+
+def test_answered_by_says_connector_once_the_widget_goes_stale(conn) -> None:
+    """A stale n8n source must never quietly claim credit for data the
+    connector actually supplied — the marker follows the same freshness
+    ceiling the data path uses."""
+    store.upsert_widget(
+        conn,
+        sources.TASKS_SLUG,
+        "list",
+        {"items": [{"text": "ship it"}]},
+        expected_interval_seconds=900,
+        now=_clock(NOW),
+    )
+    assert sources.answered_by(conn, sources.TASKS_SLUG, now=_clock(NOW)) == "n8n"
+    assert (
+        sources.answered_by(conn, sources.TASKS_SLUG, now=_clock(NOW + timedelta(hours=6)))
+        == "connector"
+    )

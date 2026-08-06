@@ -45,7 +45,7 @@ from backend.agent.credentials import (
 )
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.features.automations import catalog, store
+from backend.features.automations import catalog, sources, store
 from backend.features.automations.n8n_client import (
     N8nClient,
     N8nError,
@@ -189,6 +189,13 @@ class RunOut(BaseModel):
     message: str | None = None
     execution_id: str | None = None
     payload: Any | None = None
+
+
+class SourceProvenance(BaseModel):
+    """Which path is answering for each migratable source: "n8n" | "connector"."""
+
+    calendar: str
+    tasks: str
 
 
 class EventOut(BaseModel):
@@ -1308,6 +1315,25 @@ def build_automations_router(
             updated = store.get_run(conn, run_id)
             assert updated is not None  # just written above
             return RunOut(**updated)
+        finally:
+            conn.close()
+
+    @router.get("/automations/sources", response_model=SourceProvenance)
+    def source_provenance() -> SourceProvenance:
+        """Which path is currently answering for calendar and tasks.
+
+        Read-only provenance for the dashboard's `VIA N8N` markers. Answered
+        by ``sources.answered_by``, i.e. by the same freshness rule the data
+        path itself uses — deriving it in the frontend from widget state
+        would be a second copy of that decision, free to drift from the one
+        that actually picks the data.
+        """
+        conn = db()
+        try:
+            return SourceProvenance(
+                calendar=sources.answered_by(conn, sources.CALENDAR_SLUG, now=now),
+                tasks=sources.answered_by(conn, sources.TASKS_SLUG, now=now),
+            )
         finally:
             conn.close()
 

@@ -7,7 +7,7 @@ import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
-import { apiFetch, fetcher, mutateJSON } from "@/lib/api";
+import { apiFetch, fetcher, mutateJSON, useSourceProvenance } from "@/lib/api";
 import { parseQuickAdd } from "@/lib/taskQuickAdd";
 
 interface AgendaTask {
@@ -77,6 +77,7 @@ function DueBadge({ task, today }: { task: AgendaTask; today: string }) {
  */
 export default function TasksPanel() {
   const { data: agenda, mutate } = useSWR<Agenda>("/api/agenda", fetcher);
+  const { data: provenance } = useSourceProvenance();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [quickAdd, setQuickAdd] = useState("");
@@ -209,7 +210,16 @@ export default function TasksPanel() {
     <Panel
       label="TASKS.DUE"
       headerRight={
-        agenda?.configured.todoist ? (
+        // See PlannerTimeline: once a workflow supplies the tasks, naming the
+        // connector would credit something that is no longer answering.
+        provenance?.tasks === "n8n" ? (
+          <span
+            className="font-mono text-meta uppercase tracking-wide text-ok"
+            title="Supplied by an n8n workflow pushing the tasks widget, not the built-in connector"
+          >
+            TODOIST: VIA N8N
+          </span>
+        ) : agenda?.configured.todoist ? (
           <span className="font-mono text-meta uppercase tracking-wide text-ok">TODOIST: WIRED</span>
         ) : (
           <Link

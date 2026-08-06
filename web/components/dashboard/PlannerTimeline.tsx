@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import Panel from "@/components/Panel";
-import { apiFetch, fetcher } from "@/lib/api";
+import { apiFetch, fetcher, useSourceProvenance } from "@/lib/api";
 
 interface CalendarEvent {
   title: string;
@@ -85,6 +85,7 @@ function durationLabel(start: string, end: string): string {
  */
 export default function PlannerTimeline() {
   const { data: agenda } = useSWR<Agenda>("/api/agenda", fetcher);
+  const { data: provenance } = useSourceProvenance();
   const { data: suggestions, mutate: mutateReview } = useSWR<Suggestion[]>("/api/review", fetcher);
   const [busy, setBusy] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, string>>({});
@@ -160,7 +161,18 @@ export default function PlannerTimeline() {
     <Panel
       label="PLANNER.TIMELINE"
       headerRight={
-        gcalConfigured ? (
+        // Provenance beats configuration once a workflow is supplying the
+        // data: with the calendar coming over n8n, "GCAL: WIRED" would name
+        // a connector that is no longer answering. The backend decides which
+        // path wins; this only reports it.
+        provenance?.calendar === "n8n" ? (
+          <span
+            className="font-mono text-meta uppercase tracking-wide text-ok"
+            title="Supplied by an n8n workflow pushing the calendar widget, not the built-in connector"
+          >
+            GCAL: VIA N8N
+          </span>
+        ) : gcalConfigured ? (
           <span className="font-mono text-meta uppercase tracking-wide text-ok">GCAL: WIRED</span>
         ) : (
           <Link

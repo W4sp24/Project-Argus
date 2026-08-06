@@ -1426,6 +1426,25 @@ export function discoverN8nWorkflows(body: { base_url: string; api_key: string }
   return mutateJSON<DiscoveredWorkflow[]>("/api/automations/instances/discover", body);
 }
 
+/** Which path is currently answering for each migratable source. */
+export interface SourceProvenance {
+  /** "n8n" | "connector" */
+  calendar: string;
+  tasks: string;
+}
+
+/**
+ * Provenance for the dashboard's `VIA N8N` markers.
+ *
+ * Read from the backend rather than inferred from widget state here: the
+ * server already applies a freshness rule to decide which path supplies the
+ * data, and re-deriving that in the client would be a second copy of the
+ * decision, free to drift from the one that actually picks it.
+ */
+export function useSourceProvenance() {
+  return useSWR<SourceProvenance>("/api/automations/sources", fetcher);
+}
+
 /** One row of `automation_events` — the ACTIVITY tab's real feed of pushes,
  * runs, installs, and captures, not only runs. */
 export interface AutomationEvent {

@@ -139,6 +139,28 @@ def open_tasks(
     return todoist.list_tasks_safe()
 
 
+def answered_by(
+    conn: sqlite3.Connection | None, slug: str, *, now: Callable[[], datetime] = _utcnow
+) -> str:
+    """Which path would answer for ``slug`` right now: ``"n8n"`` or ``"connector"``.
+
+    Deliberately a *separate* question rather than a third element on
+    :func:`calendar_events`/:func:`open_tasks`' return tuple. Those keep the
+    connectors' own ``(data, error)`` contract precisely so no consumer
+    learns which side answered — that ignorance is what makes deleting
+    ``backend/connectors/`` a change inside this module and nowhere else.
+    Widening the tuple would spend that property to put a label on a panel.
+
+    So provenance is asked for explicitly, by the one caller that wants to
+    display it, and answered by the same freshness rule the data path uses —
+    not re-derived elsewhere from widget state, which would be a second copy
+    of this decision free to drift from the first.
+    """
+    if conn is None:
+        return "connector"
+    return "n8n" if _fresh_widget(conn, slug, now=now) is not None else "connector"
+
+
 def _events_from_timeline(widget: dict[str, Any], day: date) -> list[Any] | None:
     """Map a ``timeline`` widget payload onto CalendarEvent objects.
 

@@ -1,6 +1,11 @@
 "use client";
 
-import { useAutomationRuns, useAutomationWidgets, useAutomations } from "@/lib/api";
+import {
+  useAutomationInstances,
+  useAutomationRuns,
+  useAutomationWidgets,
+  useAutomations,
+} from "@/lib/api";
 import { formatRelativeTime } from "@/lib/relativeTime";
 
 /**
@@ -18,18 +23,31 @@ import { formatRelativeTime } from "@/lib/relativeTime";
  */
 export function useAutomationsStatus(): string | null {
   const { data: automations } = useAutomations();
+  const { data: instances } = useAutomationInstances();
   const { data: widgets } = useAutomationWidgets();
   const { data: runs } = useAutomationRuns();
 
-  const registered = automations?.instance != null;
+  // Count instances, not the singular `instance` field. That field degrades to
+  // null past the first registration (it is a compatibility shim), so gating
+  // on it silenced this readout entirely the moment a second instance was
+  // added — i.e. exactly when there is most to keep an eye on.
+  const unreachable = (instances ?? []).filter((entry) => !entry.connected);
+  const registered = (instances?.length ?? 0) > 0;
   if (!registered && !(widgets && widgets.length)) return null;
 
   const segments: string[] = [];
 
   // Reachability first: when n8n is unreachable everything else below is
   // reporting on stale information, and saying so up front stops the rest of
-  // the line from being read as current.
-  if (registered && automations && !automations.connected) {
+  // the line from being read as current. Name the instance when only one of
+  // several is down — "n8n unreachable" would otherwise read as all of them.
+  if (unreachable.length === 1 && (instances?.length ?? 0) > 1) {
+    segments.push(`${unreachable[0].name} unreachable`);
+  } else if (unreachable.length > 0) {
+    segments.push(
+      unreachable.length > 1 ? `${unreachable.length} instances unreachable` : "n8n unreachable",
+    );
+  } else if (registered && automations && !automations.connected) {
     segments.push("n8n unreachable");
   }
 
