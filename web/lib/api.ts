@@ -1360,6 +1360,15 @@ export interface TemplateInstallResult {
   workflow_id: string;
   /** Where the user goes to grant the credential; installing cannot do it. */
   open_in_n8n: string;
+  /**
+   * Whether n8n accepted the activation. `false` is the expected outcome for
+   * any template with a non-empty `requires` — n8n refuses to activate a
+   * workflow whose credentials are not configured yet, and they are granted
+   * after this install, via `open_in_n8n`.
+   */
+  active: boolean;
+  /** n8n's own words for a refused activation, or null when it succeeded. */
+  activation_error: string | null;
 }
 
 export function useAutomationTemplates() {
@@ -1369,6 +1378,22 @@ export function useAutomationTemplates() {
 export function installAutomationTemplate(templateId: string) {
   return mutateJSON<TemplateInstallResult>(
     `/api/automations/templates/${encodeURIComponent(templateId)}/install`,
+    undefined,
+  );
+}
+
+export interface WorkflowActivateResult {
+  workflow_id: string;
+  active: boolean;
+}
+
+/**
+ * Activate a workflow that installed inactive — the other half of the
+ * credential hand-off, once the user has granted it in n8n.
+ */
+export function activateAutomationWorkflow(instanceId: string, workflowId: string) {
+  return mutateJSON<WorkflowActivateResult>(
+    `/api/automations/instances/${encodeURIComponent(instanceId)}/workflows/${encodeURIComponent(workflowId)}/activate`,
     undefined,
   );
 }

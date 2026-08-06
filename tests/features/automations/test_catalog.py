@@ -443,6 +443,10 @@ def test_install_posts_to_n8n_and_returns_workflow_id_and_open_in_n8n_url(
     body = response.json()
     assert body["workflow_id"] == "wf-created-1"
     assert body["open_in_n8n"] == "http://n8n.test/workflow/wf-created-1"
+    # n8n accepted the activation here, so the install is fully done — the
+    # contrast case (a refused activation) is the test below.
+    assert body["active"] is True
+    assert body["activation_error"] is None
 
     # And the install's own refresh pass cached the new workflow, scoped to
     # the instance it was installed into (B3) rather than the '' sentinel.
@@ -692,3 +696,210 @@ def test_install_creates_the_argus_tag_when_the_instance_has_none(
     client = app_with(settings, handler)
     assert client.post("/api/automations/templates/weather/install").status_code == 201
     assert created_tag == {"name": "argus"}
+
+
+# --- activation is best-effort, never fatal ----------------------------------
+#
+# n8n refuses to activate a workflow whose nodes have unconfigured credentials.
+# That is the *normal* state of every template with a non-empty `requires` at
+# the moment it is installed — the credential is granted afterwards, in n8n.
+# Treating it as an install failure made 3 of the 5 shipped templates
+# (google-calendar, todoist, calendar-insert) impossible to install at all,
+# *and* stranded a real workflow in n8n on every attempt.
+
+#: n8n's actual refusal, verbatim from the bug report.
+_CREDENTIAL_REFUSAL = (
+    "Cannot publish workflow: 1 node have configuration issues: "
+    'Node "Get Upcoming Events": - Credential not configured: googleCalendarOAuth2Api'
+)
+
+
+def test_install_survives_n8n_refusing_to_activate_an_unconfigured_credential(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """The reported bug: installing `google-calendar` 502'd.
+
+    The workflow was created and tagged before activation was attempted, so
+    raising stranded it — Argus reported failure, never cached it, and the
+    obvious retry made a second copy in n8n.
+    """
+    _seed_instance(settings, base_url="http://n8n.test")
+    created_name = catalog.load_definition("google-calendar")["name"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v1/workflows":
+            return json_response(
+                200, {"id": "wf-gcal", "name": created_name, "active": False, "tags": []}
+            )
+        if request.method == "POST" and path == "/api/v1/workflows/wf-gcal/activate":
+            return json_response(400, {"message": _CREDENTIAL_REFUSAL})
+        if request.method == "GET" and path == "/api/v1/workflows":
+            return json_response(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "wf-gcal",
+                            "name": created_name,
+                            "active": False,
+                            "tags": [{"name": "argus"}],
+                        }
+                    ]
+                },
+            )
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": [{"id": "tag-argus", "name": "argus"}]})
+        if request.method == "PUT" and path.endswith("/tags"):
+            return json_response(200, [{"id": "tag-argus", "name": "argus"}])
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/templates/google-calendar/install")
+
+    # The install succeeded: the workflow exists in n8n, tagged, and Argus
+    # says so rather than 502ing over a step that was never going to work yet.
+    assert response.status_code == 201
+    body = response.json()
+    assert body["workflow_id"] == "wf-gcal"
+    assert body["active"] is False
+    # n8n's own words, which name the credential type the user has to grant.
+    assert "Credential not configured" in body["activation_error"]
+    assert body["open_in_n8n"] == "http://n8n.test/workflow/wf-gcal"
+
+    conn = _conn(settings)
+    try:
+        cached = {row["id"]: row for row in store.list_workflows(conn)}
+        events = store.list_events(conn)
+    finally:
+        conn.close()
+
+    # Cached despite the refusal — this is what stops a retry making a second
+    # copy, since the gallery can now see the template as installed.
+    assert "wf-gcal" in cached
+    assert cached["wf-gcal"]["active"] is False
+
+    # And the activity feed records the install *and* why it is not live,
+    # rather than silently swallowing half of what happened.
+    install_events = [e for e in events if e["tag"] == "INSTALL"]
+    assert len(install_events) == 1
+    assert "not active" in install_events[0]["text"]
+    assert "Credential not configured" in install_events[0]["text"]
+
+
+def test_install_still_502s_when_the_create_itself_fails(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """Activation being non-fatal must not make *creation* non-fatal.
+
+    A failed create means nothing exists in n8n, so there is no orphan to
+    protect and nothing to report as installed — 502 is still correct.
+    """
+    _seed_instance(settings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v1/workflows":
+            return json_response(400, {"message": "request/body/nodes is invalid"})
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/templates/weather/install")
+
+    assert response.status_code == 502
+    assert "could not install template" in response.json()["detail"]
+
+    conn = _conn(settings)
+    try:
+        assert store.list_workflows(conn) == []
+    finally:
+        conn.close()
+
+
+# --- POST .../workflows/{id}/activate ----------------------------------------
+
+
+def test_activate_flips_the_cached_active_flag(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """The other half of the hand-off: the user granted the credential in n8n,
+    and this is what makes the workflow live without leaving Argus."""
+    instance = _seed_instance(settings, base_url="http://n8n.test")
+    _seed_cached_workflow(settings, workflow_id="wf-gcal", name="Upcoming Events")
+
+    activated: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v1/workflows/wf-gcal/activate":
+            activated.append(path)
+            return json_response(200, {"id": "wf-gcal", "active": True})
+        if request.method == "GET" and path == "/api/v1/workflows":
+            return json_response(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "wf-gcal",
+                            "name": "Upcoming Events",
+                            "active": True,
+                            "tags": [{"name": "argus"}],
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.post(
+        f"/api/automations/instances/{instance['id']}/workflows/wf-gcal/activate"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"workflow_id": "wf-gcal", "active": True}
+    assert activated == ["/api/v1/workflows/wf-gcal/activate"]
+
+    # The card is rendered off the cache, so without the refresh the button
+    # would appear to do nothing.
+    conn = _conn(settings)
+    try:
+        cached = {row["id"]: row for row in store.list_workflows(conn)}
+    finally:
+        conn.close()
+    assert cached["wf-gcal"]["active"] is True
+
+
+def test_activate_502s_when_the_credential_is_still_missing(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """Unlike install, this one *is* fatal: nothing was created, so there is no
+    orphan to strand, and the refusal names exactly what the user still has to
+    do in n8n."""
+    instance = _seed_instance(settings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path.endswith("/activate"):
+            return json_response(400, {"message": _CREDENTIAL_REFUSAL})
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.post(
+        f"/api/automations/instances/{instance['id']}/workflows/wf-gcal/activate"
+    )
+
+    assert response.status_code == 502
+    assert "Credential not configured" in response.json()["detail"]
+
+
+def test_activate_on_an_unknown_instance_is_404(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/instances/nope/workflows/wf-gcal/activate")
+    assert response.status_code == 404

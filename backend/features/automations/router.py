@@ -394,6 +394,29 @@ class InstallResult(BaseModel):
     #: would mean handing Argus the third-party secret again, which is the
     #: exact thing this whole n8n migration exists to stop.
     open_in_n8n: str
+    #: Whether n8n accepted the activation. `False` is the *expected* outcome
+    #: for any template with a non-empty `requires`: n8n refuses to activate a
+    #: workflow whose nodes have unconfigured credentials, and the credential
+    #: is granted after this install, in n8n, via `open_in_n8n` above.
+    active: bool = False
+    #: n8n's own words for why activation was refused, or `None` when it
+    #: succeeded. Surfaced verbatim rather than reworded — "Credential not
+    #: configured: googleCalendarOAuth2Api" names the exact credential type
+    #: the user has to go and grant, which nothing on the Argus side knows.
+    activation_error: str | None = None
+
+
+class ActivateResult(BaseModel):
+    """The result of activating an already-installed workflow.
+
+    Always ``active=True``: the route raises rather than returning on a refused
+    activation, so there is no false-to-report here. The field exists so the
+    response is self-describing beside :class:`InstallResult` rather than an
+    empty body the caller has to interpret positionally.
+    """
+
+    workflow_id: str
+    active: bool = True
 
 
 # --- small pure helpers -------------------------------------------------
@@ -1590,6 +1613,13 @@ def build_automations_router(
         )
 
         client = factory(instance, api_key)
+        # Only create + tag are fatal. Once the create returns, the workflow
+        # exists on the user's n8n and raising past this point would strand it:
+        # the caller sees a failure, Argus never caches it, and the obvious
+        # response — click INSTALL again — makes a second copy. n8n allows
+        # duplicate names, and `installed` is computed by name, so the copies
+        # are indistinguishable afterwards. Everything below is therefore
+        # best-effort and reported, never thrown.
         try:
             created = await client.create_workflow(definition)
             workflow_id = str(created.get("id"))
@@ -1607,12 +1637,26 @@ def build_automations_router(
             if tag_names:
                 tag_ids = [await client.ensure_tag(name) for name in tag_names]
                 await client.set_workflow_tags(workflow_id, tag_ids)
-
-            await client.activate_workflow(workflow_id)
         except N8nError as exc:
             raise HTTPException(
                 status_code=502, detail=f"could not install template in n8n: {exc}"
             ) from exc
+
+        # n8n refuses to activate a workflow whose nodes have unconfigured
+        # credentials ("Cannot publish workflow: 1 node have configuration
+        # issues"), which is the *normal* state of any template with a
+        # non-empty `requires` at the instant it is installed — the credential
+        # is granted afterwards, in n8n, via the `open_in_n8n` link below. So a
+        # refused activation is an outcome to report, not a failed install.
+        #
+        # Deliberately not narrowed to credential errors by matching n8n's
+        # message: that prose has moved between releases, and any activation
+        # failure leaves exactly the same orphan if it is allowed to raise.
+        activation_error: str | None = None
+        try:
+            await client.activate_workflow(workflow_id)
+        except N8nError as exc:
+            activation_error = str(exc)
 
         install_subject = definition.get("name") if isinstance(definition, dict) else None
         event_conn = db()
@@ -1620,7 +1664,11 @@ def build_automations_router(
             _safe_record_event(
                 event_conn,
                 tag="INSTALL",
-                text=f"installed as workflow {workflow_id}",
+                text=(
+                    f"installed as workflow {workflow_id}"
+                    if activation_error is None
+                    else f"installed as workflow {workflow_id}, not active: {activation_error}"
+                ),
                 instance_id=instance_id,
                 subject=install_subject or template_id,
             )
@@ -1637,7 +1685,12 @@ def build_automations_router(
         await _refresh_instance(instance)
 
         open_in_n8n = f"{instance['base_url'].rstrip('/')}/workflow/{workflow_id}"
-        return InstallResult(workflow_id=workflow_id, open_in_n8n=open_in_n8n)
+        return InstallResult(
+            workflow_id=workflow_id,
+            open_in_n8n=open_in_n8n,
+            active=activation_error is None,
+            activation_error=activation_error,
+        )
 
     @router.post(
         "/automations/instances/{instance_id}/templates/{template_id}/install",
@@ -1656,6 +1709,63 @@ def build_automations_router(
         """Compat shim, valid only while exactly one instance is registered —
         409 otherwise, pointing at the scoped route above. F9 removes this."""
         return await _install_template_core(template_id, _only_instance)
+
+    # --- activating a workflow after its credential is granted ---------------
+
+    async def _activate_workflow_core(
+        workflow_id: str, resolve_instance: Callable[[], dict[str, Any]]
+    ) -> ActivateResult:
+        """The other half of the install hand-off.
+
+        Installing a template that needs a credential leaves it inactive (see
+        ``_install_template_core``); the user then grants the credential in
+        n8n's own UI. This is what closes the loop from Argus's side, so the
+        round trip does not end with "now go and find n8n's Active toggle".
+
+        Unlike install, a failure here is genuinely fatal: nothing was created,
+        so there is no orphan to strand, and the overwhelmingly likely cause —
+        the credential still is not configured — is exactly what the caller
+        needs to be told, in n8n's own words.
+        """
+        instance = resolve_instance()
+        api_key = _resolve_key(instance)
+        client = factory(instance, api_key)
+        try:
+            await client.activate_workflow(workflow_id)
+        except N8nError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"could not activate the workflow in n8n: {exc}"
+            ) from exc
+
+        event_conn = db()
+        try:
+            _safe_record_event(
+                event_conn,
+                tag="INSTALL",
+                text=f"activated workflow {workflow_id}",
+                instance_id=instance["id"],
+                subject=workflow_id,
+            )
+        finally:
+            event_conn.close()
+
+        # The cached row still says active=False until a refresh re-reads it
+        # from n8n, and the card the user just clicked is rendered off that
+        # cache — without this the button appears to do nothing.
+        await _refresh_instance(instance)
+        return ActivateResult(workflow_id=workflow_id, active=True)
+
+    @router.post(
+        "/automations/instances/{instance_id}/workflows/{workflow_id}/activate",
+        response_model=ActivateResult,
+    )
+    async def activate_workflow_scoped(instance_id: str, workflow_id: str) -> ActivateResult:
+        return await _activate_workflow_core(workflow_id, lambda: _resolve_instance(instance_id))
+
+    @router.post("/automations/workflows/{workflow_id}/activate", response_model=ActivateResult)
+    async def activate_workflow(workflow_id: str) -> ActivateResult:
+        """Compat shim mirroring ``install_template`` — one instance only."""
+        return await _activate_workflow_core(workflow_id, _only_instance)
 
     # --- the inbound surface's own credential -------------------------------
     #

@@ -191,13 +191,14 @@ export function KindChip({ kind }: { kind: WidgetKind }) {
 // ---------------------------------------------------------------------------
 // ActionStateBadge
 
-export type ActionState = "ready" | "running" | "failing" | "never-run";
+export type ActionState = "ready" | "running" | "failing" | "never-run" | "inactive";
 
 const ACTION_STATE_STYLE: Record<ActionState, string> = {
   ready: "border-ok text-ok",
   running: "border-warn text-warn",
   failing: "border-danger text-danger",
   "never-run": "border-line text-ink-faint",
+  inactive: "border-warn text-warn",
 };
 
 const ACTION_STATE_LABEL: Record<ActionState, string> = {
@@ -205,6 +206,7 @@ const ACTION_STATE_LABEL: Record<ActionState, string> = {
   running: "RUNNING",
   failing: "FAILING",
   "never-run": "NEVER RUN",
+  inactive: "INACTIVE",
 };
 
 /**

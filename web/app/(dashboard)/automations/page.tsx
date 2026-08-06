@@ -12,6 +12,7 @@ import { useToast } from "@/components/Toast";
 import SegmentedControl from "@/components/ui/SegmentedControl";
 import { useConfirm } from "@/components/ui/useConfirm";
 import {
+  activateAutomationWorkflow,
   runAutomation,
   useAutomationInstances,
   useAutomationWidgets,
@@ -48,6 +49,7 @@ export default function AutomationsPage() {
   const [filterId, setFilterId] = useState<string>("all");
   const [connecting, setConnecting] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [activatingId, setActivatingId] = useState<string | null>(null);
 
   // Memoized so the "reset a stale filter" effect below doesn't see a new
   // array identity (and re-fire) on every render — only when the data itself
@@ -123,6 +125,26 @@ export default function AutomationsPage() {
     }
   }
 
+  /**
+   * The second half of a template install that stopped at the credential
+   * step. n8n refuses to activate a workflow whose credentials are not
+   * configured, so this is expected to fail until the user has granted it
+   * there — the error is n8n's own words, which name the missing credential.
+   */
+  async function activateWorkflow(card: AutomationCard) {
+    if (activatingId) return;
+    setActivatingId(card.id);
+    try {
+      await activateAutomationWorkflow(card.instance_id, card.id);
+      show(`automations :: activated ${(card.name ?? card.id).toLowerCase()}`);
+      refreshAll();
+    } catch (error) {
+      show(error instanceof Error ? error.message : "activation failed", { tone: "error" });
+    } finally {
+      setActivatingId(null);
+    }
+  }
+
   const showInstanceFilter = instances.length > 1;
 
   return (
@@ -192,6 +214,8 @@ export default function AutomationsPage() {
             filterId={filterId}
             runningId={runningId}
             onRun={(card) => void runWorkflow(card)}
+            activatingId={activatingId}
+            onActivate={(card) => void activateWorkflow(card)}
           />
         )}
 

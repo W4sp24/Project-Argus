@@ -21,8 +21,14 @@ import { KindChip } from "./chips";
  * credential. That last step genuinely cannot be automated: OAuth needs a
  * real browser round trip, and doing the equivalent for an API-key type would
  * mean handing Argus the third-party secret again, which is the thing this
- * whole arrangement exists to avoid. The UI therefore treats "installed" as
- * "created and activated", not as "working", and says so.
+ * whole arrangement exists to avoid.
+ *
+ * So "installed" here means *created and tagged*, never "working" — and for
+ * any template with a `requires`, not even "active": n8n refuses to activate a
+ * workflow whose credentials are not configured, which is precisely the state
+ * every such template is in at the moment it lands. The toast below says which
+ * of the two happened rather than claiming success uniformly, and the ACTIVATE
+ * button on the REGISTERED list is what finishes the job afterwards.
  */
 
 function TemplateCard({
@@ -41,7 +47,11 @@ function TemplateCard({
     setError(null);
     try {
       const result = await installAutomationTemplate(template.id);
-      show(`automations :: installed ${template.name}`);
+      show(
+        result.active
+          ? `automations :: installed ${template.name}`
+          : `automations :: installed ${template.name} — grant its credential in n8n, then ACTIVATE`,
+      );
       onInstalled();
       // Send them straight to the credential step — the card cannot do it,
       // and a template sitting in n8n without its credential is the single

@@ -44,7 +44,15 @@ function workflowsUrl(baseUrl: string | undefined): string | null {
   return `${baseUrl.replace(/\/+$/, "")}/home/workflows`;
 }
 
+/**
+ * Inactive outranks every run-derived state, because it is the only one that
+ * says the workflow *cannot* run: n8n's production form/webhook URL 404s while
+ * a workflow is inactive, and a schedule trigger never fires at all. Reading
+ * `last_run` alone (which is all this did before) rendered a freshly-installed
+ * template as READY beside a live RUN button that could only ever fail.
+ */
 function actionStateOf(card: AutomationCard): ActionState {
+  if (!card.active) return "inactive";
   const status = card.last_run?.status;
   if (!status) return "never-run";
   if (status === "failed" || status === "timeout") return "failing";
@@ -59,12 +67,16 @@ export default function RegisteredList({
   filterId,
   runningId,
   onRun,
+  activatingId,
+  onActivate,
 }: {
   widgets: AutomationWidget[];
   workflows: AutomationCard[];
   instances: AutomationInstance[];
   /** "all" or an instance id — see the filter chips beside the tab switcher. */
   filterId: string;
+  activatingId: string | null;
+  onActivate: (card: AutomationCard) => void;
   runningId: string | null;
   onRun: (card: AutomationCard) => void;
 }) {
@@ -163,6 +175,8 @@ export default function RegisteredList({
                   : "this workflow has no runnable trigger"
                 : undefined;
             const lastRun = card.last_run;
+            const inactive = !card.active;
+            const activating = activatingId === card.id;
 
             return (
               <li
@@ -188,9 +202,29 @@ export default function RegisteredList({
                 <OriginChip instanceId={card.instance_id} name={showOrigin ? instance?.name : null} />
                 {card.basic_auth && <AuthChip />}
                 <ActionStateBadge state={actionStateOf(card)} />
-                <Button variant="primary" onClick={() => onRun(card)} disabled={!canRun} title={title}>
-                  {running ? "RUNNING…" : "RUN"}
-                </Button>
+                {inactive ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => onActivate(card)}
+                    disabled={!connected || activating}
+                    title={
+                      connected
+                        ? "n8n will refuse this until the workflow's credential is granted there"
+                        : "n8n is not connected"
+                    }
+                  >
+                    {activating ? "ACTIVATING…" : "ACTIVATE"}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    onClick={() => onRun(card)}
+                    disabled={!canRun}
+                    title={title}
+                  >
+                    {running ? "RUNNING…" : "RUN"}
+                  </Button>
+                )}
               </li>
             );
           })}
