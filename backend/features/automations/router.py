@@ -1593,6 +1593,21 @@ def build_automations_router(
         try:
             created = await client.create_workflow(definition)
             workflow_id = str(created.get("id"))
+
+            # Tags are stripped from the create body because n8n owns them
+            # (400 "request/body/tags is read-only") and applied here instead.
+            # This is not cosmetic: the `argus` tag IS the registration, so a
+            # template installed without it is invisible to Argus — the
+            # install would "succeed" and the workflow would never appear.
+            tag_names = [
+                str(t.get("name"))
+                for t in (definition.get("tags") or [])
+                if isinstance(t, dict) and t.get("name")
+            ]
+            if tag_names:
+                tag_ids = [await client.ensure_tag(name) for name in tag_names]
+                await client.set_workflow_tags(workflow_id, tag_ids)
+
             await client.activate_workflow(workflow_id)
         except N8nError as exc:
             raise HTTPException(

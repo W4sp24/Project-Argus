@@ -427,6 +427,13 @@ def test_install_posts_to_n8n_and_returns_workflow_id_and_open_in_n8n_url(
                     ]
                 },
             )
+        # Install applies the `argus` tag after creation, because n8n
+        # refuses it in the create body (read-only). Handlers that do not
+        # care which tag path is taken just answer generically.
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": [{"id": "tag-argus", "name": "argus"}]})
+        if request.method == "PUT" and path.endswith("/tags"):
+            return json_response(200, [{"id": "tag-argus", "name": "argus"}])
         raise AssertionError(f"unexpected request: {request.method} {path}")
 
     client = app_with(settings, handler)
@@ -467,6 +474,13 @@ def test_install_generates_a_token_when_none_exists_yet(
             return json_response(200, {"id": "wf-1", "active": True})
         if request.method == "GET" and path == "/api/v1/workflows":
             return json_response(200, {"data": []})
+        # Install applies the `argus` tag after creation, because n8n
+        # refuses it in the create body (read-only). Handlers that do not
+        # care which tag path is taken just answer generically.
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": [{"id": "tag-argus", "name": "argus"}]})
+        if request.method == "PUT" and path.endswith("/tags"):
+            return json_response(200, [{"id": "tag-argus", "name": "argus"}])
         raise AssertionError(f"unexpected request: {request.method} {path}")
 
     client = app_with(settings, handler)
@@ -507,6 +521,13 @@ def test_install_bakes_in_the_target_instances_own_token_not_another_instances(
             return json_response(200, {"id": "wf-work-1", "active": True})
         if request.method == "GET" and path == "/api/v1/workflows":
             return json_response(200, {"data": []})
+        # Install applies the `argus` tag after creation, because n8n
+        # refuses it in the create body (read-only). Handlers that do not
+        # care which tag path is taken just answer generically.
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": [{"id": "tag-argus", "name": "argus"}]})
+        if request.method == "PUT" and path.endswith("/tags"):
+            return json_response(200, [{"id": "tag-argus", "name": "argus"}])
         raise AssertionError(f"unexpected request: {request.method} {path}")
 
     client = app_with(settings, handler)
@@ -578,3 +599,96 @@ def test_chips_reach_the_templates_route(settings: Settings) -> None:
 
     assert by_id["weather"]["chips"] == ["metric", "every 30m"]
     assert by_id["mobile-capture"]["chips"] == ["2 fields"]
+
+
+# --- install against n8n's real create contract ------------------------------
+
+
+def test_create_body_omits_tags_and_they_are_applied_afterwards(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """Reproduces a real 400 from a live n8n: `request/body/tags is read-only`.
+
+    n8n rejects the whole create when the body carries a server-owned field,
+    so a template that ships the `argus` tag inline installs nothing at all.
+    Tags cannot simply be dropped either — the tag IS the registration, so a
+    workflow installed without it is invisible to Argus, and the install
+    would "succeed" while the workflow never appeared.
+    """
+    _seed_instance(settings)
+    seen: dict[str, Any] = {"create_keys": None, "tagged": None, "activated": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v1/workflows":
+            body = json.loads(request.content)
+            seen["create_keys"] = sorted(body.keys())
+            # Mirror n8n: refuse outright if a read-only field is present.
+            if "tags" in body:
+                return json_response(400, {"message": "request/body/tags is read-only"})
+            return json_response(200, {"id": "wf-new", "name": body.get("name"), "active": False})
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": [{"id": "tag-1", "name": "argus"}]})
+        if request.method == "PUT" and path == "/api/v1/workflows/wf-new/tags":
+            seen["tagged"] = json.loads(request.content)
+            return json_response(200, [{"id": "tag-1", "name": "argus"}])
+        if request.method == "POST" and path == "/api/v1/workflows/wf-new/activate":
+            seen["activated"] = True
+            return json_response(200, {"id": "wf-new", "active": True})
+        if request.method == "GET" and path == "/api/v1/workflows":
+            return json_response(200, {"data": []})
+        # Install applies the `argus` tag after creation, because n8n
+        # refuses it in the create body (read-only). Handlers that do not
+        # care which tag path is taken just answer generically.
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": [{"id": "tag-argus", "name": "argus"}]})
+        if request.method == "PUT" and path.endswith("/tags"):
+            return json_response(200, [{"id": "tag-argus", "name": "argus"}])
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/templates/weather/install")
+
+    assert response.status_code == 201, response.text
+    assert "tags" not in (seen["create_keys"] or [])
+    # The tag still lands, by the route n8n actually supports.
+    assert seen["tagged"] == [{"id": "tag-1"}]
+    assert seen["activated"] is True
+
+
+def test_install_creates_the_argus_tag_when_the_instance_has_none(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """A fresh n8n has no `argus` tag, and tags are assigned by id — so the
+    first install has to be able to create it."""
+    _seed_instance(settings)
+    created_tag: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v1/workflows":
+            return json_response(200, {"id": "wf-new", "active": False})
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": []})  # nothing defined yet
+        if request.method == "POST" and path == "/api/v1/tags":
+            created_tag.update(json.loads(request.content))
+            return json_response(200, {"id": "tag-new", "name": created_tag.get("name")})
+        if request.method == "PUT" and path == "/api/v1/workflows/wf-new/tags":
+            assert json.loads(request.content) == [{"id": "tag-new"}]
+            return json_response(200, [])
+        if request.method == "POST" and path == "/api/v1/workflows/wf-new/activate":
+            return json_response(200, {"id": "wf-new", "active": True})
+        if request.method == "GET" and path == "/api/v1/workflows":
+            return json_response(200, {"data": []})
+        # Install applies the `argus` tag after creation, because n8n
+        # refuses it in the create body (read-only). Handlers that do not
+        # care which tag path is taken just answer generically.
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": [{"id": "tag-argus", "name": "argus"}]})
+        if request.method == "PUT" and path.endswith("/tags"):
+            return json_response(200, [{"id": "tag-argus", "name": "argus"}])
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    assert client.post("/api/automations/templates/weather/install").status_code == 201
+    assert created_tag == {"name": "argus"}

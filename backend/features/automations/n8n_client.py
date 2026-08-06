@@ -55,6 +55,15 @@ PROBE_TIMEOUT_SECONDS = 20.0
 #: n8n's public API authenticates with this header, not ``Authorization``.
 API_KEY_HEADER = "X-N8N-API-KEY"
 
+#: Fields n8n's public API owns and refuses to be told on create, answering
+#: ``400 request/body/<field> is read-only`` and installing nothing. Observed
+#: against n8n 1.x with `tags`; the rest are server-owned by the same logic and
+#: are stripped pre-emptively rather than discovered one failed install at a
+#: time. `tags` is re-applied after creation — see `create_workflow`.
+CREATE_READ_ONLY_KEYS = frozenset(
+    {"id", "tags", "active", "createdAt", "updatedAt", "versionId", "shared", "meta", "pinData"}
+)
+
 
 # --- errors -------------------------------------------------------------
 
@@ -305,10 +314,60 @@ class N8nClient:
         return _parse_body(response)
 
     async def create_workflow(self, definition: dict) -> dict:
-        """``POST /workflows``."""
-        response = await self._request("POST", "/workflows", json_body=definition)
+        """``POST /workflows``, minus the fields n8n refuses to be told.
+
+        n8n's public API rejects a create whose body carries a server-owned
+        field, with ``400 request/body/tags is read-only`` — and it rejects
+        the *whole request*, so one stray key means nothing is installed.
+        Tags in particular are unavoidable here: every bundled template
+        carries the ``argus`` tag, because the tag is what makes the workflow
+        visible to Argus at all. They are applied after creation instead, via
+        :meth:`set_workflow_tags`.
+
+        Stripping is deliberately by allow-list-of-refusals rather than
+        "send only name/nodes/connections/settings": a template may legitimately
+        want to set something this list does not know about, and silently
+        dropping it would be worse than n8n telling us.
+        """
+        payload = {k: v for k, v in definition.items() if k not in CREATE_READ_ONLY_KEYS}
+        response = await self._request("POST", "/workflows", json_body=payload)
         _raise_for_status(response)
         return _parse_body(response)
+
+    async def list_tags(self) -> list[dict]:
+        """``GET /tags`` — every tag defined on this instance."""
+        response = await self._request("GET", "/tags")
+        _raise_for_status(response)
+        body = _parse_body(response)
+        data = body.get("data") if isinstance(body, dict) else body
+        return data if isinstance(data, list) else []
+
+    async def create_tag(self, name: str) -> dict:
+        """``POST /tags``."""
+        response = await self._request("POST", "/tags", json_body={"name": name})
+        _raise_for_status(response)
+        return _parse_body(response)
+
+    async def ensure_tag(self, name: str) -> str:
+        """The id of the tag called ``name``, creating it if it does not exist.
+
+        A fresh n8n has no ``argus`` tag, and tags are addressed by id rather
+        than name when assigning them, so installing the first template has to
+        be able to create it.
+        """
+        for tag in await self.list_tags():
+            if isinstance(tag, dict) and tag.get("name") == name and tag.get("id") is not None:
+                return str(tag["id"])
+        return str((await self.create_tag(name)).get("id"))
+
+    async def set_workflow_tags(self, workflow_id: str, tag_ids: list[str]) -> None:
+        """``PUT /workflows/{id}/tags`` — replaces the workflow's tag set."""
+        response = await self._request(
+            "PUT",
+            f"/workflows/{workflow_id}/tags",
+            json_body=[{"id": tag_id} for tag_id in tag_ids],
+        )
+        _raise_for_status(response)
 
     async def activate_workflow(self, workflow_id: str) -> dict:
         """``POST /workflows/{id}/activate``."""

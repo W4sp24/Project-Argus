@@ -1196,6 +1196,12 @@ def test_install_writes_an_install_event(
                     ]
                 },
             )
+        # Install applies the `argus` tag after creation — n8n refuses it
+        # in the create body (read-only).
+        if request.method == "GET" and path == "/api/v1/tags":
+            return json_response(200, {"data": [{"id": "tag-argus", "name": "argus"}]})
+        if request.method == "PUT" and path.endswith("/tags"):
+            return json_response(200, [{"id": "tag-argus", "name": "argus"}])
         raise AssertionError(f"unexpected request: {request.method} {path}")
 
     client = app_with(settings, handler)
