@@ -46,6 +46,7 @@ const config: Config = {
           research: "#e879f9",
           code: "#34d399",
           system: "#fbbf24",
+          automations: "#60a5fa",
         },
       },
       fontFamily: {

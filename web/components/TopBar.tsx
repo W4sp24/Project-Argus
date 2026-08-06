@@ -14,6 +14,11 @@ const TABS: { mode: Mode; label: string; short: string }[] = [
   { mode: "research", label: "RESEARCH", short: "RE" },
   { mode: "code", label: "CODE", short: "CO" },
   { mode: "system", label: "SYSTEM", short: "SY" },
+  // Sixth tab, blue. Automations is a management surface rather than a
+  // content mode, which is why it was left off at first — but the approved
+  // design gives it a tab and an accent of its own, and a feature nobody can
+  // find is a feature that is not shipped.
+  { mode: "automations", label: "AUTO", short: "AU" },
 ];
 
 function pad(n: number): string {
