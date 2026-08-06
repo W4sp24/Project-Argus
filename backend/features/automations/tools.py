@@ -128,14 +128,14 @@ def build_automation_tools(settings: Settings) -> list[ToolSpec]:
                 name=tool_name_for(str(row.get("name") or ""), workflow_id),
                 description=description,
                 parameters=_parameters(parsed),
-                handler=_make_handler(settings, workflow_id),
+                handler=_make_handler(settings, workflow_id, str(row.get("instance_id") or "")),
             )
         )
     return specs
 
 
-def _make_handler(settings: Settings, workflow_id: str):
-    """Bind a run handler to one workflow id.
+def _make_handler(settings: Settings, workflow_id: str, instance_id: str):
+    """Bind a run handler to one workflow id on one instance.
 
     The handler drives the **same HTTP route the RUN button drives**, in
     process, over an ASGI transport. That is deliberate. The alternative was to
@@ -146,6 +146,13 @@ def _make_handler(settings: Settings, workflow_id: str):
     the confirm flag, the widget-payload validation and the run-history rows
     all have to behave identically whether a human pressed a button or the
     agent decided to. One path, one set of rules.
+
+    It drives the **instance-scoped** route. Workflow ids are only unique
+    within an n8n, so the unscoped route has to resolve the id across every
+    registered instance and refuses with a 409 when two of them collide —
+    which would leave the agent unable to run an automation the UI can run
+    perfectly well. The cache row already knows which instance the workflow
+    came from, so there is nothing to resolve.
     """
 
     async def handler(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -163,8 +170,16 @@ def _make_handler(settings: Settings, workflow_id: str):
             async with httpx.AsyncClient(
                 transport=transport, base_url="http://automations.invalid"
             ) as client:
+                # A row that predates instance attribution carries the ''
+                # sentinel and has no instance to scope to; the unscoped
+                # route resolves it exactly as it always did.
+                path = (
+                    f"/api/automations/instances/{instance_id}/workflows/{workflow_id}/run"
+                    if instance_id
+                    else f"/api/automations/{workflow_id}/run"
+                )
                 response = await client.post(
-                    f"/api/automations/{workflow_id}/run",
+                    path,
                     json={"payload": arguments or {}},
                     timeout=None,
                 )

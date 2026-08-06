@@ -1,6 +1,6 @@
 # Automations (n8n)
 
-Argus can discover workflows in your own n8n instance, render them as forms,
+Argus can discover workflows in your own n8n instances, render them as forms,
 fire them, and display what they push back. It works in both directions:
 
 - **Outbound** — Argus calls n8n to find and run workflows.
@@ -18,12 +18,30 @@ its direction for that reason.
 
 ---
 
-## 1. Connect your n8n instance (outbound)
+## 1. Connect your n8n instances (outbound)
 
-System → Integrations → **Connect n8n**.
+System → Integrations → **Connect n8n**, or `/automations` → **+ ADD INSTANCE**.
 
-You need the base URL (e.g. `http://localhost:5678`) and an n8n API key
+You need a name, the base URL (e.g. `http://localhost:5678`) and an n8n API key
 (n8n → Settings → n8n API → Create an API key).
+
+### More than one instance
+
+You can register several — typically a local one for anything that touches the
+vault, and an always-on remote one for schedules that must keep running when
+your laptop is shut. Each instance carries its own API key **and its own
+inbound bearer token**, so revoking one never silences the others.
+
+Everything fed by an automation names its origin: widgets on the dashboard,
+rows in the command palette, entries in the ACTIVE list and lines in the
+ACTIVITY log all carry an instance chip, and `/automations` filters by
+instance. The chip is hidden while only one instance is registered, because a
+label that always reads the same is noise.
+
+**The same workflow name on two instances is two automations, not one.** n8n
+workflow ids are only unique within a single instance, so Argus keys its cache
+and its widgets on `(instance, id)` and `(instance, slug)`. Two instances can
+push `weather.now` and you get two widgets, not a fight over one.
 
 Argus tests the connection before saving anything, and shows you **how many
 workflows it found tagged `argus`** rather than a green tick — the count is the
@@ -206,8 +224,8 @@ that workflow.
 create your Google or Todoist credential: OAuth needs a browser round trip, and
 doing it for API-key types would mean handing Argus the secret again — which is
 the thing this whole arrangement exists to avoid. After migration Argus's
-keyring holds one n8n API key and one bearer token, and no third-party secrets
-at all.
+keyring holds one n8n API key and one bearer token **per registered instance**,
+and no third-party secrets at all.
 
 ---
 
@@ -221,6 +239,8 @@ at all.
 | `WAITING` forever | The workflow was never activated, or its credential was never granted. Open it in n8n. |
 | A panel goes `STALE` | The workflow stopped pushing. Check its executions in n8n. |
 | Push returns 422 | The payload's `widget` kind is unknown or a field is malformed. The message names it. The previous good payload keeps rendering. |
-| Push returns 401 | Wrong or rotated bearer token. Re-issue it and update the n8n credential. |
+| Push returns 401 | Wrong or rotated bearer token. Tokens are per instance — check you pasted the one issued for *that* instance. Re-issue it and update the n8n credential. |
 | Push returns 413 | Body over 256 KB. |
-| Template install returns 409 | `ARGUS_EXTERNAL_BASE_URL` is not set. |
+| Template install returns 409 | `ARGUS_EXTERNAL_BASE_URL` is not set, or you have several instances registered and used the unscoped route — install from the instance's own card. |
+| Run returns 409 "ambiguous" | Two instances have a workflow with the same n8n id. Run it from `/automations`, which knows which instance you meant. |
+| Instances show `UNREACHABLE` but n8n is up | Argus could not read the stored API key. A locked or unavailable OS keyring reports this rather than claiming the key is missing — run `argus doctor`. |

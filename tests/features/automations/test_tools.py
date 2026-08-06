@@ -149,3 +149,71 @@ def test_automation_tools_are_not_on_the_mcp_surface() -> None:
 
     assert not any(name.startswith(tools.TOOL_PREFIX) for name in READ_ONLY_TOOLS)
     assert set(READ_ONLY_TOOLS) == {"search_vault", "read_note", "list_tasks"}
+
+
+# --- the agent runs on the right instance ------------------------------------
+
+
+def test_agent_tool_targets_the_workflows_own_instance(tmp_path: Path, monkeypatch) -> None:
+    """Workflow ids are unique only within one n8n, so two registered
+    instances can hand out the same id. The unscoped route has to resolve
+    across every instance and refuses with a 409 when they collide — which
+    would leave the agent unable to run an automation the UI runs fine. The
+    cache row already knows the instance, so nothing needs resolving.
+    """
+    import asyncio
+
+    settings = Settings(_vault_path=tmp_path / "vault")
+    (tmp_path / "vault").mkdir(parents=True, exist_ok=True)
+
+    conn = connect(settings.db_path)
+    init_schema(conn)
+    # The same n8n workflow id on two different instances.
+    for instance in ("alpha", "bravo"):
+        store.upsert_workflow(
+            conn,
+            "7",
+            name=f"Prep on {instance}",
+            tags=["argus"],
+            schema_json=FORM_WORKFLOW,
+            active=True,
+            instance_id=instance,
+        )
+    conn.close()
+
+    specs = tools.build_automation_tools(settings)
+    assert len(specs) == 2, [spec.name for spec in specs]
+
+    called: list[str] = []
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {"status": "ok"}
+
+    class _Client:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+        async def post(self, path, **kwargs):
+            called.append(path)
+            return _Response()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    asyncio.run(specs[0].handler({}))
+
+    assert called, "the handler never issued a request"
+    # Scoped to an instance, not the ambiguous unscoped route.
+    assert "/instances/" in called[0], called[0]
+    assert called[0].endswith("/workflows/7/run"), called[0]
+    assert any(instance in called[0] for instance in ("alpha", "bravo")), called[0]
