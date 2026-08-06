@@ -138,8 +138,19 @@ CREATE TABLE IF NOT EXISTS quick_links (
 );
 CREATE INDEX IF NOT EXISTS idx_quick_links_sort_order ON quick_links(sort_order);
 
+-- `instance_id` is NOT NULL, defaulted to ''  -- deliberately not nullable.
+-- SQLite permits NULL inside a PRIMARY KEY and never treats two NULLs as
+-- equal for uniqueness purposes, so a nullable instance_id here would mean
+-- this primary key enforces nothing at all: every row written before B3
+-- backfills real instance ids carries the same value, and if that value
+-- were NULL, duplicate slugs could pile up with no constraint noticing.
+-- '' is the explicit "not yet attributed to an instance" sentinel a later
+-- chunk backfills. Keyed on (instance_id, slug), not slug alone -- the
+-- approved multi-instance design is explicit that the same widget slug on
+-- two n8n instances is two automations, not one.
 CREATE TABLE IF NOT EXISTS automation_widgets (
-    slug                       TEXT PRIMARY KEY,
+    slug                       TEXT NOT NULL,
+    instance_id                TEXT NOT NULL DEFAULT '',
     title                      TEXT,
     kind                       TEXT NOT NULL
                                CHECK (kind IN
@@ -150,13 +161,23 @@ CREATE TABLE IF NOT EXISTS automation_widgets (
     created_at                 TEXT NOT NULL,
     position                   INTEGER,
     pinned                     INTEGER NOT NULL DEFAULT 0,
-    hidden                     INTEGER NOT NULL DEFAULT 0
+    hidden                     INTEGER NOT NULL DEFAULT 0,
+    grid_cols                  INTEGER NOT NULL DEFAULT 1 CHECK (grid_cols BETWEEN 1 AND 4),
+    grid_rows                  INTEGER NOT NULL DEFAULT 1 CHECK (grid_rows BETWEEN 1 AND 4),
+    layout_locked              INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (instance_id, slug)
 );
 
+-- instance_id is not part of a key here (run ids are already globally
+-- unique), but it is still NOT NULL DEFAULT '' rather than nullable -- one
+-- representation of "not yet attributed to an instance" across the whole
+-- feature (automation_widgets, automation_workflows, automation_events),
+-- not two.
 CREATE TABLE IF NOT EXISTS automation_runs (
     id            TEXT PRIMARY KEY,
     workflow_id   TEXT NOT NULL,
     workflow_name TEXT,
+    instance_id   TEXT NOT NULL DEFAULT '',
     started_at    TEXT NOT NULL,
     finished_at   TEXT,
     status        TEXT NOT NULL
@@ -181,14 +202,45 @@ CREATE TABLE IF NOT EXISTS automation_prefs (
 -- pre-parsed schema): re-running schema.parse_workflow on it at read time is
 -- cheap and keeps the cache from drifting out of sync with that module's own
 -- parsing rules as they evolve.
+--
+-- Keyed on (instance_id, id), not `id` alone. `id` is n8n's own workflow id,
+-- a small per-instance value on self-hosted installs, so two different n8n
+-- instances can (and, before this table was re-keyed, did) hand out the same
+-- id to unrelated workflows -- see `_migrate_workflow_key` below.
+-- instance_id is NOT NULL DEFAULT '' for the same reason as
+-- automation_widgets above: SQLite never treats two NULLs as equal inside a
+-- PRIMARY KEY, so a nullable instance_id here would mean this key enforces
+-- no uniqueness at all until B3 backfills real ids. '' is the "not yet
+-- attributed to an instance" sentinel.
 CREATE TABLE IF NOT EXISTS automation_workflows (
-    id           TEXT PRIMARY KEY,
+    id           TEXT NOT NULL,
+    instance_id  TEXT NOT NULL DEFAULT '',
     name         TEXT,
     tags         TEXT,
     schema_json  TEXT,
     active       INTEGER NOT NULL DEFAULT 0,
-    last_seen_at TEXT NOT NULL
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY (instance_id, id)
 );
+
+-- The ambient activity log behind the dashboard's status line: one row per
+-- notable thing that happened (a run, a push, a failure, an install, a
+-- capture), independent of the longer-lived `automation_runs`/
+-- `automation_widgets` records those events often relate to. Retention is
+-- enforced in application code (see store.record_event), not here.
+-- instance_id is not part of a key here either, but NOT NULL DEFAULT '' for
+-- the same consistency reason as automation_runs above.
+CREATE TABLE IF NOT EXISTS automation_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    instance_id TEXT NOT NULL DEFAULT '',
+    tag         TEXT NOT NULL CHECK (tag IN ('RUN', 'PUSH', 'FAIL', 'INSTALL', 'CAPTURE')),
+    subject     TEXT,
+    text        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_events_ts ON automation_events(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_events_instance
+    ON automation_events(instance_id, ts DESC);
 """
 
 
@@ -243,6 +295,42 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # Safe only now that the column is guaranteed to exist — see SCHEMA.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cli_usage_agent ON cli_usage(agent, ts)")
     _migrate_scan_key(conn)
+
+    # Multi-instance n8n support (chunk B1): additive columns for databases
+    # that reached automation_widgets/automation_runs/automation_workflows
+    # before instance_id existed. The two PRIMARY KEY rebuilds that also need
+    # these columns present run afterwards, via _migrate_widget_key and
+    # _migrate_workflow_key.
+    widget_columns = {row["name"] for row in conn.execute("PRAGMA table_info(automation_widgets)")}
+    if "instance_id" not in widget_columns:
+        conn.execute(
+            "ALTER TABLE automation_widgets ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''"
+        )
+    if "grid_cols" not in widget_columns:
+        conn.execute(
+            "ALTER TABLE automation_widgets ADD COLUMN grid_cols INTEGER NOT NULL DEFAULT 1"
+        )
+        conn.execute(
+            "ALTER TABLE automation_widgets ADD COLUMN grid_rows INTEGER NOT NULL DEFAULT 1"
+        )
+        conn.execute(
+            "ALTER TABLE automation_widgets ADD COLUMN layout_locked INTEGER NOT NULL DEFAULT 0"
+        )
+    run_columns = {row["name"] for row in conn.execute("PRAGMA table_info(automation_runs)")}
+    if "instance_id" not in run_columns:
+        conn.execute(
+            "ALTER TABLE automation_runs ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''"
+        )
+    workflow_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(automation_workflows)")
+    }
+    if "instance_id" not in workflow_columns:
+        conn.execute(
+            "ALTER TABLE automation_workflows ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''"
+        )
+    _migrate_widget_key(conn)
+    _migrate_workflow_key(conn)
+
     conn.commit()
 
 
@@ -274,5 +362,130 @@ def _migrate_scan_key(conn: sqlite3.Connection) -> None:
             SELECT path, agent, mtime_ns, size, scanned_at FROM cli_usage_files;
         DROP TABLE cli_usage_files;
         ALTER TABLE cli_usage_files_new RENAME TO cli_usage_files;
+        """
+    )
+
+
+def _migrate_widget_key(conn: sqlite3.Connection) -> None:
+    """Re-key ``automation_widgets`` from ``slug`` to ``(instance_id, slug)``.
+
+    Design decision, not a bug fix (contrast with ``_migrate_workflow_key``
+    below): the approved multi-instance plan is explicit that the same
+    widget slug on two n8n instances is two automations, not one, so the
+    primary key must include ``instance_id``.
+
+    SQLite cannot alter a primary key, so this is the documented rebuild:
+    create, copy, drop, rename. Guarded on the *old* shape, so it runs at
+    most once and is a no-op on a database created from the current SCHEMA.
+    Runs after the ``instance_id``/``grid_cols``/``grid_rows``/
+    ``layout_locked`` ALTER guards in ``init_schema``, so every column the
+    copy references is guaranteed to already exist.
+
+    Rows that predate this migration are copied through
+    ``COALESCE(instance_id, '')``: the ALTER guard in ``init_schema`` adds
+    ``instance_id`` as ``NOT NULL DEFAULT ''`` when it is missing, so in
+    practice every existing row already has ``''`` by the time this runs —
+    the ``COALESCE`` is defensive insurance against a stray NULL, not the
+    normal path. ``''`` is the "not yet attributed to an instance" sentinel;
+    a later chunk backfills the real id. A plain ``INSERT`` (not
+    ``INSERT OR REPLACE``) is deliberate: the old table was keyed on
+    ``slug`` alone, so two source rows colliding on ``(instance_id, slug)``
+    should be impossible, and a silent ``OR REPLACE`` would be exactly the
+    wrong way to find out that assumption broke.
+    """
+    keys = [row for row in conn.execute("PRAGMA table_info(automation_widgets)") if row["pk"]]
+    if {row["name"] for row in keys} == {"instance_id", "slug"}:
+        return  # already re-keyed
+
+    conn.executescript(
+        """
+        CREATE TABLE automation_widgets_new (
+            slug                       TEXT NOT NULL,
+            instance_id                TEXT NOT NULL DEFAULT '',
+            title                      TEXT,
+            kind                       TEXT NOT NULL
+                                       CHECK (kind IN
+                                           ('metric', 'list', 'table', 'timeline', 'text',
+                                            'chart')),
+            payload                    TEXT NOT NULL,
+            last_seen_at               TEXT,
+            expected_interval_seconds  INTEGER,
+            created_at                 TEXT NOT NULL,
+            position                   INTEGER,
+            pinned                     INTEGER NOT NULL DEFAULT 0,
+            hidden                     INTEGER NOT NULL DEFAULT 0,
+            grid_cols                  INTEGER NOT NULL DEFAULT 1 CHECK (grid_cols BETWEEN 1 AND 4),
+            grid_rows                  INTEGER NOT NULL DEFAULT 1 CHECK (grid_rows BETWEEN 1 AND 4),
+            layout_locked              INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (instance_id, slug)
+        );
+        INSERT INTO automation_widgets_new
+            (slug, instance_id, title, kind, payload, last_seen_at,
+             expected_interval_seconds, created_at, position, pinned, hidden,
+             grid_cols, grid_rows, layout_locked)
+            SELECT slug, COALESCE(instance_id, ''), title, kind, payload, last_seen_at,
+                   expected_interval_seconds, created_at, position, pinned, hidden,
+                   grid_cols, grid_rows, layout_locked
+            FROM automation_widgets;
+        DROP TABLE automation_widgets;
+        ALTER TABLE automation_widgets_new RENAME TO automation_widgets;
+        """
+    )
+
+
+def _migrate_workflow_key(conn: sqlite3.Connection) -> None:
+    """Re-key ``automation_workflows`` from ``id`` to ``(instance_id, id)``.
+
+    This is a correctness fix, not tidying. ``id`` is n8n's own workflow id,
+    which is a small per-instance value on self-hosted installs, so two
+    different n8n instances can hand out the same id to unrelated workflows.
+    Under the old single-column primary key, ``store.upsert_workflow``'s
+    ``ON CONFLICT(id) DO UPDATE`` treated those as the *same* row: refreshing
+    instance B's workflow cache could silently overwrite instance A's cached
+    row for a same-numbered but unrelated workflow. Re-keying on
+    ``(instance_id, id)`` gives every instance its own id namespace.
+    ``instance_id`` is ``NOT NULL DEFAULT ''`` rather than nullable — SQLite
+    never treats two NULLs as equal inside a PRIMARY KEY, so a nullable
+    column would have made this new key enforce nothing either, right up
+    until B3 backfills real ids. With the sentinel in place,
+    ``store.upsert_workflow``'s ``ON CONFLICT(instance_id, id) DO UPDATE``
+    fires correctly again.
+
+    SQLite cannot alter a primary key, so this is the documented rebuild:
+    create, copy, drop, rename. Guarded on the *old* shape, so it runs at
+    most once and is a no-op on a database created from the current SCHEMA.
+    Runs after the ``instance_id`` ALTER guard in ``init_schema``, so the
+    column the copy references is guaranteed to already exist.
+
+    Rows that predate this migration are copied through
+    ``COALESCE(instance_id, '')`` — defensive insurance against a stray
+    NULL, since the ALTER guard already backfills ``''`` for every existing
+    row. A plain ``INSERT`` (not ``INSERT OR REPLACE``) is deliberate: the
+    old table's sole key was ``id`` (already unique), so no two rows can
+    collide on the way in, and a silent ``OR REPLACE`` would be exactly the
+    wrong way to find out that assumption broke.
+    """
+    keys = [row for row in conn.execute("PRAGMA table_info(automation_workflows)") if row["pk"]]
+    if {row["name"] for row in keys} == {"instance_id", "id"}:
+        return  # already re-keyed
+
+    conn.executescript(
+        """
+        CREATE TABLE automation_workflows_new (
+            id           TEXT NOT NULL,
+            instance_id  TEXT NOT NULL DEFAULT '',
+            name         TEXT,
+            tags         TEXT,
+            schema_json  TEXT,
+            active       INTEGER NOT NULL DEFAULT 0,
+            last_seen_at TEXT NOT NULL,
+            PRIMARY KEY (instance_id, id)
+        );
+        INSERT INTO automation_workflows_new
+            (id, instance_id, name, tags, schema_json, active, last_seen_at)
+            SELECT id, COALESCE(instance_id, ''), name, tags, schema_json, active, last_seen_at
+            FROM automation_workflows;
+        DROP TABLE automation_workflows;
+        ALTER TABLE automation_workflows_new RENAME TO automation_workflows;
         """
     )

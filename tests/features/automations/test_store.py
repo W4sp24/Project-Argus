@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -29,6 +31,106 @@ def _clock(dt: datetime):
 # --- instance registry (JSON) ----------------------------------------------
 
 
+def test_load_instances_missing_file_returns_empty_list(tmp_path: Path) -> None:
+    assert store.load_instances(tmp_path / "automations.json") == []
+
+
+def test_save_then_load_instances_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "automations.json"
+    entries = [
+        {"id": "a1", "kind": "LOCAL", "name": "home", "base_url": "https://n8n.example.com",
+         "key_ref": "n8n:home"},
+        {"id": "b2", "kind": "CLOUD", "name": "work", "base_url": "https://work.n8n.cloud",
+         "key_ref": "n8n:work"},
+    ]
+
+    store.save_instances(path, entries)
+
+    assert store.load_instances(path) == entries
+
+
+def test_save_instances_empty_list_clears_the_registry(tmp_path: Path) -> None:
+    path = tmp_path / "automations.json"
+    store.save_instances(path, [{"id": "a1", "kind": "LOCAL", "name": "home"}])
+    assert store.load_instances(path) != []
+
+    store.save_instances(path, [])
+
+    assert store.load_instances(path) == []
+
+
+def test_key_ref_for_shape() -> None:
+    assert store.key_ref_for("home") == "n8n:home"
+
+
+def test_load_instances_tolerates_corrupt_file(tmp_path: Path) -> None:
+    path = tmp_path / "automations.json"
+    path.write_text("{{{ not json", encoding="utf-8")
+
+    assert store.load_instances(path) == []
+    # Quarantined, so the next save cannot bury what the user registered.
+    assert not path.exists()
+    assert (tmp_path / "automations.json.corrupt").exists()
+
+
+def test_load_instances_rejects_non_dict_entries(tmp_path: Path) -> None:
+    """A list of non-dict junk is treated like "no instances", not a crash."""
+    path = tmp_path / "automations.json"
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert store.load_instances(path) == []
+
+
+def test_load_instances_empty_dict_means_none_registered(tmp_path: Path) -> None:
+    """``{}`` is the legacy "nothing registered" sentinel, not a corrupt/garbage file."""
+    path = tmp_path / "automations.json"
+    path.write_text("{}", encoding="utf-8")
+
+    assert store.load_instances(path) == []
+
+
+def test_load_instances_self_heals_legacy_single_dict(tmp_path: Path) -> None:
+    """A pre-multi-instance file (a single dict) upgrades to a one-element list.
+
+    The upgraded entry gains an ``id`` and a ``kind`` it didn't have before,
+    and the upgrade is written back to disk immediately — not just returned
+    in memory — so every subsequent read sees the list shape too.
+    """
+    path = tmp_path / "automations.json"
+    legacy = {"name": "home", "base_url": "https://n8n.example.com", "key_ref": "n8n:home"}
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    instances = store.load_instances(path)
+
+    assert len(instances) == 1
+    entry = instances[0]
+    assert entry["name"] == "home"
+    assert entry["base_url"] == "https://n8n.example.com"
+    assert isinstance(entry["id"], str) and entry["id"]
+    assert entry["kind"] == "LOCAL"
+
+    # The file on disk was rewritten to the list shape, not left as a dict.
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(on_disk, list)
+    assert on_disk == instances
+
+
+def test_load_instances_self_heal_preserves_existing_key_ref(tmp_path: Path) -> None:
+    """The migrated entry's key_ref is untouched — no orphaned keyring secret."""
+    path = tmp_path / "automations.json"
+    legacy = {"name": "home", "base_url": "https://n8n.example.com", "key_ref": "n8n:home"}
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    entry = store.load_instances(path)[0]
+
+    assert entry["key_ref"] == "n8n:home"
+    assert entry["key_ref"] == store.key_ref_for("home")
+
+
+# --- instance registry: B1 compatibility wrappers ---------------------------
+# router.py is unchanged this chunk and still calls these three functions.
+
+
 def test_load_instance_missing_file_returns_none(tmp_path: Path) -> None:
     assert store.load_instance(tmp_path / "automations.json") is None
 
@@ -50,10 +152,6 @@ def test_delete_instance_clears_the_registry(tmp_path: Path) -> None:
     store.delete_instance(path)
 
     assert store.load_instance(path) is None
-
-
-def test_key_ref_for_shape() -> None:
-    assert store.key_ref_for("home") == "n8n:home"
 
 
 def test_load_instance_tolerates_corrupt_file(tmp_path: Path) -> None:
@@ -415,6 +513,326 @@ def test_expire_stale_runs_marks_only_rows_past_the_ttl(conn) -> None:
     assert by_id["old"]["status"] == "unresolved"
     assert by_id["recent"]["status"] == "running"
     assert by_id["already-finished"]["status"] == "ok"
+
+
+# --- workflow cache: the id-collision fix -----------------------------------
+
+
+def test_upsert_workflow_same_id_different_instances_does_not_collide(conn) -> None:
+    """The bug _migrate_workflow_key/upsert_workflow fixes: n8n's workflow id is
+    a small per-instance value, so two self-hosted instances can legitimately
+    hand out the same id to two unrelated workflows. Before the (instance_id,
+    id) primary key, instance B's upsert overwrote instance A's cached row.
+    """
+    store.upsert_workflow(
+        conn, "5", name="Instance A workflow", tags=["argus"], schema_json=None,
+        active=True, instance_id="instance-a",
+    )
+    store.upsert_workflow(
+        conn, "5", name="Instance B workflow", tags=["argus"], schema_json=None,
+        active=True, instance_id="instance-b",
+    )
+
+    a = store.get_workflow(conn, "5", instance_id="instance-a")
+    b = store.get_workflow(conn, "5", instance_id="instance-b")
+
+    assert a is not None and a["name"] == "Instance A workflow"
+    assert b is not None and b["name"] == "Instance B workflow"
+    assert {row["id"] for row in store.list_workflows(conn)} == {"5"}
+    assert len(store.list_workflows(conn)) == 2
+
+
+def test_upsert_workflow_same_id_same_instance_still_updates_in_place(conn) -> None:
+    """The ordinary refresh case must still be a true upsert, not an insert-forever."""
+    store.upsert_workflow(
+        conn, "5", name="First", tags=[], schema_json=None, active=False,
+        instance_id="instance-a",
+    )
+    store.upsert_workflow(
+        conn, "5", name="Second", tags=[], schema_json=None, active=True,
+        instance_id="instance-a",
+    )
+
+    rows = store.list_workflows(conn, instance_id="instance-a")
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Second"
+    assert rows[0]["active"] is True
+
+
+def test_upsert_workflow_default_sentinel_instance_still_updates_in_place(conn) -> None:
+    """The pre-multi-instance case (instance_id defaults to the "" sentinel for
+    every caller) is still a real upsert too, not an insert-forever — this is
+    exactly the case a nullable instance_id would have broken (see db.SCHEMA):
+    NULL-vs-NULL is never "equal" for uniqueness purposes, but ""-vs-"" is.
+    """
+    store.upsert_workflow(conn, "5", name="First", tags=[], schema_json=None, active=False)
+    store.upsert_workflow(conn, "5", name="Second", tags=[], schema_json=None, active=True)
+
+    rows = store.list_workflows(conn)
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Second"
+    assert rows[0]["instance_id"] == ""
+
+
+def test_workflow_row_includes_instance_id(conn) -> None:
+    row = store.upsert_workflow(
+        conn, "1", name="W", tags=[], schema_json=None, active=True, instance_id="inst-1"
+    )
+    assert row["instance_id"] == "inst-1"
+    assert store.get_workflow(conn, "1", instance_id="inst-1")["instance_id"] == "inst-1"
+
+
+def test_delete_missing_workflows_scoped_to_instance(conn) -> None:
+    store.upsert_workflow(
+        conn, "1", name="A", tags=[], schema_json=None, active=True, instance_id="a"
+    )
+    store.upsert_workflow(
+        conn, "1", name="B", tags=[], schema_json=None, active=True, instance_id="b"
+    )
+
+    dropped = store.delete_missing_workflows(conn, [], instance_id="a")
+
+    assert dropped == 1
+    assert store.get_workflow(conn, "1", instance_id="a") is None
+    assert store.get_workflow(conn, "1", instance_id="b") is not None
+
+
+def test_migrate_workflow_key_from_old_schema_preserves_rows_and_prevents_collision(
+    tmp_path: Path,
+) -> None:
+    """Simulates a database that reached ``automation_workflows`` before the
+    ``(instance_id, id)`` primary key existed, and proves the guarded rebuild
+    in :mod:`backend.core.db` (``_migrate_workflow_key``) both preserves the
+    pre-existing row and lets a second instance reuse the same n8n id without
+    colliding with it — the actual bug this migration fixes.
+    """
+    db_path = tmp_path / "old.db"
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE automation_workflows (
+                id           TEXT PRIMARY KEY,
+                name         TEXT,
+                tags         TEXT,
+                schema_json  TEXT,
+                active       INTEGER NOT NULL DEFAULT 0,
+                last_seen_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO automation_workflows (id, name, tags, schema_json, active, last_seen_at) "
+            "VALUES ('5', 'Legacy', '[]', NULL, 1, '2026-01-01T00:00:00+00:00')"
+        )
+        conn.commit()
+
+        init_schema(conn)  # runs the ALTER guard, then the guarded PK rebuild
+
+        # The pre-existing row survived the rebuild, keyed under instance_id
+        # "" -- the ALTER guard backfills NOT NULL DEFAULT '' for every row
+        # that predates the column, and get_workflow's own default sentinel
+        # is "" too, so the plain lookup below finds it.
+        legacy = store.get_workflow(conn, "5")
+        assert legacy is not None
+        assert legacy["name"] == "Legacy"
+        assert legacy["instance_id"] == ""
+
+        # A second instance can now use the same n8n id "5" without
+        # clobbering the legacy row.
+        store.upsert_workflow(
+            conn,
+            "5",
+            name="New instance workflow",
+            tags=[],
+            schema_json=None,
+            active=True,
+            instance_id="new-instance",
+        )
+
+        assert store.get_workflow(conn, "5")["name"] == "Legacy"  # untouched
+        second = store.get_workflow(conn, "5", instance_id="new-instance")
+        assert second is not None
+        assert second["name"] == "New instance workflow"
+        assert len(store.list_workflows(conn)) == 2
+
+        init_schema(conn)  # must stay idempotent after the rebuild
+    finally:
+        conn.close()
+
+
+# --- widgets: grid layout ----------------------------------------------
+
+
+def test_widget_row_has_grid_defaults(conn) -> None:
+    widget = store.upsert_widget(conn, "w", "metric", {"value": 1})
+    assert widget["grid_cols"] == 1
+    assert widget["grid_rows"] == 1
+    assert widget["layout_locked"] is False
+    assert widget["instance_id"] == ""
+
+
+def test_set_widget_flags_updates_grid_layout(conn) -> None:
+    store.upsert_widget(conn, "w", "metric", {"value": 1})
+
+    store.set_widget_flags(conn, "w", grid_cols=3, grid_rows=2, layout_locked=True)
+
+    widget = store.get_widget(conn, "w")
+    assert widget["grid_cols"] == 3
+    assert widget["grid_rows"] == 2
+    assert widget["layout_locked"] is True
+
+
+@pytest.mark.parametrize("bad_value", [0, 5, -1])
+def test_set_widget_flags_rejects_out_of_range_grid_cols(conn, bad_value) -> None:
+    store.upsert_widget(conn, "w", "metric", {"value": 1})
+    with pytest.raises(ValueError):
+        store.set_widget_flags(conn, "w", grid_cols=bad_value)
+
+
+@pytest.mark.parametrize("bad_value", [0, 5, -1])
+def test_set_widget_flags_rejects_out_of_range_grid_rows(conn, bad_value) -> None:
+    store.upsert_widget(conn, "w", "metric", {"value": 1})
+    with pytest.raises(ValueError):
+        store.set_widget_flags(conn, "w", grid_rows=bad_value)
+
+
+def test_set_widget_flags_grid_validation_runs_before_any_write(conn) -> None:
+    """An invalid grid_cols must not partially apply other fields in the same call."""
+    store.upsert_widget(conn, "w", "metric", {"value": 1})
+
+    with pytest.raises(ValueError):
+        store.set_widget_flags(conn, "w", pinned=True, grid_cols=99)
+
+    assert store.get_widget(conn, "w")["pinned"] is False
+
+
+# --- widgets/workflows: instance-scoped rows preserve legacy default ----
+
+
+def test_upsert_widget_default_instance_id_is_the_sentinel(conn) -> None:
+    widget = store.upsert_widget(conn, "w", "metric", {"value": 1})
+    assert widget["instance_id"] == ""
+
+
+def test_upsert_widget_same_slug_different_instances_does_not_collide(conn) -> None:
+    """The approved design note: the same slug on two instances is two automations."""
+    store.upsert_widget(conn, "w", "metric", {"value": 1}, instance_id="a")
+    store.upsert_widget(conn, "w", "metric", {"value": 2}, instance_id="b")
+
+    assert store.get_widget(conn, "w", instance_id="a")["payload"] == {"value": 1}
+    assert store.get_widget(conn, "w", instance_id="b")["payload"] == {"value": 2}
+    assert len(store.list_widgets(conn)) == 2
+
+
+def test_automation_widgets_primary_key_actually_enforces_uniqueness(conn) -> None:
+    """The regression this whole fix is about: a nullable instance_id inside a
+    PRIMARY KEY enforces nothing, because SQLite never treats two NULLs as
+    equal for uniqueness. ``instance_id`` is deliberately left out of both
+    INSERTs below, so each falls back to the column's own schema default —
+    proving the *schema's* default is the '' sentinel, not just something
+    application code happens to pass. With ``NOT NULL DEFAULT ''`` both rows
+    land on the same key and collide; a nullable column would default both
+    to NULL and let them silently coexist.
+    """
+    conn.execute(
+        "INSERT INTO automation_widgets (slug, kind, payload, created_at) "
+        "VALUES ('weather', 'metric', '{}', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO automation_widgets (slug, kind, payload, created_at) "
+            "VALUES ('weather', 'metric', '{}', '2026-01-01T00:00:01+00:00')"
+        )
+
+
+def test_automation_workflows_primary_key_actually_enforces_uniqueness(conn) -> None:
+    """Same regression, same fix, on the other re-keyed table — see
+    test_automation_widgets_primary_key_actually_enforces_uniqueness above
+    for why instance_id is omitted rather than passed explicitly.
+    """
+    conn.execute(
+        "INSERT INTO automation_workflows (id, active, last_seen_at) "
+        "VALUES ('5', 1, '2026-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO automation_workflows (id, active, last_seen_at) "
+            "VALUES ('5', 1, '2026-01-01T00:00:01+00:00')"
+        )
+
+
+# --- events --------------------------------------------------------------
+
+
+def test_record_event_round_trips(conn) -> None:
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+    event = store.record_event(
+        conn, tag="RUN", text="Backup ran", subject="wf-1", instance_id="inst-1", now=_clock(t0)
+    )
+
+    assert event["tag"] == "RUN"
+    assert event["text"] == "Backup ran"
+    assert event["subject"] == "wf-1"
+    assert event["instance_id"] == "inst-1"
+    assert event["ts"] == t0.isoformat()
+    assert isinstance(event["id"], int)
+
+
+def test_record_event_retention_cap_prunes_oldest(conn) -> None:
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    cap = store.EVENT_RETENTION_CAP
+    total = cap + 5
+
+    for i in range(total):
+        store.record_event(
+            conn, tag="RUN", text=f"event {i}", now=_clock(t0 + timedelta(seconds=i))
+        )
+
+    events = store.list_events(conn, limit=total)
+    assert len(events) == cap
+    texts = {e["text"] for e in events}
+    # The oldest 5 (event 0..4) must be gone; the newest must remain.
+    for i in range(5):
+        assert f"event {i}" not in texts
+    assert f"event {total - 1}" in texts
+
+
+def test_list_events_filters_by_tag(conn) -> None:
+    store.record_event(conn, tag="RUN", text="a run")
+    store.record_event(conn, tag="FAIL", text="a failure")
+    store.record_event(conn, tag="PUSH", text="a push")
+
+    runs = store.list_events(conn, tag="RUN")
+
+    assert len(runs) == 1
+    assert runs[0]["text"] == "a run"
+
+
+def test_list_events_filters_by_instance(conn) -> None:
+    store.record_event(conn, tag="RUN", text="from a", instance_id="a")
+    store.record_event(conn, tag="RUN", text="from b", instance_id="b")
+
+    from_a = store.list_events(conn, instance_id="a")
+
+    assert len(from_a) == 1
+    assert from_a[0]["text"] == "from a"
+
+
+def test_list_events_orders_newest_first(conn) -> None:
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    store.record_event(conn, tag="RUN", text="first", now=_clock(t0))
+    store.record_event(conn, tag="RUN", text="second", now=_clock(t0 + timedelta(seconds=1)))
+    store.record_event(conn, tag="RUN", text="third", now=_clock(t0 + timedelta(seconds=2)))
+
+    texts = [e["text"] for e in store.list_events(conn)]
+
+    assert texts == ["third", "second", "first"]
 
 
 # --- prefs -------------------------------------------------------------
