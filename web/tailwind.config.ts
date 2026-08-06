@@ -30,6 +30,15 @@ const config: Config = {
         // rather than for the System mode that happens to share the color —
         // three call sites used the literal `amber-400` before this existed.
         warn: "#fbbf24",
+        // Muted violet used only by non-mode provenance/status chrome — AUTO,
+        // WAITING, AUTH (see web/components/automations/chips.tsx). Deliberately
+        // distinct from `mode.general`/--ac: these chips are informational
+        // chrome, not the mode's live accent, and must read quieter than it
+        // everywhere both appear together.
+        auto: {
+          DEFAULT: "#8b7bc0",
+          line: "#3d2f66",
+        },
         // mode accents (CSS var driven at runtime — see --ac in globals.css)
         mode: {
           general: "#a78bfa",
