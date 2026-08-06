@@ -34,6 +34,8 @@ the limiter per-instance is future work, not this chunk's job.
 
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 from collections.abc import Callable
 from datetime import date
@@ -52,6 +54,8 @@ from backend.features.external.filters import VisibilityCache, visible_tasks
 from backend.vault.errors import raise_http
 from backend.vault.tasks import bucketed_tasks, refresh_cache
 from backend.vault.writer import WriterError, append_capture
+
+logger = logging.getLogger(__name__)
 
 #: Returned for every auth failure, whatever the cause. Absent header,
 #: malformed header, wrong token and an unreadable keyring are indistinguishable
@@ -84,6 +88,47 @@ def build_external_router(
         conn = connect(settings.db_path)
         init_schema(conn)
         return conn
+
+    # --- activity events (B5) -----------------------------------------------
+    #
+    # Same non-fatal guarantee as backend.features.automations.router's own
+    # _safe_record_event: a logging write must never be able to fail (or roll
+    # back) the push/capture/task it describes.
+
+    def _safe_record_event(
+        conn: sqlite3.Connection,
+        *,
+        tag: str,
+        text: str,
+        instance_id: str,
+        subject: str | None = None,
+    ) -> None:
+        try:
+            store.record_event(conn, tag=tag, text=text, instance_id=instance_id, subject=subject)
+        except Exception:
+            logger.exception(
+                "failed to record %s activity event for instance %r", tag, instance_id
+            )
+
+    def _safe_record_standalone_event(
+        *, tag: str, text: str, instance_id: str, subject: str | None = None
+    ) -> None:
+        """Same guarantee as ``_safe_record_event``, but also covers opening
+        the connection itself. ``/capture`` and ``/tasks`` don't already have
+        one open — their write goes through the vault writer, not sqlite —
+        so failing to even open a db connection here must not fail a
+        capture/task write that already succeeded.
+        """
+        try:
+            conn = db()
+            try:
+                _safe_record_event(
+                    conn, tag=tag, text=text, instance_id=instance_id, subject=subject
+                )
+            finally:
+                conn.close()
+        except Exception:
+            logger.exception("failed to open db for a %s activity event", tag)
 
     async def throttle() -> None:
         """The rate limit, applied to **every** route including unauthenticated ones.
@@ -159,6 +204,12 @@ def build_external_router(
             path = append_capture(settings.vault_path, text, taxonomy=settings.taxonomy)
         except WriterError as exc:
             raise_http(exc)
+        _safe_record_standalone_event(
+            tag="CAPTURE",
+            text=f"capture written to {path}",
+            instance_id=instance_id,
+            subject=str(title) if title else None,
+        )
         return {"ok": True, "path": path}
 
     @router.post("/tasks")
@@ -177,6 +228,12 @@ def build_external_router(
             path = append_capture(settings.vault_path, line, taxonomy=settings.taxonomy)
         except WriterError as exc:
             raise_http(exc)
+        _safe_record_standalone_event(
+            tag="CAPTURE",
+            text=f"task written to {path}",
+            instance_id=instance_id,
+            subject="task",
+        )
         return {"ok": True, "path": path}
 
     @router.post("/widget/{slug}")
@@ -192,6 +249,8 @@ def build_external_router(
             # panel showing an error.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+        payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
         conn = db()
         try:
             if run:
@@ -201,6 +260,13 @@ def build_external_router(
                     raise HTTPException(status_code=404, detail=f"unknown run {run!r}")
                 store.finish_run(
                     conn, run, "ok", mode="widget", payload=widget.payload
+                )
+                _safe_record_event(
+                    conn,
+                    tag="PUSH",
+                    text=f"{widget.kind} push, {payload_bytes} bytes (run {run})",
+                    instance_id=instance_id,
+                    subject=slug,
                 )
                 return {"ok": True, "run": run}
 
@@ -212,6 +278,13 @@ def build_external_router(
                 title=widget.title,
                 expected_interval_seconds=widget.expected_interval_seconds,
                 instance_id=instance_id,
+            )
+            _safe_record_event(
+                conn,
+                tag="PUSH",
+                text=f"{widget.kind} push, {payload_bytes} bytes",
+                instance_id=instance_id,
+                subject=slug,
             )
         finally:
             conn.close()

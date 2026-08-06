@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from backend.agent.credentials import CredentialError
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.features.automations import store
+from backend.features.automations import catalog, store
 from backend.features.automations.n8n_client import N8nClient
 from backend.features.automations.router import build_automations_router
 
@@ -990,6 +990,354 @@ def test_discover_returns_tagged_workflows_without_persisting_anything(
     # Not registered, and nothing was persisted by discovering it.
     assert not settings.automations_file.exists()
     assert not settings.db_path.exists()
+
+
+# --- B5: activity events ----------------------------------------------------
+
+
+def test_run_ack_success_writes_a_run_event(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings)
+    _seed_workflow(settings)
+
+    client = app_with(settings, lambda request: httpx.Response(200, content=b""))
+    response = client.post("/api/automations/wf1/run", json={"payload": {}})
+    assert response.status_code == 200
+
+    events = client.get("/api/automations/events").json()
+    run_events = [e for e in events if e["tag"] == "RUN"]
+    assert len(run_events) == 1
+    assert run_events[0]["subject"] == "Send Report"
+    assert "s" in run_events[0]["text"]  # a duration was included
+
+
+def test_run_widget_success_writes_a_run_event_with_execution_id(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings)
+    _seed_workflow(settings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(
+            200,
+            {
+                "widget": "metric", "slug": "inbox-count", "label": "Inbox", "value": 42,
+                "executionId": "exec-1",
+            },
+        )
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/wf1/run", json={"payload": {}})
+    assert response.status_code == 200
+
+    events = client.get("/api/automations/events").json()
+    run_events = [e for e in events if e["tag"] == "RUN"]
+    assert len(run_events) == 1
+    assert "exec-1" in run_events[0]["text"]
+
+
+def test_run_status_failed_writes_a_fail_event_with_the_run_message(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings)
+    _seed_workflow(settings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(200, {"ok": False, "message": "SMTP rejected"})
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/wf1/run", json={"payload": {}})
+    assert response.status_code == 200
+
+    events = client.get("/api/automations/events").json()
+    fail_events = [e for e in events if e["tag"] == "FAIL"]
+    assert len(fail_events) == 1
+    assert fail_events[0]["text"] == "SMTP rejected"
+    assert fail_events[0]["subject"] == "Send Report"
+    assert not any(e["tag"] == "RUN" for e in events)
+
+
+def test_run_n8n_500_writes_a_fail_event(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings)
+    _seed_workflow(settings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(500, {"message": "workflow crashed", "executionId": "exec-500"})
+
+    client = app_with(settings, handler)
+    client.post("/api/automations/wf1/run", json={"payload": {}})
+
+    events = client.get("/api/automations/events").json()
+    fail_events = [e for e in events if e["tag"] == "FAIL"]
+    assert len(fail_events) == 1
+    assert "workflow crashed" in fail_events[0]["text"]
+
+
+def test_run_timeout_writes_a_fail_event(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings)
+    _seed_workflow(settings)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    client = app_with(settings, handler)
+    client.post("/api/automations/wf1/run", json={"payload": {}})
+
+    events = client.get("/api/automations/events").json()
+    assert any(e["tag"] == "FAIL" for e in events)
+
+
+def test_install_writes_an_install_event(
+    tmp_path: Path, fake_keyring: _FakeKeyring
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    settings = Settings(_vault_path=vault, external_base_url="http://tunnel.example.test")
+    _seed_instance(settings)
+    created_name = catalog.load_definition("google-calendar")["name"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v1/workflows":
+            return json_response(
+                200,
+                {"id": "wf-created-1", "name": created_name, "active": False, "tags": ["argus"]},
+            )
+        if request.method == "POST" and path == "/api/v1/workflows/wf-created-1/activate":
+            return json_response(
+                200, {"id": "wf-created-1", "name": created_name, "active": True}
+            )
+        if request.method == "GET" and path == "/api/v1/workflows":
+            return json_response(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "wf-created-1", "name": created_name, "active": True,
+                            "tags": [{"name": "argus"}],
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/templates/google-calendar/install")
+    assert response.status_code == 201
+
+    events = client.get("/api/automations/events").json()
+    install_events = [e for e in events if e["tag"] == "INSTALL"]
+    assert len(install_events) == 1
+    assert install_events[0]["subject"] == created_name
+    assert "wf-created-1" in install_events[0]["text"]
+
+
+def test_a_failing_record_event_does_not_fail_a_successful_run(
+    settings: Settings, fake_keyring: _FakeKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cleanest proof: make record_event itself raise and confirm the
+    run it was describing still completes and reports success."""
+    _seed_instance(settings)
+    _seed_workflow(settings)
+
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("db is on fire")
+
+    monkeypatch.setattr("backend.features.automations.router.store.record_event", boom)
+
+    client = app_with(settings, lambda request: httpx.Response(200, content=b""))
+    response = client.post("/api/automations/wf1/run", json={"payload": {}})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+    runs = client.get("/api/automations/runs").json()
+    assert runs[0]["status"] == "ok"
+
+
+def test_events_route_filters_by_tag_case_insensitively_and_by_instance_and_respects_limit(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    home = _seed_instance(settings, name="home")
+    work = _seed_instance(settings, name="work")
+
+    conn = _conn(settings)
+    try:
+        store.record_event(conn, tag="RUN", text="r1", instance_id=home["id"], now=fixed_clock)
+        store.record_event(conn, tag="PUSH", text="p1", instance_id=home["id"], now=fixed_clock)
+        store.record_event(conn, tag="RUN", text="r2", instance_id=work["id"], now=fixed_clock)
+    finally:
+        conn.close()
+
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    all_events = client.get("/api/automations/events").json()
+    assert len(all_events) == 3
+
+    # Lowercase, as the UI's filter names are -- normalised in the route.
+    by_tag = client.get("/api/automations/events", params={"tag": "run"}).json()
+    assert {e["text"] for e in by_tag} == {"r1", "r2"}
+
+    by_instance = client.get(
+        "/api/automations/events", params={"instance_id": home["id"]}
+    ).json()
+    assert {e["text"] for e in by_instance} == {"r1", "p1"}
+
+    limited = client.get("/api/automations/events", params={"limit": 1}).json()
+    assert len(limited) == 1
+
+    bad_tag = client.get("/api/automations/events", params={"tag": "bogus"})
+    assert bad_tag.status_code == 422
+
+
+# --- B7: cancel --------------------------------------------------------------
+
+
+def test_cancel_unknown_run_404s(settings: Settings, fake_keyring: _FakeKeyring) -> None:
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    response = client.post("/api/automations/runs/nope/cancel")
+    assert response.status_code == 404
+
+
+def test_cancel_already_finished_run_refuses_with_409(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    _seed_instance(settings)
+    _seed_workflow(settings)
+    client = app_with(settings, lambda request: httpx.Response(200, content=b""))
+    run = client.post("/api/automations/wf1/run", json={"payload": {}}).json()
+    assert run["status"] == "ok"
+
+    response = client.post(f"/api/automations/runs/{run['run_id']}/cancel")
+    assert response.status_code == 409
+
+
+def test_cancel_with_known_execution_id_calls_stop_execution_and_marks_failed(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    home = _seed_instance(settings)
+    _seed_workflow(settings)
+
+    conn = _conn(settings)
+    try:
+        store.record_run_started(
+            conn, "run-1", "wf1", workflow_name="Send Report",
+            instance_id=home["id"], now=fixed_clock,
+        )
+        conn.execute(
+            "UPDATE automation_runs SET execution_id = ? WHERE id = ?", ("exec-9", "run-1")
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/api/v1/executions/exec-9/stop":
+            return httpx.Response(200, content=b"")
+        raise AssertionError(f"unexpected request: {request.url.path}")
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/runs/run-1/cancel")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["execution_id"] == "exec-9"
+    assert "cancelled" in body["message"].lower()
+    assert "/api/v1/executions/exec-9/stop" in seen_paths
+
+    events = client.get("/api/automations/events").json()
+    fail_events = [e for e in events if e["tag"] == "FAIL"]
+    assert any("cancelled" in e["text"].lower() for e in fail_events)
+
+
+def test_cancel_with_no_execution_id_never_calls_n8n_but_still_cancels_locally(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    home = _seed_instance(settings)
+    _seed_workflow(settings)
+
+    conn = _conn(settings)
+    try:
+        store.record_run_started(
+            conn, "run-2", "wf1", workflow_name="Send Report",
+            instance_id=home["id"], now=fixed_clock,
+        )
+    finally:
+        conn.close()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no execution id -- n8n must never be called")
+
+    client = app_with(settings, handler)
+    response = client.post("/api/automations/runs/run-2/cancel")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["execution_id"] is None
+    # Honest about what actually happened: n8n was never asked to stop
+    # anything, because there was no execution id to hand it.
+    assert "n8n" in body["message"].lower()
+    assert "cancelled" in body["message"].lower()
+
+
+def test_cancel_frees_the_inflight_lock_so_the_workflow_can_run_again(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """The real in-flight window: a cancel that arrives while the original
+    fire() is still blocked must free the lock immediately -- a cancelled
+    run that leaves its own lock held would make the workflow permanently
+    unrunnable until restart."""
+    _seed_instance(settings)
+    _seed_workflow(settings)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            entered.set()
+            assert release.wait(timeout=5), "the first request never got released"
+        return httpx.Response(200, content=b"")
+
+    client = app_with(settings, handler)
+    results: dict[str, httpx.Response] = {}
+
+    def fire_first() -> None:
+        results["first"] = client.post("/api/automations/wf1/run", json={"payload": {}})
+
+    thread = threading.Thread(target=fire_first)
+    thread.start()
+    assert entered.wait(timeout=5), "the first request's handler never ran"
+
+    # Genuinely in flight: the run row is "running", the lock is held, and
+    # no execution_id is known yet -- fire() hasn't returned.
+    runs = client.get("/api/automations/runs").json()
+    assert len(runs) == 1
+    run_id = runs[0]["id"]
+    assert runs[0]["status"] == "running"
+
+    cancel = client.post(f"/api/automations/runs/{run_id}/cancel")
+    assert cancel.status_code == 200
+    assert cancel.json()["status"] == "failed"
+
+    # The lock is free again immediately: a fresh run does not 409.
+    again = client.post("/api/automations/wf1/run", json={"payload": {}})
+    assert again.status_code == 200, again.text
+
+    release.set()
+    thread.join(timeout=5)
+    assert results["first"].status_code == 200
 
 
 # --- wiring ---------------------------------------------------------------

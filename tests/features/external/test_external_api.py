@@ -481,3 +481,123 @@ def test_a_push_authenticated_with_bs_token_is_stored_with_bs_instance_id(
 def test_no_agent_or_action_surface_exists(client: TestClient, path: str) -> None:
     """Their absence is why there is no LLM spend behind a public URL."""
     assert client.post(path, headers=_auth(), json={}).status_code == 404
+
+
+# --- B5: activity events --------------------------------------------------
+
+
+def test_push_writes_a_push_event_naming_kind_and_size(
+    client: TestClient, settings: Settings
+) -> None:
+    response = client.post(
+        "/api/external/widget/weather",
+        headers=_auth(),
+        json={"widget": "metric", "label": "Manila", "value": "31C"},
+    )
+    assert response.status_code == 200, response.text
+
+    conn = _db(settings)
+    try:
+        events = store.list_events(conn, tag="PUSH")
+    finally:
+        conn.close()
+    assert len(events) == 1
+    assert events[0]["subject"] == "weather"
+    assert events[0]["instance_id"] == INSTANCE_ID
+    assert "metric" in events[0]["text"]
+    assert "bytes" in events[0]["text"]
+
+
+def test_run_scoped_push_also_writes_a_push_event(
+    client: TestClient, settings: Settings
+) -> None:
+    conn = _db(settings)
+    try:
+        store.record_run_started(conn, "run-9", "wf-1")
+    finally:
+        conn.close()
+
+    response = client.post(
+        "/api/external/widget/anything?run=run-9",
+        headers=_auth(),
+        json={"widget": "text", "body": "the answer"},
+    )
+    assert response.status_code == 200, response.text
+
+    conn = _db(settings)
+    try:
+        events = store.list_events(conn, tag="PUSH")
+    finally:
+        conn.close()
+    assert len(events) == 1
+    assert "run-9" in events[0]["text"]
+
+
+def test_capture_writes_a_capture_event(client: TestClient, settings: Settings) -> None:
+    response = client.post(
+        "/api/external/capture", headers=_auth(), json={"body": "captured from n8n"}
+    )
+    assert response.status_code == 200, response.text
+
+    conn = _db(settings)
+    try:
+        events = store.list_events(conn, tag="CAPTURE")
+    finally:
+        conn.close()
+    assert len(events) == 1
+    assert events[0]["instance_id"] == INSTANCE_ID
+
+
+def test_task_write_also_writes_a_capture_event(client: TestClient, settings: Settings) -> None:
+    response = client.post(
+        "/api/external/tasks", headers=_auth(), json={"text": "call the bank"}
+    )
+    assert response.status_code == 200, response.text
+
+    conn = _db(settings)
+    try:
+        events = store.list_events(conn, tag="CAPTURE")
+    finally:
+        conn.close()
+    assert len(events) == 1
+
+
+def test_a_failing_record_event_does_not_fail_the_push(
+    client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cleanest proof: make record_event itself raise and confirm the
+    push it was describing still returns success and is still stored."""
+
+    def boom(*args, **kwargs) -> None:
+        raise RuntimeError("db is on fire")
+
+    monkeypatch.setattr("backend.features.external.router.store.record_event", boom)
+
+    response = client.post(
+        "/api/external/widget/weather",
+        headers=_auth(),
+        json={"widget": "metric", "label": "Manila", "value": "31C"},
+    )
+    assert response.status_code == 200, response.text
+
+    conn = _db(settings)
+    try:
+        assert store.get_widget(conn, "weather", instance_id=INSTANCE_ID) is not None
+    finally:
+        conn.close()
+
+
+def test_a_failing_record_event_does_not_fail_a_capture(
+    client: TestClient, vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*args, **kwargs) -> None:
+        raise RuntimeError("db is on fire")
+
+    monkeypatch.setattr("backend.features.external.router.store.record_event", boom)
+
+    response = client.post(
+        "/api/external/capture", headers=_auth(), json={"body": "still saved"}
+    )
+    assert response.status_code == 200, response.text
+    written = (vault / response.json()["path"]).read_text(encoding="utf-8")
+    assert "still saved" in written

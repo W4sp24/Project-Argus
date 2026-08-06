@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import logging
 import sqlite3
 import uuid
 from collections.abc import Callable
@@ -65,6 +66,8 @@ from backend.features.automations.schema import (
     validate_widget_payload,
 )
 from backend.features.external import auth as external_auth
+
+logger = logging.getLogger(__name__)
 
 #: The synchronous run budget. n8n owns the workflow either way — this bounds
 #: only how long Argus's HTTP layer waits for a response before reporting
@@ -186,6 +189,16 @@ class RunOut(BaseModel):
     message: str | None = None
     execution_id: str | None = None
     payload: Any | None = None
+
+
+class EventOut(BaseModel):
+    """One row of ``automation_events`` — the dashboard's activity feed."""
+
+    ts: str
+    instance_id: str = ""
+    tag: str
+    subject: str | None = None
+    text: str
 
 
 class WorkflowCard(BaseModel):
@@ -863,6 +876,69 @@ def build_automations_router(
             dropped=sum(result.dropped for result in results),
         )
 
+    # --- activity events (B5) --------------------------------------------------
+    #
+    # The ambient log behind the dashboard's status line. Every write here goes
+    # through _safe_record_event, which can never raise: a logging write must
+    # never be able to fail (or roll back) the run/push/install it describes.
+
+    def _safe_record_event(
+        conn: sqlite3.Connection,
+        *,
+        tag: str,
+        text: str,
+        instance_id: str,
+        subject: str | None = None,
+    ) -> None:
+        try:
+            store.record_event(
+                conn, tag=tag, text=text, instance_id=instance_id, subject=subject, now=now
+            )
+        except Exception:
+            logger.exception(
+                "failed to record %s activity event for instance %r", tag, instance_id
+            )
+
+    def _run_duration_text(run: dict[str, Any]) -> str:
+        """A human-scale duration off a finished run's own timestamps."""
+        try:
+            started = datetime.fromisoformat(run["started_at"])
+            finished = datetime.fromisoformat(run["finished_at"])
+            return f"{(finished - started).total_seconds():.1f}s"
+        except (TypeError, ValueError):
+            return "?"
+
+    def _log_run_outcome(conn: sqlite3.Connection, run_id: str) -> None:
+        """A RUN (``status == "ok"``) or FAIL (anything else) activity-log
+        entry for a run ``finish_run`` just closed out, read back from the
+        row it wrote.
+
+        Centralised here — called once from ``_finish_failed`` and once from
+        each direct ``store.finish_run`` call in ``_dispatch_result`` — so
+        every way a run can end (ack, status, widget, an n8n error, a
+        timeout, or a user cancellation) gets exactly one consistent log
+        line, keyed off the row's own final status rather than duplicated
+        per call site.
+        """
+        try:
+            run = store.get_run(conn, run_id)
+            if run is None:
+                return
+            subject = run["workflow_name"] or run["workflow_id"]
+            if run["status"] == "ok":
+                exec_part = f", execution {run['execution_id']}" if run["execution_id"] else ""
+                text = f"completed in {_run_duration_text(run)}{exec_part}"
+                _safe_record_event(
+                    conn, tag="RUN", text=text, instance_id=run["instance_id"], subject=subject
+                )
+            else:
+                text = run["message"] or f"run {run['status']}"
+                _safe_record_event(
+                    conn, tag="FAIL", text=text, instance_id=run["instance_id"], subject=subject
+                )
+        except Exception:
+            logger.exception("failed to log an activity event for run %s", run_id)
+
     # --- run dispatch ---------------------------------------------------------
 
     def _finish_failed(
@@ -877,6 +953,7 @@ def build_automations_router(
         store.finish_run(
             conn, run_id, status, mode=mode, message=message, execution_id=execution_id, now=now
         )
+        _log_run_outcome(conn, run_id)
 
     def _dispatch_result(
         conn: sqlite3.Connection,
@@ -945,6 +1022,7 @@ def build_automations_router(
                 conn, run_id, "ok", mode="widget", payload=validated.payload,
                 execution_id=execution_id, now=now,
             )
+            _log_run_outcome(conn, run_id)
             return RunResponse(
                 run_id=run_id, status="ok", mode="widget", payload=validated.payload,
                 execution_id=execution_id, execution_url=link,
@@ -958,6 +1036,7 @@ def build_automations_router(
                 conn, run_id, status, mode="status", message=message,
                 execution_id=execution_id, now=now,
             )
+            _log_run_outcome(conn, run_id)
             return RunResponse(
                 run_id=run_id, status=status, mode="status", message=message,
                 execution_id=execution_id, execution_url=link,
@@ -968,6 +1047,7 @@ def build_automations_router(
         # trigger plainly succeeded (2xx), it just didn't say anything Argus
         # knows how to interpret further.
         store.finish_run(conn, run_id, "ok", mode="ack", execution_id=execution_id, now=now)
+        _log_run_outcome(conn, run_id)
         return RunResponse(
             run_id=run_id, status="ok", mode="ack", execution_id=execution_id, execution_url=link
         )
@@ -1132,6 +1212,101 @@ def build_automations_router(
             return [
                 RunOut(**row) for row in store.list_runs(conn, limit=limit, workflow_id=workflow_id)
             ]
+        finally:
+            conn.close()
+
+    # --- cancel (B7) -------------------------------------------------------
+
+    @router.post("/automations/runs/{run_id}/cancel", response_model=RunOut)
+    async def cancel_run(run_id: str) -> RunOut:
+        """Best-effort cancellation of a still-``running`` run.
+
+        Marked ``status='failed'`` on success — never a ``'cancelled'``
+        value. SQLite cannot ``ALTER`` a ``CHECK`` constraint, so adding a
+        third status label to ``automation_runs.status`` would force the
+        same kind of full-table rebuild ``_migrate_workflow_key`` did for
+        ``automation_workflows``'s key, just to add a label; ``'failed'``
+        plus a message that plainly says "cancelled by user" carries the
+        same information without that cost.
+        """
+        conn = db()
+        try:
+            run = store.get_run(conn, run_id)
+            if run is None:
+                raise HTTPException(status_code=404, detail=f"no run {run_id}")
+            if run["status"] != "running":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"run {run_id} is already {run['status']} — cannot cancel it",
+                )
+
+            execution_id = run["execution_id"]
+            instance_id = run["instance_id"]
+            inflight_key = f"{instance_id}:{run['workflow_id']}"
+
+            if execution_id:
+                instance = _resolve_instance(instance_id)
+                api_key = _resolve_key(instance)
+                client = factory(instance, api_key)
+                try:
+                    await client.stop_execution(execution_id)
+                except N8nError as exc:
+                    raise HTTPException(
+                        status_code=502, detail=f"could not stop execution in n8n: {exc}"
+                    ) from exc
+                message = "cancelled by user"
+            else:
+                # No execution id was ever recorded for this run, so there is
+                # nothing to hand n8n's stop endpoint — Argus gives up on the
+                # run locally, but must not silently claim the underlying
+                # trigger was actually stopped in n8n; it may still be
+                # running there.
+                message = (
+                    "cancelled by user — no execution id was recorded for this run, so "
+                    "n8n was never asked to stop it and may still be running it"
+                )
+
+            _finish_failed(
+                conn, run_id, status="failed", mode=None, message=message,
+                execution_id=execution_id,
+            )
+
+            # A cancelled run must not leave its own workflow permanently
+            # unrunnable — release the in-flight lock immediately rather than
+            # waiting for whatever originally set it to notice.
+            inflight.discard(inflight_key)
+
+            updated = store.get_run(conn, run_id)
+            assert updated is not None  # just written above
+            return RunOut(**updated)
+        finally:
+            conn.close()
+
+    # --- activity events (B5) ---------------------------------------------
+
+    @router.get("/automations/events", response_model=list[EventOut])
+    def list_events_route(
+        tag: str | None = None, instance_id: str | None = None, limit: int = 100
+    ) -> list[EventOut]:
+        """Newest-first activity log, optionally filtered by tag and/or
+        instance.
+
+        ``tag`` is normalised to uppercase here before it ever reaches
+        ``store.list_events`` — the UI sends lowercase filter names
+        (``run``/``push``/``fail``/...) but ``automation_events.tag`` (and
+        ``store.EVENT_TAGS``) are uppercase, matching the CHECK constraint.
+        """
+        normalized_tag = tag.upper() if tag is not None else None
+        if normalized_tag is not None and normalized_tag not in store.EVENT_TAGS:
+            raise HTTPException(
+                status_code=422, detail=f"tag must be one of {', '.join(store.EVENT_TAGS)}"
+            )
+        conn = db()
+        try:
+            rows = store.list_events(
+                conn, tag=normalized_tag, instance_id=instance_id, limit=limit
+            )
+            return [EventOut(**row) for row in rows]
         finally:
             conn.close()
 
@@ -1306,6 +1481,19 @@ def build_automations_router(
             raise HTTPException(
                 status_code=502, detail=f"could not install template in n8n: {exc}"
             ) from exc
+
+        install_subject = definition.get("name") if isinstance(definition, dict) else None
+        event_conn = db()
+        try:
+            _safe_record_event(
+                event_conn,
+                tag="INSTALL",
+                text=f"installed as workflow {workflow_id}",
+                instance_id=instance_id,
+                subject=install_subject or template_id,
+            )
+        finally:
+            event_conn.close()
 
         # Reuse discovery's own cache-refresh pass rather than duplicating its
         # upsert/drop logic here: the newly-created workflow only becomes a
