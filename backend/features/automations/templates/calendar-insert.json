@@ -9,6 +9,7 @@
       "position": [0, 0],
       "webhookId": "argus-calendar-insert",
       "parameters": {
+        "path": "argus-calendar-insert",
         "formTitle": "Add Calendar Event",
         "formDescription": "Writes a new event straight onto your Google Calendar.",
         "responseMode": "lastNode",

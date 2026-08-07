@@ -9,6 +9,7 @@
       "position": [0, 0],
       "webhookId": "argus-mobile-capture",
       "parameters": {
+        "path": "argus-mobile-capture",
         "formTitle": "Quick Capture",
         "formDescription": "Jot something down from your phone — it lands in Argus.",
         "responseMode": "lastNode",

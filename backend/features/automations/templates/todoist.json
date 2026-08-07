@@ -36,6 +36,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [440, 0],
+      "executeOnce": true,
       "parameters": {
         "method": "POST",
         "url": "{{ARGUS_URL}}/api/external/widget/tasks",
@@ -49,7 +50,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { \"widget\": \"list\", \"title\": \"Tasks\", \"expected_interval_seconds\": 900, \"items\": $json.map(t => ({ \"text\": t.content, \"sub\": t.due ? t.due.string : null })) } }}"
+        "jsonBody": "={{ JSON.stringify({ \"widget\": \"list\", \"title\": \"Tasks\", \"expected_interval_seconds\": 900, \"items\": $input.all().map(i => ({ \"text\": i.json.content, \"sub\": i.json.due ? i.json.due.string : null })) }) }}"
       }
     }
   ],

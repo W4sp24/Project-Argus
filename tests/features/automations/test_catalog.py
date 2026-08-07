@@ -240,6 +240,132 @@ def test_calendar_insert_is_present_action_and_replaces_gcal_write_path() -> Non
     assert "Google Calendar" in template.requires
 
 
+# --- A2: the template could actually run ------------------------------------
+#
+# Everything above checks that a template is well-formed *as a document*. None
+# of it checks the things that decide whether n8n can execute it, and all five
+# bundled templates once passed this file green while being unable to run at
+# all. The checks below are the structural half of that gap — each one is a
+# real failure seen against a live n8n, expressed as something readable off the
+# bundled JSON:
+#
+#   * a Form Trigger with no `path` -> "Missing or invalid required
+#     parameters: path" at activation.
+#   * a `jsonBody` expression returning a bare object -> n8n coerces it and
+#     posts the literal string "[object Object]", which fails as invalid JSON.
+#   * `$json` in an aggregating push -> `$json` is the *current item*, not the
+#     item list, so `.map`/`.items` on it is undefined or not-a-function.
+#   * a push node without `executeOnce` -> fires once per upstream item, so a
+#     10-event calendar pushes the same widget ten times.
+#
+# What none of this proves is that a template *runs*; only a live n8n can say
+# that. It proves a template cannot ship in a state already known to be broken.
+
+
+def _push_nodes(definition: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every node that POSTs a widget payload back to Argus."""
+    return [
+        node
+        for node in definition.get("nodes", [])
+        if isinstance(node, dict)
+        and "/api/external/widget/" in str(node.get("parameters", {}).get("url", ""))
+    ]
+
+
+@pytest.mark.parametrize("template_id", ALL_TEMPLATE_IDS)
+def test_form_trigger_declares_a_path_matching_its_webhook_id(template_id: str) -> None:
+    """n8n requires `path` on a Form Trigger, and Argus builds the form URL as
+    ``/form/{webhookId}`` (n8n_client.py:147) — so the two must agree or the
+    workflow activates and Argus still links to a 404."""
+    definition = catalog.load_definition(template_id)
+    trigger = _find_trigger_node(definition)
+    if trigger is None:
+        return
+
+    path = trigger.get("parameters", {}).get("path")
+    assert path, (
+        f"{template_id}'s form trigger declares no `path` — n8n refuses to "
+        "activate it with 'Missing or invalid required parameters: path'"
+    )
+    assert path == trigger.get("webhookId"), (
+        f"{template_id}'s form `path` ({path!r}) must equal its webhookId "
+        f"({trigger.get('webhookId')!r}) — Argus builds the form URL from the "
+        "webhookId, so a mismatch links the RUN button at a 404"
+    )
+
+
+@pytest.mark.parametrize("template_id", ALL_TEMPLATE_IDS)
+def test_push_body_is_stringified_and_never_a_bare_object(template_id: str) -> None:
+    definition = catalog.load_definition(template_id)
+    for node in _push_nodes(definition):
+        body = str(node["parameters"].get("jsonBody", ""))
+        assert body.startswith("={{"), (
+            f"{template_id}'s {node.get('name')!r} jsonBody must be an n8n "
+            "expression (leading '=')"
+        )
+        assert "JSON.stringify(" in body, (
+            f"{template_id}'s {node.get('name')!r} returns a bare object from "
+            "jsonBody — n8n coerces that to the literal '[object Object]' and "
+            "the push fails as invalid JSON. Wrap it in JSON.stringify()."
+        )
+
+
+@pytest.mark.parametrize("template_id", ALL_TEMPLATE_IDS)
+def test_push_nodes_aggregate_over_all_items_and_fire_once(template_id: str) -> None:
+    definition = catalog.load_definition(template_id)
+    for node in _push_nodes(definition):
+        body = str(node["parameters"].get("jsonBody", ""))
+        # A push that maps over a collection is aggregating upstream items, and
+        # `$json` cannot supply them — it is one item. `$input.all()` is the
+        # only thing that can, and such a node must also fire exactly once.
+        if ".map(" not in body:
+            continue
+        assert "$input.all()" in body, (
+            f"{template_id}'s {node.get('name')!r} maps over items but reads "
+            "$json — $json is the *current item*, not the item list. Use "
+            "$input.all()."
+        )
+        assert node.get("executeOnce") is True, (
+            f"{template_id}'s {node.get('name')!r} aggregates every upstream "
+            "item but has no executeOnce, so it fires once per item and pushes "
+            "the same payload N times"
+        )
+
+
+def test_google_calendar_query_expands_recurring_events() -> None:
+    """Without this, Google returns a recurring series' *master* record, whose
+    `start` is the date the series began — so a standup created a year ago
+    renders as a year-old entry on a widget titled "Upcoming Events".
+
+    `recurringEventHandling` and the top-level timeMin/timeMax this template
+    relies on both require node typeVersion >= 1.3; at typeVersion 1 they are
+    silently ignored, which is how the time window went unapplied.
+    """
+    definition = catalog.load_definition("google-calendar")
+    node = next(n for n in definition["nodes"] if n["type"] == "n8n-nodes-base.googleCalendar")
+
+    assert float(node["typeVersion"]) >= 1.3, (
+        "timeMin/timeMax at top level and options.recurringEventHandling both "
+        "need typeVersion >= 1.3; below that they are ignored without error"
+    )
+    assert node["parameters"].get("options", {}).get("recurringEventHandling") == "expand"
+    assert node["parameters"].get("timeMin")
+    assert node["parameters"].get("timeMax")
+
+
+def test_google_calendar_reads_a_string_start_not_the_start_object() -> None:
+    """Google returns `start` as an object — `{dateTime, timeZone}` for a timed
+    event, `{date}` for an all-day one — but the timeline validator requires
+    `entries[].at` to be a string (schema._validate_timeline)."""
+    definition = catalog.load_definition("google-calendar")
+    body = str(_push_nodes(definition)[0]["parameters"]["jsonBody"])
+
+    assert "start.dateTime" in body and "start.date" in body, (
+        "the calendar push must read start.dateTime || start.date — passing "
+        "the bare `start` object fails validation, since `at` must be a string"
+    )
+
+
 # --- B: form/webhook templates parse cleanly through schema.parse_workflow --
 
 

@@ -17,7 +17,7 @@
       "id": "gcal",
       "name": "Get Upcoming Events",
       "type": "n8n-nodes-base.googleCalendar",
-      "typeVersion": 1,
+      "typeVersion": 1.3,
       "position": [220, 0],
       "parameters": {
         "operation": "getAll",
@@ -25,7 +25,11 @@
         "returnAll": false,
         "limit": 10,
         "timeMin": "={{ $now.toISO() }}",
-        "timeMax": "={{ $now.plus({ days: 7 }).toISO() }}"
+        "timeMax": "={{ $now.plus({ days: 7 }).toISO() }}",
+        "options": {
+          "recurringEventHandling": "expand",
+          "orderBy": "startTime"
+        }
       },
       "credentials": {
         "googleCalendarOAuth2Api": {"name": "Google Calendar account"}
@@ -37,6 +41,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [440, 0],
+      "executeOnce": true,
       "parameters": {
         "method": "POST",
         "url": "{{ARGUS_URL}}/api/external/widget/calendar",
@@ -50,7 +55,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { \"widget\": \"timeline\", \"title\": \"Upcoming Events\", \"expected_interval_seconds\": 900, \"entries\": $json.items.map(e => ({ \"at\": e.start, \"text\": e.summary, \"sub\": e.location })) } }}"
+        "jsonBody": "={{ JSON.stringify({ \"widget\": \"timeline\", \"title\": \"Upcoming Events\", \"expected_interval_seconds\": 900, \"entries\": $input.all().map(i => ({ \"at\": i.json.start.dateTime || i.json.start.date, \"text\": i.json.summary, \"sub\": i.json.location })) }) }}"
       }
     }
   ],
