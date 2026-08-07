@@ -51,6 +51,29 @@ function workflowsUrl(baseUrl: string | undefined): string | null {
  * `last_run` alone (which is all this did before) rendered a freshly-installed
  * template as READY beside a live RUN button that could only ever fail.
  */
+/** Identity for duplicate detection: same name, same instance. */
+function nameKeyOf(card: AutomationCard): string {
+  return `${card.instance_id}::${(card.name ?? card.id).trim().toLowerCase()}`;
+}
+
+/**
+ * Names appearing more than once on a single instance. Installing a template
+ * twice produces exactly this — n8n allows duplicate names and assigns each
+ * copy its own id, so nothing else on the row distinguishes them. Scoped per
+ * instance because the same automation legitimately existing on two different
+ * n8n instances is not a duplicate.
+ */
+function duplicateNameKeys(cards: AutomationCard[]): Set<string> {
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const card of cards) {
+    const key = nameKeyOf(card);
+    if (seen.has(key)) dupes.add(key);
+    else seen.add(key);
+  }
+  return dupes;
+}
+
 function actionStateOf(card: AutomationCard): ActionState {
   if (!card.active) return "inactive";
   const status = card.last_run?.status;
@@ -69,6 +92,8 @@ export default function RegisteredList({
   onRun,
   activatingId,
   onActivate,
+  forgettingId,
+  onForget,
 }: {
   widgets: AutomationWidget[];
   workflows: AutomationCard[];
@@ -77,6 +102,9 @@ export default function RegisteredList({
   filterId: string;
   activatingId: string | null;
   onActivate: (card: AutomationCard) => void;
+  forgettingId: string | null;
+  /** `destroy` distinguishes DELETE (gone from n8n) from × (untag only). */
+  onForget: (card: AutomationCard, destroy: boolean) => void;
   runningId: string | null;
   onRun: (card: AutomationCard) => void;
 }) {
@@ -91,6 +119,10 @@ export default function RegisteredList({
     filterId === "all" ? widgets : widgets.filter((w) => w.instance_id === filterId);
   const filteredWorkflows =
     filterId === "all" ? workflows : workflows.filter((w) => w.instance_id === filterId);
+
+  // Computed over the filtered set the user is actually looking at, so the
+  // badge always agrees with the rows visible beside it.
+  const duplicateNames = duplicateNameKeys(filteredWorkflows);
 
   const sortedWidgets = [...filteredWidgets].sort((a, b) =>
     (a.title || a.slug).localeCompare(b.title || b.slug),
@@ -177,6 +209,8 @@ export default function RegisteredList({
             const lastRun = card.last_run;
             const inactive = !card.active;
             const activating = activatingId === card.id;
+            const forgetting = forgettingId === card.id;
+            const duplicate = duplicateNames.has(nameKeyOf(card));
 
             return (
               <li
@@ -201,6 +235,14 @@ export default function RegisteredList({
                 </div>
                 <OriginChip instanceId={card.instance_id} name={showOrigin ? instance?.name : null} />
                 {card.basic_auth && <AuthChip />}
+                {duplicate && (
+                  <span
+                    className="shrink-0 border border-warn px-1.5 py-0.5 font-mono text-micro uppercase tracking-[0.1em] text-warn"
+                    title="Another workflow on this instance has the same name — most likely a template installed more than once."
+                  >
+                    DUPLICATE
+                  </span>
+                )}
                 <ActionStateBadge state={actionStateOf(card)} />
                 {inactive ? (
                   <Button
@@ -225,6 +267,22 @@ export default function RegisteredList({
                     {running ? "RUNNING…" : "RUN"}
                   </Button>
                 )}
+                <Button
+                  variant="secondary"
+                  onClick={() => onForget(card, false)}
+                  disabled={!connected || forgetting}
+                  title="Unregister — drops the argus tag; the workflow stays in n8n"
+                >
+                  {forgetting ? "…" : "UNREGISTER"}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => onForget(card, true)}
+                  disabled={!connected || forgetting}
+                  title="Delete this workflow from n8n — cannot be undone"
+                >
+                  DELETE
+                </Button>
               </li>
             );
           })}

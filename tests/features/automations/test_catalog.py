@@ -1059,3 +1059,115 @@ def test_activate_on_an_unknown_instance_is_404(
     client = app_with(settings, handler)
     response = client.post("/api/automations/instances/nope/workflows/wf-gcal/activate")
     assert response.status_code == 404
+
+
+# --- getting rid of a workflow ----------------------------------------------
+#
+# Installing a template twice leaves two workflows n8n considers unrelated
+# (duplicate names are legal, each copy gets its own id), and until these
+# routes existed Argus could only ever add.
+
+
+def test_delete_removes_the_workflow_from_n8n_and_the_cache(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    instance = _seed_instance(settings)
+    _seed_cached_workflow(settings, workflow_id="wf-dupe", name="Argus: Weather")
+    deleted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "DELETE" and path == "/api/v1/workflows/wf-dupe":
+            deleted.append(path)
+            return json_response(200, {"id": "wf-dupe"})
+        if request.method == "GET" and path == "/api/v1/workflows":
+            return json_response(200, {"data": []})  # gone from n8n now
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.request(
+        "DELETE", f"/api/automations/instances/{instance['id']}/workflows/wf-dupe"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert deleted == ["/api/v1/workflows/wf-dupe"]
+
+    # Dropped by the refresh pass's own prune, not by a second copy of that
+    # logic living in the delete route.
+    conn = _conn(settings)
+    try:
+        assert store.list_workflows(conn) == []
+    finally:
+        conn.close()
+
+
+def test_unregister_drops_only_the_argus_tag_and_keeps_the_others(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    """n8n's tag endpoint *replaces* the whole set, so unregistering has to
+    resend the survivors — sending an empty list would silently strip tags the
+    user added themselves."""
+    instance = _seed_instance(settings)
+    _seed_cached_workflow(settings, workflow_id="wf-keep", name="Argus: Weather")
+    sent_tags: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path == "/api/v1/workflows/wf-keep":
+            return json_response(
+                200,
+                {
+                    "id": "wf-keep",
+                    "tags": [
+                        {"id": "tag-argus", "name": "argus"},
+                        {"id": "tag-mine", "name": "personal"},
+                    ],
+                },
+            )
+        if request.method == "PUT" and path == "/api/v1/workflows/wf-keep/tags":
+            sent_tags.append(json.loads(request.content))
+            return json_response(200, [])
+        if request.method == "GET" and path == "/api/v1/workflows":
+            return json_response(200, {"data": []})  # no longer carries `argus`
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    client = app_with(settings, handler)
+    response = client.post(
+        f"/api/automations/instances/{instance['id']}/workflows/wf-keep/unregister"
+    )
+
+    assert response.status_code == 200
+    assert sent_tags == [[{"id": "tag-mine"}]], "the user's own tag must survive"
+
+    conn = _conn(settings)
+    try:
+        assert store.list_workflows(conn) == []
+    finally:
+        conn.close()
+
+
+def test_delete_that_n8n_refuses_is_502_and_leaves_the_cache_alone(
+    settings: Settings, fake_keyring: _FakeKeyring
+) -> None:
+    instance = _seed_instance(settings)
+    _seed_cached_workflow(settings, workflow_id="wf-dupe", name="Argus: Weather")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return json_response(403, {"message": "forbidden"})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    client = app_with(settings, handler)
+    response = client.request(
+        "DELETE", f"/api/automations/instances/{instance['id']}/workflows/wf-dupe"
+    )
+
+    assert response.status_code == 502
+    # Still in n8n, so it must still be in Argus — a cache that forgot it here
+    # would hide a workflow that is very much still running.
+    conn = _conn(settings)
+    try:
+        assert [row["id"] for row in store.list_workflows(conn)] == ["wf-dupe"]
+    finally:
+        conn.close()

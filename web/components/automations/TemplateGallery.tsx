@@ -4,6 +4,7 @@ import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/useConfirm";
 import {
   installAutomationTemplate,
   useAutomationTemplates,
@@ -39,10 +40,27 @@ function TemplateCard({
   onInstalled: () => void;
 }) {
   const { show } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function install() {
+    // Installing again is legitimate — it is how you pick up a corrected
+    // template — but n8n allows duplicate names and gives each copy its own
+    // id, so the second one is indistinguishable from the first afterwards
+    // except by the DUPLICATE badge on the registered list. Say so first.
+    if (template.installed) {
+      const answer = await confirm({
+        label: `Install ${template.name} again`,
+        message: `"${template.name}" is already installed. Install another copy?`,
+        detail:
+          "n8n allows duplicate names, so you will end up with two workflows that look identical. " +
+          "If you meant to replace the existing one, delete it from the ACTIVE tab first.",
+        confirmLabel: "INSTALL AGAIN",
+        tone: "primary",
+      });
+      if (answer === null) return;
+    }
     setInstalling(true);
     setError(null);
     try {
@@ -118,6 +136,7 @@ function TemplateCard({
       <Button className="mt-1 w-full" onClick={() => void install()} disabled={installing}>
         {installing ? "INSTALLING…" : template.installed ? "INSTALL AGAIN" : "INSTALL"}
       </Button>
+      {confirmDialog}
     </li>
   );
 }

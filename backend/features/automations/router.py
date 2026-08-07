@@ -1767,6 +1767,101 @@ def build_automations_router(
         """Compat shim mirroring ``install_template`` — one instance only."""
         return await _activate_workflow_core(workflow_id, _only_instance)
 
+    # --- getting rid of a workflow ------------------------------------------
+    #
+    # Two verbs, because "I don't want to see this in Argus" and "destroy this"
+    # are different intentions and only one of them is reversible.
+    #
+    # Neither prunes the cache by hand. The `argus` tag IS the registration, so
+    # a workflow that has been untagged or deleted simply stops coming back
+    # from `?tags=argus`, and `_refresh_instance`'s existing
+    # `delete_missing_workflows` pass drops it. Deleting the row here as well
+    # would be a second, divergent copy of that logic.
+
+    async def _forget_workflow_core(
+        workflow_id: str,
+        resolve_instance: Callable[[], dict[str, Any]],
+        *,
+        destroy: bool,
+    ) -> ConnectResult:
+        instance = resolve_instance()
+        api_key = _resolve_key(instance)
+        client = factory(instance, api_key)
+
+        try:
+            if destroy:
+                await client.delete_workflow(workflow_id)
+            else:
+                # Drop `argus` and keep every other tag. n8n's tag endpoint
+                # *replaces* the whole set and addresses tags by id, so the
+                # survivors have to be read off the workflow first — sending
+                # an empty list would silently strip unrelated tags the user
+                # put there themselves.
+                current = await client.get_workflow(workflow_id)
+                keep = [
+                    str(tag["id"])
+                    for tag in (current.get("tags") or [])
+                    if isinstance(tag, dict)
+                    and tag.get("id") is not None
+                    and tag.get("name") != DISCOVERY_TAG
+                ]
+                await client.set_workflow_tags(workflow_id, keep)
+        except N8nError as exc:
+            verb = "delete" if destroy else "unregister"
+            raise HTTPException(
+                status_code=502, detail=f"could not {verb} the workflow in n8n: {exc}"
+            ) from exc
+
+        conn = db()
+        try:
+            cached = store.get_workflow(conn, workflow_id, instance_id=instance["id"])
+            subject = (cached or {}).get("name") or workflow_id
+            _safe_record_event(
+                conn,
+                tag="INSTALL",
+                text=(
+                    f"deleted workflow {workflow_id} from n8n"
+                    if destroy
+                    else f"unregistered workflow {workflow_id} (still in n8n, untagged)"
+                ),
+                instance_id=instance["id"],
+                subject=subject,
+            )
+        finally:
+            conn.close()
+
+        await _refresh_instance(instance)
+        return ConnectResult(
+            ok=True,
+            detail=(
+                f"{subject} deleted from n8n"
+                if destroy
+                else f"{subject} unregistered — still in n8n, without the {DISCOVERY_TAG} tag"
+            ),
+        )
+
+    @router.delete(
+        "/automations/instances/{instance_id}/workflows/{workflow_id}",
+        response_model=ConnectResult,
+    )
+    async def delete_workflow_scoped(instance_id: str, workflow_id: str) -> ConnectResult:
+        """Destroy the workflow in n8n. Irreversible — Argus holds no copy of
+        the definition it could restore from."""
+        return await _forget_workflow_core(
+            workflow_id, lambda: _resolve_instance(instance_id), destroy=True
+        )
+
+    @router.post(
+        "/automations/instances/{instance_id}/workflows/{workflow_id}/unregister",
+        response_model=ConnectResult,
+    )
+    async def unregister_workflow_scoped(instance_id: str, workflow_id: str) -> ConnectResult:
+        """Drop the `argus` tag: the workflow leaves Argus but survives in n8n,
+        and re-tagging it there brings it straight back."""
+        return await _forget_workflow_core(
+            workflow_id, lambda: _resolve_instance(instance_id), destroy=False
+        )
+
     # --- the inbound surface's own credential -------------------------------
     #
     # These live on the LOCAL /api (localhost, unauthenticated like the rest of

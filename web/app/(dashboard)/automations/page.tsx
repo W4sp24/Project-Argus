@@ -13,7 +13,9 @@ import SegmentedControl from "@/components/ui/SegmentedControl";
 import { useConfirm } from "@/components/ui/useConfirm";
 import {
   activateAutomationWorkflow,
+  deleteAutomationWorkflow,
   runAutomation,
+  unregisterAutomationWorkflow,
   useAutomationInstances,
   useAutomationWidgets,
   useAutomations,
@@ -50,6 +52,7 @@ export default function AutomationsPage() {
   const [connecting, setConnecting] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
+  const [forgettingId, setForgettingId] = useState<string | null>(null);
 
   // Memoized so the "reset a stale filter" effect below doesn't see a new
   // array identity (and re-fire) on every render — only when the data itself
@@ -145,6 +148,50 @@ export default function AutomationsPage() {
     }
   }
 
+  /**
+   * Two ways to stop seeing a workflow, deliberately distinct: unregistering
+   * drops the `argus` tag and is undone by re-tagging in n8n, while deleting
+   * destroys it there. Argus holds no copy of the definition, so the second
+   * one cannot be walked back — hence the danger tone and the blunter message.
+   */
+  async function forgetWorkflow(card: AutomationCard, destroy: boolean) {
+    if (forgettingId) return;
+    const label = card.name ?? card.id;
+    const answer = await confirm(
+      destroy
+        ? {
+            label: `Delete ${label}`,
+            message: `Delete "${label}" from n8n?`,
+            detail:
+              "This destroys the workflow in n8n. Argus keeps no copy of it, so this cannot be undone.",
+            confirmLabel: "DELETE",
+            tone: "danger",
+          }
+        : {
+            label: `Unregister ${label}`,
+            message: `Stop showing "${label}" in Argus?`,
+            detail:
+              "Drops the argus tag. The workflow stays in n8n untouched — re-tag it there to bring it back.",
+            confirmLabel: "UNREGISTER",
+            tone: "primary",
+          },
+    );
+    if (answer === null) return;
+
+    setForgettingId(card.id);
+    try {
+      const result = destroy
+        ? await deleteAutomationWorkflow(card.instance_id, card.id)
+        : await unregisterAutomationWorkflow(card.instance_id, card.id);
+      show(`automations :: ${result.detail}`);
+      refreshAll();
+    } catch (error) {
+      show(error instanceof Error ? error.message : "could not remove it", { tone: "error" });
+    } finally {
+      setForgettingId(null);
+    }
+  }
+
   const showInstanceFilter = instances.length > 1;
 
   return (
@@ -216,6 +263,8 @@ export default function AutomationsPage() {
             onRun={(card) => void runWorkflow(card)}
             activatingId={activatingId}
             onActivate={(card) => void activateWorkflow(card)}
+            forgettingId={forgettingId}
+            onForget={(card, destroy) => void forgetWorkflow(card, destroy)}
           />
         )}
 

@@ -1398,6 +1398,29 @@ export function activateAutomationWorkflow(instanceId: string, workflowId: strin
   );
 }
 
+/**
+ * Destroy the workflow in n8n. Irreversible — Argus keeps no copy of the
+ * definition, so there is nothing to restore from.
+ */
+export function deleteAutomationWorkflow(instanceId: string, workflowId: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/automations/instances/${encodeURIComponent(instanceId)}/workflows/${encodeURIComponent(workflowId)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+/**
+ * Drop the `argus` tag: the workflow leaves Argus but survives in n8n, and
+ * re-tagging it there brings it back.
+ */
+export function unregisterAutomationWorkflow(instanceId: string, workflowId: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/automations/instances/${encodeURIComponent(instanceId)}/workflows/${encodeURIComponent(workflowId)}/unregister`,
+    undefined,
+  );
+}
+
 /** The inbound surface's configuration — never its token. */
 export interface ExternalSurfaceInfo {
   enabled: boolean;
