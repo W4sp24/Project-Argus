@@ -39,7 +39,7 @@
       "id": "gcal_create",
       "name": "Create Calendar Event",
       "type": "n8n-nodes-base.googleCalendar",
-      "typeVersion": 1,
+      "typeVersion": 1.3,
       "position": [220, 0],
       "parameters": {
         "operation": "create",

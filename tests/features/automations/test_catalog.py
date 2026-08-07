@@ -272,6 +272,41 @@ def _push_nodes(definition: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+#: Minimum `typeVersion` per vendor node, with the reason it is a floor rather
+#: than a preference. This is its own check because pinning a node too low has
+#: now broken two templates in the same *silent* way twice: n8n keeps the old
+#: version's behaviour alive for backwards compatibility, so an outdated
+#: typeVersion does not error — it quietly selects a code path that talks to a
+#: deprecated vendor endpoint, or drops parameters the template depends on.
+#: Both failures reached a user before anything here noticed.
+_MIN_TYPE_VERSIONS: dict[str, tuple[float, str]] = {
+    "n8n-nodes-base.googleCalendar": (
+        1.3,
+        "below 1.3 the node ignores top-level timeMin/timeMax and has no "
+        "options.recurringEventHandling, so the time window is never applied",
+    ),
+    "n8n-nodes-base.todoist": (
+        2.2,
+        "below 2.2 the node calls Todoist's /sync/v9 and /rest/v2, which now "
+        "answer 410 Gone; 2.2 is where n8n switched to /api/v1",
+    ),
+}
+
+
+@pytest.mark.parametrize("template_id", ALL_TEMPLATE_IDS)
+def test_vendor_nodes_are_not_pinned_below_their_working_version(template_id: str) -> None:
+    definition = catalog.load_definition(template_id)
+    for node in definition.get("nodes", []):
+        floor = _MIN_TYPE_VERSIONS.get(str(node.get("type")))
+        if floor is None:
+            continue
+        minimum, why = floor
+        assert float(node["typeVersion"]) >= minimum, (
+            f"{template_id}'s {node.get('name')!r} pins typeVersion "
+            f"{node['typeVersion']}, below {minimum}: {why}"
+        )
+
+
 @pytest.mark.parametrize("template_id", ALL_TEMPLATE_IDS)
 def test_form_trigger_declares_a_path_matching_its_webhook_id(template_id: str) -> None:
     """n8n requires `path` on a Form Trigger, and Argus builds the form URL as
@@ -337,17 +372,12 @@ def test_google_calendar_query_expands_recurring_events() -> None:
     `start` is the date the series began — so a standup created a year ago
     renders as a year-old entry on a widget titled "Upcoming Events".
 
-    `recurringEventHandling` and the top-level timeMin/timeMax this template
-    relies on both require node typeVersion >= 1.3; at typeVersion 1 they are
-    silently ignored, which is how the time window went unapplied.
+    The typeVersion floor these parameters depend on is enforced separately,
+    for every vendor node at once — see `_MIN_TYPE_VERSIONS`.
     """
     definition = catalog.load_definition("google-calendar")
     node = next(n for n in definition["nodes"] if n["type"] == "n8n-nodes-base.googleCalendar")
 
-    assert float(node["typeVersion"]) >= 1.3, (
-        "timeMin/timeMax at top level and options.recurringEventHandling both "
-        "need typeVersion >= 1.3; below that they are ignored without error"
-    )
     assert node["parameters"].get("options", {}).get("recurringEventHandling") == "expand"
     assert node["parameters"].get("timeMin")
     assert node["parameters"].get("timeMax")

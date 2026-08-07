@@ -17,7 +17,7 @@
       "id": "todoist",
       "name": "Get Active Tasks",
       "type": "n8n-nodes-base.todoist",
-      "typeVersion": 2,
+      "typeVersion": 2.2,
       "position": [220, 0],
       "parameters": {
         "resource": "task",
