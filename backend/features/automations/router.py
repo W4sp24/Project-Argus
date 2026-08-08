@@ -338,6 +338,7 @@ class TemplateOut(BaseModel):
     description: str
     kind: str
     widget_slug: str | None = None
+    action_slug: str | None = None
     replaces: str | None = None
     requires: list[str] = []
     #: Short factual badges (renderer, field count, cadence), derived from the
@@ -353,11 +354,50 @@ class TemplateOut(BaseModel):
             description=template.description,
             kind=template.kind,
             widget_slug=template.widget_slug,
+            action_slug=template.action_slug,
             replaces=template.replaces,
             requires=list(template.requires),
             chips=list(template.chips),
             installed=installed,
         )
+
+
+class ActionFieldOut(BaseModel):
+    """One input an action workflow's trigger asks for.
+
+    ``name`` is the key to put in the run payload. n8n's Form Trigger has no
+    machine name separate from the visible label, so this *is* the label —
+    which is why a caller must read it from here rather than hardcode it: an
+    action's payload keys change when someone renames a form field in n8n.
+    """
+
+    name: str
+    type: str
+    required: bool
+
+
+class ActionOut(BaseModel):
+    """An installed workflow that currently provides a capability.
+
+    The point of the indirection: a native panel knows it wants to *create a
+    task*, but cannot know the workflow id that does it — that id is generated
+    by the user's own n8n at install time, and differs per instance. So panels
+    ask by ``action_slug`` and fire whatever comes back through the ordinary
+    run route.
+    """
+
+    action_slug: str
+    template_id: str
+    workflow_id: str
+    workflow_name: str
+    instance_id: str
+    instance_name: str
+    #: An inactive workflow is installed but will refuse to fire — almost
+    #: always because its credential has not been granted in n8n yet. Reported
+    #: rather than filtered out, so the UI can explain *that* instead of
+    #: showing no affordance and no reason.
+    active: bool
+    fields: list[ActionFieldOut] = []
 
 
 class ExternalSurfaceInfo(BaseModel):
@@ -1565,6 +1605,76 @@ def build_automations_router(
             TemplateOut.from_template(template, installed=template.name in cached_names)
             for template in catalog.list_templates()
         ]
+
+    @router.get("/automations/actions", response_model=list[ActionOut])
+    def list_actions_route() -> list[ActionOut]:
+        """Installed action workflows, keyed by the capability they provide.
+
+        This is what lets a *native* panel reach n8n. `widget_slug` already
+        runs the other direction — a workflow pushes and a panel renders it —
+        but until now nothing could go outward: `calendar-insert` shipped,
+        installed cleanly, and was reachable from nowhere except the command
+        palette, because a panel cannot know the workflow id that n8n minted
+        for it at install time.
+
+        Resolution matches on workflow *name* against the bundled template's
+        name, the same rule `GET /automations/templates` already uses to
+        decide `installed` — deliberately the same rule, since a template the
+        gallery calls installed and an action the dashboard cannot find would
+        be an unexplainable pair of statements.
+
+        Unlike the run route, a name collision across instances is **not** a
+        409 here. This endpoint answers "can I offer this button?", and
+        failing the whole request would remove the affordance from the panel
+        with no way for the user to see why. So the best candidate wins:
+        active before inactive, then most recently seen.
+        """
+        conn = db()
+        try:
+            workflows = store.list_workflows(conn)
+            instance_names = {
+                inst["id"]: inst["name"]
+                for inst in store.load_instances(settings.automations_file)
+            }
+        finally:
+            conn.close()
+
+        by_name: dict[str, list[dict[str, Any]]] = {}
+        for row in workflows:
+            if row["name"]:
+                by_name.setdefault(row["name"], []).append(row)
+
+        actions: list[ActionOut] = []
+        for template in catalog.list_templates():
+            if not template.action_slug:
+                continue
+            candidates = by_name.get(template.name)
+            if not candidates:
+                # Not installed on any instance. Absent rather than present-
+                # and-empty: the caller's question is whether the capability
+                # exists at all.
+                continue
+            best = max(
+                candidates,
+                key=lambda row: (bool(row["active"]), row["last_seen_at"] or ""),
+            )
+            parsed = parse_workflow(best["schema_json"] or {})
+            actions.append(
+                ActionOut(
+                    action_slug=template.action_slug,
+                    template_id=template.id,
+                    workflow_id=best["id"],
+                    workflow_name=best["name"],
+                    instance_id=best["instance_id"],
+                    instance_name=instance_names.get(best["instance_id"], ""),
+                    active=bool(best["active"]),
+                    fields=[
+                        ActionFieldOut(name=f.name, type=f.type, required=f.required)
+                        for f in parsed.fields
+                    ],
+                )
+            )
+        return actions
 
     async def _install_template_core(
         template_id: str, resolve_instance: Callable[[], dict[str, Any]]

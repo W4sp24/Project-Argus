@@ -157,6 +157,165 @@ def _seed_cached_workflow(settings: Settings, *, workflow_id: str, name: str) ->
         conn.close()
 
 
+# --- GET /automations/actions: reaching a workflow from a native panel --------
+#
+# The inverse of `widget_slug`. A widget lets a workflow *feed* a panel; an
+# action slug lets a panel *reach* a workflow — without which an installed
+# action template is unreachable from anywhere but the command palette, which
+# is the state `calendar-insert` shipped in.
+
+
+def _seed_action_workflow(
+    settings: Settings,
+    *,
+    workflow_id: str,
+    name: str,
+    instance_id: str = "",
+    active: bool = True,
+    fields: list[str] | None = None,
+) -> None:
+    """Cache a workflow whose definition carries a real Form Trigger, so the
+    route's `parse_workflow` has fields to report."""
+    definition: dict[str, Any] = {"id": workflow_id, "name": name, "tags": ["argus"]}
+    if fields is not None:
+        definition["nodes"] = [
+            {
+                "id": "trigger",
+                "type": "n8n-nodes-base.formTrigger",
+                "webhookId": workflow_id,
+                "parameters": {
+                    "path": workflow_id,
+                    "responseMode": "lastNode",
+                    "formFields": {
+                        "values": [
+                            {"fieldLabel": label, "fieldType": "text", "requiredField": True}
+                            for label in fields
+                        ]
+                    },
+                },
+            }
+        ]
+    conn = _conn(settings)
+    try:
+        store.upsert_workflow(
+            conn,
+            workflow_id,
+            name=name,
+            tags=["argus"],
+            schema_json=definition,
+            active=active,
+            instance_id=instance_id,
+            now=fixed_clock,
+        )
+    finally:
+        conn.close()
+
+
+def _actions_by_slug(client: TestClient) -> dict[str, Any]:
+    response = client.get("/api/automations/actions")
+    assert response.status_code == 200
+    return {a["action_slug"]: a for a in response.json()}
+
+
+def test_actions_are_empty_when_nothing_is_installed(settings: Settings, fake_keyring) -> None:
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+    assert client.get("/api/automations/actions").json() == []
+
+
+def test_an_installed_action_template_resolves_by_slug(settings: Settings, fake_keyring) -> None:
+    instance = _seed_instance(settings)
+    _seed_action_workflow(
+        settings,
+        workflow_id="wf-1",
+        name="Argus: Add Todoist Task",
+        instance_id=instance["id"],
+        fields=["Task", "Due", "Priority"],
+    )
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    action = _actions_by_slug(client)["task.create"]
+
+    assert action["template_id"] == "todoist-insert"
+    assert action["workflow_id"] == "wf-1"
+    assert action["instance_id"] == instance["id"]
+    assert action["instance_name"] == "home"
+    assert action["active"] is True
+    # The payload keys a panel must send. n8n has no machine name separate from
+    # the visible label, so these *are* the labels — reported rather than
+    # assumed, since renaming a field in n8n renames the key.
+    assert [f["name"] for f in action["fields"]] == ["Task", "Due", "Priority"]
+
+
+def test_a_display_template_never_resolves_as_an_action(settings: Settings, fake_keyring) -> None:
+    """`todoist` and `todoist-insert` are both Todoist templates; only one of
+    them is something a panel can fire."""
+    _seed_action_workflow(
+        settings, workflow_id="wf-1", name="Argus: Todoist → Task List Widget", fields=[]
+    )
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    assert client.get("/api/automations/actions").json() == []
+
+
+def test_an_inactive_action_is_reported_not_hidden(settings: Settings, fake_keyring) -> None:
+    """Inactive almost always means its credential has not been granted in n8n.
+    Filtering it out would leave the panel with no button and no explanation;
+    reporting it lets the UI say why."""
+    _seed_action_workflow(
+        settings, workflow_id="wf-1", name="Argus: Add Calendar Event", active=False, fields=[]
+    )
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    assert _actions_by_slug(client)["calendar.create"]["active"] is False
+
+
+def test_an_active_copy_wins_a_cross_instance_name_collision(
+    settings: Settings, fake_keyring
+) -> None:
+    """Unlike the run route, a collision here is not a 409. This endpoint
+    answers "can I offer this button?", and failing the request would remove
+    the affordance with no way for the user to see why — so the best candidate
+    wins instead."""
+    first = _seed_instance(settings, name="home")
+    second = _seed_instance(settings, name="work", base_url="http://work.test")
+    _seed_action_workflow(
+        settings,
+        workflow_id="wf-inactive",
+        name="Argus: Add Todoist Task",
+        instance_id=first["id"],
+        active=False,
+        fields=[],
+    )
+    _seed_action_workflow(
+        settings,
+        workflow_id="wf-active",
+        name="Argus: Add Todoist Task",
+        instance_id=second["id"],
+        active=True,
+        fields=[],
+    )
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    action = _actions_by_slug(client)["task.create"]
+
+    assert action["workflow_id"] == "wf-active"
+    assert action["instance_id"] == second["id"]
+
+
+def test_an_action_with_no_parseable_trigger_still_resolves(
+    settings: Settings, fake_keyring
+) -> None:
+    """A cached definition without nodes (older cache rows carry only the stub)
+    must still yield the workflow — with no fields — rather than 500."""
+    _seed_cached_workflow(settings, workflow_id="wf-1", name="Argus: Complete Todoist Task")
+    client = app_with(settings, lambda request: json_response(200, {"data": []}))
+
+    action = _actions_by_slug(client)["task.complete"]
+
+    assert action["workflow_id"] == "wf-1"
+    assert action["fields"] == []
+
+
 # --- template-shape helpers --------------------------------------------------
 
 _TRIGGER_TYPES = {"n8n-nodes-base.formTrigger", "n8n-nodes-base.webhook"}
@@ -168,6 +327,11 @@ _TRIGGER_TYPES = {"n8n-nodes-base.formTrigger", "n8n-nodes-base.webhook"}
 _EXPECTED_RESPOND_MODE = {
     "mobile-capture": "lastNode",
     "calendar-insert": "lastNode",
+    "todoist-insert": "lastNode",
+    # A Webhook trigger cannot use "lastNode" — n8n spells the equivalent as
+    # "responseNode", answered by an explicit Respond to Webhook node (asserted
+    # separately below). Same guarantee, different node type.
+    "todoist-complete": "responseNode",
 }
 
 
@@ -238,6 +402,104 @@ def test_calendar_insert_is_present_action_and_replaces_gcal_write_path() -> Non
     assert template.kind == "action"
     assert template.replaces == "backend/connectors/gcal.py"
     assert "Google Calendar" in template.requires
+
+
+#: Action templates that deliberately expose no capability to a native panel.
+#: Listed explicitly rather than allowed by omission: a missing `action_slug`
+#: is not an error anywhere — `GET /automations/actions` simply resolves
+#: nothing — so the failure mode is a template that installs cleanly and is
+#: then reachable from nowhere but the command palette, which is the state
+#: `calendar-insert` shipped in. Requiring the choice to be written down is
+#: what makes forgetting it visible.
+_PANEL_LESS_ACTIONS = {
+    # A form the user opens on their phone. Nothing in the app fires it, so
+    # there is no panel that would ask for it by slug.
+    "mobile-capture",
+}
+
+
+def test_every_action_template_declares_an_action_slug_or_opts_out() -> None:
+    for template in catalog.list_templates():
+        if template.kind != "action":
+            assert template.action_slug is None, (
+                f"{template.id} is a display template but declares an action_slug"
+            )
+        elif template.id in _PANEL_LESS_ACTIONS:
+            assert template.action_slug is None, (
+                f"{template.id} is listed as panel-less but declares an action_slug"
+            )
+        else:
+            assert template.action_slug, (
+                f"{template.id} is an action template but declares no action_slug, so "
+                "no native panel can find it — add one, or add it to _PANEL_LESS_ACTIONS"
+            )
+
+
+def test_action_slugs_are_unique_across_templates() -> None:
+    """Two templates claiming one slug would make which workflow a panel fires
+    depend on catalog ordering."""
+    slugs = [t.action_slug for t in catalog.list_templates() if t.action_slug]
+    assert len(slugs) == len(set(slugs)), f"duplicate action slugs: {slugs}"
+
+
+def test_todoist_write_templates_are_present_and_require_todoist() -> None:
+    templates = {t.id: t for t in catalog.list_templates()}
+    for template_id, slug in (
+        ("todoist-insert", "task.create"),
+        ("todoist-complete", "task.complete"),
+    ):
+        assert template_id in templates, f"{template_id} missing from the gallery"
+        template = templates[template_id]
+        assert template.kind == "action"
+        assert template.action_slug == slug
+        assert "Todoist" in template.requires
+        assert template.widget_slug is None
+
+
+def test_todoist_complete_answers_the_run_with_an_explicit_respond_node() -> None:
+    """`responseMode: responseNode` names a node that must actually exist — n8n
+    otherwise holds the request open until it times out, and Argus records the
+    run as a 30s timeout rather than the success it was.
+
+    The body matters too: `_dispatch_result` reads a returned `{"ok": ...}` as
+    `mode="status"`, which is what turns a fired webhook into a *reported*
+    outcome instead of a bare ack.
+    """
+    definition = catalog.load_definition("todoist-complete")
+    respond = [
+        node
+        for node in definition["nodes"]
+        if node.get("type") == "n8n-nodes-base.respondToWebhook"
+    ]
+    assert respond, "responseMode=responseNode with no Respond to Webhook node hangs the run"
+    assert '"ok"' in str(respond[0]["parameters"].get("responseBody", ""))
+
+
+def test_todoist_templates_speak_argus_priority_vocabulary() -> None:
+    """Todoist encodes p1 as `4`; Argus's TaskItem/widget contract spells it
+    `highest`. The translation lives in the template expression because that is
+    the only place the *source system's* encoding is known — pushing a raw `4`
+    would fail `_validate_list`'s priority check at the door."""
+    body = str(_push_nodes(catalog.load_definition("todoist"))[0]["parameters"]["jsonBody"])
+    assert "highest" in body and "4:" in body.replace(" ", "").replace("'", "")
+
+
+def test_todoist_display_template_pushes_the_fields_tasks_due_reads() -> None:
+    """`sources._tasks_from_list` maps this payload onto TaskItem, and the
+    agenda drops an external task with no `due`. A push of text/sub alone
+    therefore renders TASKS.DUE *empty* while the badge reads VIA N8N — which
+    is exactly what shipped."""
+    body = str(_push_nodes(catalog.load_definition("todoist"))[0]["parameters"]["jsonBody"])
+    for field in ('"id"', '"due"', '"priority"', '"tags"', '"href"'):
+        assert field in body, f"the todoist push omits {field}"
+
+
+def test_calendar_template_pushes_end_and_all_day() -> None:
+    """Without `end` every event is zero-length: `durationLabel` renders "" and
+    `insights._event_hours` counts the whole day as 0 hours of meetings."""
+    body = str(_push_nodes(catalog.load_definition("google-calendar"))[0]["parameters"]["jsonBody"])
+    assert '"end"' in body and "end.dateTime" in body and "end.date" in body
+    assert '"all_day"' in body
 
 
 # --- A2: the template could actually run ------------------------------------

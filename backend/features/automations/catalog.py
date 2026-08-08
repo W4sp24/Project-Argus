@@ -100,6 +100,14 @@ class Template:
     #: What Argus-native code path this template supersedes, if any — e.g.
     #: "backend/connectors/gcal.py". `None` for a genuinely new capability.
     replaces: str | None
+    #: The capability this action template provides, for `kind="action"` only.
+    #: Where `widget_slug` lets a workflow *feed* a native panel, this lets a
+    #: native panel *reach* a workflow: TASKS.DUE asks for `"task.create"`
+    #: rather than for a workflow id it cannot know, and gets whichever
+    #: installed workflow currently provides it. Without this an action
+    #: template is installable and then unreachable from anywhere but the
+    #: command palette — which is what `calendar-insert` was.
+    action_slug: str | None
     #: Credential names the user must grant *in n8n* before this template is
     #: useful (e.g. `("Google Calendar",)`). Never a secret Argus holds or
     #: could hold — see `router.install_template`'s docstring for why that
@@ -177,8 +185,35 @@ _TEMPLATE_META: dict[str, dict[str, Any]] = {
         ),
         "kind": "action",
         "widget_slug": None,
+        "action_slug": "calendar.create",
         "replaces": "backend/connectors/gcal.py",
         "requires": ("Google Calendar",),
+    },
+    "todoist-insert": {
+        "description": (
+            "A form for adding a Todoist task. Installing it is what makes "
+            "TASKS.DUE's quick-add write to Todoist instead of only to the "
+            "vault — the display template above reads your tasks, this one is "
+            "the write side. Also usable on its own from a phone."
+        ),
+        "kind": "action",
+        "widget_slug": None,
+        "action_slug": "task.create",
+        "replaces": "backend/connectors/todoist.py",
+        "requires": ("Todoist",),
+    },
+    "todoist-complete": {
+        "description": (
+            "Closes a Todoist task by id. Argus fires this when you tick a "
+            "Todoist-sourced row in TASKS.DUE; without it those rows are "
+            "read-only, because the vault's checkbox writer has nothing to "
+            "edit for a task that does not live in the vault."
+        ),
+        "kind": "action",
+        "widget_slug": None,
+        "action_slug": "task.complete",
+        "replaces": "backend/connectors/todoist.py",
+        "requires": ("Todoist",),
     },
 }
 
@@ -191,6 +226,8 @@ _TEMPLATE_IDS: tuple[str, ...] = (
     "weather",
     "mobile-capture",
     "calendar-insert",
+    "todoist-insert",
+    "todoist-complete",
 )
 
 
@@ -295,6 +332,7 @@ def list_templates() -> tuple[Template, ...]:
                 kind=meta["kind"],
                 widget_slug=meta["widget_slug"],
                 replaces=meta["replaces"],
+                action_slug=meta.get("action_slug"),
                 requires=meta["requires"],
                 chips=_derive_chips(definition),
             )
