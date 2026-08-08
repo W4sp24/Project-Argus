@@ -39,25 +39,49 @@ function resolveDate(token: string): string {
   return token; // already YYYY-MM-DD
 }
 
-/** Parse quick-add input into the exact line text to hand to `/api/capture`. */
-export function parseQuickAdd(input: string): string {
+/** The recognized parts of a quick-add string, before any rendering. */
+export interface QuickAddParts {
+  /** The title, with the priority and date tokens removed. `#tags` stay inline. */
+  text: string;
+  /** ISO `YYYY-MM-DD`, or `null` when the input named no date. */
+  due: string | null;
+  /** `"1" | "2" | "3"`, or `null`. */
+  priority: "1" | "2" | "3" | null;
+}
+
+/**
+ * Split quick-add input into its parts without rendering any of them.
+ *
+ * Extracted from {@link parseQuickAdd} because the same input now has two
+ * destinations with different shapes: the vault wants one markdown line with
+ * emoji markers, and an n8n `task.create` workflow wants discrete form fields.
+ * Rendering the line and then re-parsing it for the second path would make the
+ * emoji vocabulary a wire format between two things that never needed to share
+ * one.
+ */
+export function splitQuickAdd(input: string): QuickAddParts {
   let text = input.trim();
-  let priorityMark = "";
-  let dueMeta = "";
+  let priority: "1" | "2" | "3" | null = null;
+  let due: string | null = null;
 
   const priorityMatch = text.match(PRIORITY_RE);
   if (priorityMatch) {
-    priorityMark = PRIORITY_MARK[priorityMatch[1] as "1" | "2" | "3"];
+    priority = priorityMatch[1] as "1" | "2" | "3";
     text = (text.slice(0, priorityMatch.index) + text.slice(priorityMatch.index! + priorityMatch[0].length)).trim();
   }
 
   const dateMatch = text.match(DATE_RE);
   if (dateMatch) {
-    dueMeta = `📅 ${resolveDate(dateMatch[1])}`;
+    due = resolveDate(dateMatch[1]);
     text = (text.slice(0, dateMatch.index) + text.slice(dateMatch.index! + dateMatch[0].length)).trim();
   }
 
-  text = text.replace(/\s+/g, " ").trim();
-  const metaParts = [priorityMark, dueMeta].filter(Boolean);
+  return { text: text.replace(/\s+/g, " ").trim(), due, priority };
+}
+
+/** Parse quick-add input into the exact line text to hand to `/api/capture`. */
+export function parseQuickAdd(input: string): string {
+  const { text, due, priority } = splitQuickAdd(input);
+  const metaParts = [priority ? PRIORITY_MARK[priority] : "", due ? `📅 ${due}` : ""].filter(Boolean);
   return metaParts.length ? `${text} ${metaParts.join(" ")}` : text;
 }

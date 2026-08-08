@@ -1479,6 +1479,125 @@ export function discoverN8nWorkflows(body: { base_url: string; api_key: string }
   return mutateJSON<DiscoveredWorkflow[]>("/api/automations/instances/discover", body);
 }
 
+/** One input an action workflow's trigger asks for. `name` is the payload key. */
+export interface AutomationActionField {
+  name: string;
+  type: string;
+  required: boolean;
+}
+
+/**
+ * An installed workflow that provides a capability a native panel can use.
+ *
+ * A panel knows it wants to *create a task*; it cannot know the workflow id,
+ * because the user's own n8n minted that at install time. So it asks by
+ * `action_slug` and fires whatever comes back.
+ */
+export interface AutomationAction {
+  /** "calendar.create" | "task.create" | "task.complete" */
+  action_slug: string;
+  template_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  instance_id: string;
+  instance_name: string;
+  /** Installed but inactive — nearly always an ungranted credential in n8n. */
+  active: boolean;
+  fields: AutomationActionField[];
+}
+
+/**
+ * Installed action workflows, indexed by slug — GET /api/automations/actions.
+ *
+ * Returns a lookup rather than the raw list because every caller wants "is
+ * this one capability available?", never the whole set.
+ */
+export function useAutomationActions(): {
+  actions: Record<string, AutomationAction>;
+  isLoading: boolean;
+} {
+  const { data, isLoading } = useSWR<AutomationAction[]>("/api/automations/actions", fetcher);
+  const actions: Record<string, AutomationAction> = {};
+  for (const action of data ?? []) actions[action.action_slug] = action;
+  return { actions, isLoading };
+}
+
+/**
+ * Fire an action workflow with a payload keyed by its own field names.
+ *
+ * `values` is keyed by the *label* the workflow's form declares, which is why
+ * callers build it from `action.fields` rather than hardcoding: renaming a
+ * field in n8n changes the payload keys, and a hardcoded key would silently
+ * send nothing under the new name.
+ */
+export function runAutomationAction(
+  action: AutomationAction,
+  values: Record<string, unknown>,
+): Promise<AutomationRunResult> {
+  return runAutomation(action.workflow_id, values, action.instance_id);
+}
+
+/** Find an action's field name case-insensitively, or undefined if it has none. */
+export function actionFieldName(
+  action: AutomationAction,
+  wanted: string,
+): string | undefined {
+  return action.fields.find((f) => f.name.toLowerCase() === wanted.toLowerCase())?.name;
+}
+
+/** One calendar event on the agenda. `source` is "gcal" or "n8n". */
+export interface AgendaEvent {
+  title: string;
+  start: string;
+  end: string;
+  all_day: boolean;
+  source?: string;
+  location?: string | null;
+}
+
+/** One task on the agenda — from the vault, a connector, or an n8n widget. */
+export interface AgendaTask {
+  text: string;
+  done: boolean;
+  due: string | null;
+  scheduled: string | null;
+  priority: string | null;
+  tags: string[];
+  source: string;
+  path: string | null;
+  line: number | null;
+  external_id?: string | null;
+  href?: string | null;
+}
+
+/** GET /api/agenda — everything the Today view needs for one date. */
+export interface Agenda {
+  date: string;
+  events: AgendaEvent[];
+  tasks: AgendaTask[];
+  top_tasks: AgendaTask[];
+  configured: { gcal: boolean; todoist: boolean };
+  /** Populated only for a connector that failed *this* request. */
+  connector_errors?: Record<string, string>;
+}
+
+/**
+ * The agenda for one day, or today when `day` is omitted.
+ *
+ * One hook rather than the three hand-mirrored `useSWR("/api/agenda")` calls
+ * this replaced: those each declared their own local `Agenda` interface, and
+ * each had drifted to a different subset of the real response —
+ * `connector_errors` was in none of them, which is why a failing connector
+ * rendered as an empty panel with a healthy badge.
+ *
+ * Omitting `day` keeps the key as the bare `/api/agenda`, so the server and
+ * client agree on the first render; a date only appears in the key once the
+ * user navigates, which is necessarily after mount.
+ */
+export function useAgenda(day?: string | null) {
+  return useSWR<Agenda>(day ? `/api/agenda?day=${encodeURIComponent(day)}` : "/api/agenda", fetcher);
+}
+
 /** Which path is currently answering for each migratable source. */
 export interface SourceProvenance {
   /** "n8n" | "connector" */

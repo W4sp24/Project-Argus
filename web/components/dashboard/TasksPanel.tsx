@@ -2,31 +2,22 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
-import useSWR from "swr";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
-import { apiFetch, fetcher, mutateJSON, useSourceProvenance } from "@/lib/api";
-import { parseQuickAdd } from "@/lib/taskQuickAdd";
-
-interface AgendaTask {
-  text: string;
-  done: boolean;
-  due: string | null;
-  scheduled: string | null;
-  priority: string | null;
-  tags: string[];
-  source: string;
-  path: string | null;
-  line: number | null;
-}
-
-interface Agenda {
-  tasks: AgendaTask[];
-  top_tasks: AgendaTask[];
-  configured: { gcal: boolean; todoist: boolean };
-}
+import {
+  actionFieldName,
+  apiFetch,
+  mutateJSON,
+  runAutomationAction,
+  useAgenda,
+  useAutomationActions,
+  useSourceProvenance,
+  type AgendaTask,
+} from "@/lib/api";
+import { openExternalUrl } from "@/lib/quickLinks";
+import { parseQuickAdd, splitQuickAdd } from "@/lib/taskQuickAdd";
 
 function localToday(): string {
   const now = new Date();
@@ -36,7 +27,8 @@ function localToday(): string {
 }
 
 const anchor = (task: AgendaTask) => task.due ?? task.scheduled;
-const taskKey = (task: AgendaTask, i: number) => `${task.path ?? "todoist"}:${task.line ?? i}:${task.text}`;
+const taskKey = (task: AgendaTask, i: number) =>
+  `${task.path ?? task.external_id ?? "todoist"}:${task.line ?? i}:${task.text}`;
 
 /** Rebuild a task line with a new description, preserving checkbox + metadata verbatim. */
 function spliceDescription(raw: string, text: string): string | null {
@@ -51,7 +43,8 @@ function spliceDescription(raw: string, text: string): string | null {
 function priorityMeta(priority: string | null): { label: string; colorClass: string } | null {
   if (priority === "highest") return { label: "P1", colorClass: "border-danger text-danger" };
   if (priority === "high") return { label: "P2", colorClass: "border-warn text-warn" };
-  if (priority === "medium" || priority === "low") return { label: "P3", colorClass: "border-ink-faint text-ink-faint" };
+  if (priority === "medium") return { label: "P3", colorClass: "border-ink-faint text-ink-faint" };
+  if (priority === "low") return { label: "P4", colorClass: "border-ink-faint text-ink-faint" };
   return null;
 }
 
@@ -76,12 +69,24 @@ function DueBadge({ task, today }: { task: AgendaTask; today: string }) {
  * kept verbatim; only the rendering changed).
  */
 export default function TasksPanel() {
-  const { data: agenda, mutate } = useSWR<Agenda>("/api/agenda", fetcher);
+  const { data: agenda, mutate } = useAgenda();
   const { data: provenance } = useSourceProvenance();
+  const { actions } = useAutomationActions();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [quickAdd, setQuickAdd] = useState("");
+  const [adding, setAdding] = useState(false);
   const { show: flash } = useToast();
+
+  const createTask = actions["task.create"];
+  const completeTask = actions["task.complete"];
+  const todoistError = agenda?.connector_errors?.todoist;
+  // External tasks the user has just closed. The `tasks` widget only refreshes
+  // on its workflow's own schedule — up to 15 minutes — so without this the
+  // row a user just ticked reappears, unticked, on the very next revalidate.
+  // Keyed by external id, and cleared once the task stops arriving, so it
+  // never outlives the payload it is correcting.
+  const suppressed = useRef<Set<string>>(new Set());
   // Tasks completed this session — /api/agenda only ever returns OPEN tasks
   // (backend filters `done = 0`), so a toggled-done task vanishes from the
   // next revalidate. We keep a local record so the DONE group stays
@@ -172,27 +177,94 @@ export default function TasksPanel() {
     mutate();
   }
 
+  /**
+   * Close an external task by firing the installed `task.complete` workflow.
+   *
+   * Separate from `toggle` because there is no line to rewrite: an n8n/Todoist
+   * task has no `path`/`line`, which is exactly why these rows were disabled
+   * before. The handle is `external_id`, carried through the widget payload.
+   */
+  async function completeExternal(task: AgendaTask, key: string) {
+    if (!completeTask || !task.external_id) return;
+    const id = task.external_id;
+    suppressed.current.add(id);
+    doneSession.current.set(key, { ...task, done: true });
+    forceRender((n) => n + 1);
+    try {
+      const idKey = actionFieldName(completeTask, "taskId") ?? "taskId";
+      const result = await runAutomationAction(completeTask, { [idKey]: id });
+      if (result.status !== "ok" && result.status !== "running") {
+        throw new Error(result.message ?? `n8n reported ${result.status}`);
+      }
+      flash(`done :: ${task.text} — closed in Todoist`);
+    } catch (error) {
+      // Roll the row back: it is still open upstream, and leaving it struck
+      // through would be the app lying about a write that did not happen.
+      suppressed.current.delete(id);
+      doneSession.current.delete(key);
+      forceRender((n) => n + 1);
+      flash(error instanceof Error ? error.message : "Could not close the task");
+    }
+  }
+
   async function submitQuickAdd(event: React.FormEvent) {
     event.preventDefault();
     const raw = quickAdd.trim();
-    if (!raw) return;
+    if (!raw || adding) return;
+    setAdding(true);
     setQuickAdd("");
-    const composed = parseQuickAdd(raw);
     try {
-      const result = await mutateJSON<{ path: string }>("/api/capture", { text: composed });
-      flash(`captured → ${result.path}`);
+      if (createTask) {
+        // n8n path: discrete fields, keyed by the workflow's own labels.
+        const parts = splitQuickAdd(raw);
+        const values: Record<string, unknown> = {};
+        const taskKeyName = actionFieldName(createTask, "Task");
+        const dueKeyName = actionFieldName(createTask, "Due");
+        const prioKeyName = actionFieldName(createTask, "Priority");
+        if (taskKeyName) values[taskKeyName] = parts.text;
+        if (dueKeyName && parts.due) values[dueKeyName] = parts.due;
+        if (prioKeyName && parts.priority) values[prioKeyName] = `P${parts.priority}`;
+
+        const result = await runAutomationAction(createTask, values);
+        if (result.status !== "ok" && result.status !== "running") {
+          throw new Error(result.message ?? `n8n reported ${result.status}`);
+        }
+        // The task now exists in Todoist, not in Argus — it appears here on
+        // the tasks workflow's next poll, so say that rather than implying
+        // the list is about to change.
+        flash(`added to todoist :: ${parts.text} — appears on the next sync`);
+      } else {
+        const result = await mutateJSON<{ path: string }>("/api/capture", {
+          text: parseQuickAdd(raw),
+        });
+        flash(`captured → ${result.path}`);
+      }
     } catch (error) {
       flash(error instanceof Error ? error.message : "Capture failed");
     }
+    setAdding(false);
     mutate();
   }
 
-  const tasks = agenda?.tasks ?? [];
+  const incoming = agenda?.tasks ?? [];
+  // Drop anything the user closed upstream but the workflow has not re-polled
+  // yet, and forget the suppression as soon as it stops arriving — otherwise a
+  // task legitimately reopened in Todoist could never come back.
+  const arrivingIds = new Set(incoming.map((t) => t.external_id).filter(Boolean) as string[]);
+  for (const id of [...suppressed.current]) {
+    if (!arrivingIds.has(id)) suppressed.current.delete(id);
+  }
+  const tasks = incoming.filter((t) => !(t.external_id && suppressed.current.has(t.external_id)));
+
   const overdue = tasks.filter((t) => {
     const date = anchor(t);
     return date !== null && date < today;
   });
   const dueToday = tasks.filter((t) => anchor(t) === today);
+  // Undated tasks match neither filter above, and are excluded from UPCOMING
+  // by `openKeys` — before this group they were fetched, counted, and rendered
+  // nowhere. That is most of a normal Todoist inbox, and every fresh capture.
+  const undated = tasks.filter((t) => anchor(t) === null && !t.done);
   const openKeys = new Set(tasks.map((t, i) => taskKey(t, i)));
   const upcoming = (agenda?.top_tasks ?? []).filter((t, i) => !openKeys.has(taskKey(t, i)));
   const done = [...doneSession.current.entries()]
@@ -202,6 +274,7 @@ export default function TasksPanel() {
   const groups: { label: string; items: AgendaTask[] }[] = [
     { label: "OVERDUE", items: overdue },
     { label: "TODAY", items: dueToday },
+    { label: "NO DUE DATE", items: undated },
     { label: "UPCOMING", items: upcoming },
     { label: "DONE", items: done },
   ];
@@ -219,6 +292,15 @@ export default function TasksPanel() {
           >
             TODOIST: VIA N8N
           </span>
+        ) : todoistError ? (
+          // "WIRED" over an empty list is the app claiming you have no tasks
+          // when it could not actually ask.
+          <span
+            className="font-mono text-meta uppercase tracking-wide text-danger"
+            title={todoistError}
+          >
+            TODOIST: FAILING
+          </span>
         ) : agenda?.configured.todoist ? (
           <span className="font-mono text-meta uppercase tracking-wide text-ok">TODOIST: WIRED</span>
         ) : (
@@ -231,16 +313,51 @@ export default function TasksPanel() {
         )
       }
     >
-      <form onSubmit={submitQuickAdd} className="mb-4 flex items-center gap-2 border border-line px-3 py-2 focus-within:border-lineHi">
-        <span className="shrink-0 font-mono text-[var(--ac)]">＋</span>
+      {todoistError && (
+        <p className="mb-3 font-mono text-meta text-danger" role="alert">
+          todoist unavailable :: {todoistError}
+        </p>
+      )}
+
+      <form
+        onSubmit={submitQuickAdd}
+        className="mb-1 flex items-center gap-2 border border-line px-3 py-2 focus-within:border-lineHi"
+      >
         <input
           value={quickAdd}
           onChange={(event) => setQuickAdd(event.target.value)}
-          placeholder="review PR p1 #argus tomorrow"
+          placeholder={
+            createTask ? "add to todoist — review PR p1 tomorrow" : "review PR p1 #argus tomorrow"
+          }
           aria-label="Add a task"
           className="min-w-0 flex-1 bg-transparent text-body placeholder:text-ink-faint focus:outline-none"
         />
+        {/* Was a bare <span>, so the form had no submit control at all:
+            clicking ＋ did nothing and only Enter worked. */}
+        <Button
+          type="submit"
+          variant="ghost"
+          aria-label="Add task"
+          disabled={adding || !quickAdd.trim()}
+          className="shrink-0 text-[var(--ac)] hover:text-[var(--ac)]"
+        >
+          {adding ? "…" : "＋"}
+        </Button>
       </form>
+      {/* Which store the ＋ writes to is not guessable from the field, and the
+          two are not interchangeable — one syncs to your phone, one does not. */}
+      <p className="mb-4 font-mono text-micro uppercase tracking-[0.12em] text-ink-faint">
+        {createTask ? (
+          <>→ todoist, via {createTask.workflow_name}</>
+        ) : (
+          <>
+            → vault capture ·{" "}
+            <Link href="/automations" className="hover:text-[var(--ac)]">
+              install the todoist action to write to todoist →
+            </Link>
+          </>
+        )}
+      </p>
 
       {groups.map((group) => (
         <div key={group.label} className="mb-4 last:mb-0">
@@ -255,14 +372,24 @@ export default function TasksPanel() {
               {group.items.map((task, i) => {
                 const key = taskKey(task, i);
                 const editable = task.source === "vault" && !!task.path && !!task.line;
+                // An external task has no vault line to rewrite, so it can only
+                // be closed by asking its own service — which is possible
+                // exactly when the `task.complete` workflow is installed.
+                const closable =
+                  !editable && !task.done && !!task.external_id && !!completeTask;
                 const prio = priorityMeta(task.priority);
                 const tag = task.tags?.[0];
                 return (
                   <li key={key} className="group flex items-center gap-2.5 py-1.5">
                     <button
                       aria-label={task.done ? "Mark not done" : "Mark done"}
-                      disabled={!editable}
-                      onClick={() => toggle(task, key)}
+                      disabled={!editable && !closable}
+                      title={
+                        closable
+                          ? `Close in Todoist via ${completeTask!.workflow_name}`
+                          : undefined
+                      }
+                      onClick={() => (closable ? completeExternal(task, key) : toggle(task, key))}
                       className={`flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full border-2 text-meta leading-none transition-colors disabled:opacity-40 ${
                         task.done
                           ? "border-ok bg-ok text-void"
@@ -287,6 +414,14 @@ export default function TasksPanel() {
                           className="min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1 text-body focus:outline-none"
                         />
                       </form>
+                    ) : task.href ? (
+                      <button
+                        onClick={() => openExternalUrl(task.href!)}
+                        title={`Open in ${task.source === "n8n" ? "Todoist" : task.source}`}
+                        className={`min-w-0 flex-1 truncate text-left text-body hover:text-[var(--ac)] hover:underline ${task.done ? "text-ink-faint line-through" : "text-ink"}`}
+                      >
+                        {task.text}
+                      </button>
                     ) : (
                       <span
                         className={`min-w-0 flex-1 truncate text-body ${task.done ? "text-ink-faint line-through" : "text-ink"}`}
