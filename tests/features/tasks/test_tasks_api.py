@@ -65,6 +65,82 @@ def test_agenda_merges_events_vault_and_todoist(client: TestClient) -> None:
     assert len(payload["top_tasks"]) <= 3
 
 
+def test_agenda_carries_undated_external_tasks(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An undated external task used to be dropped outright.
+
+    That is what an inbox item *is* in both Todoist and the n8n `tasks` widget
+    — usually most of the list — so the filter did not trim the panel, it
+    emptied it. The n8n path made it worse: pushed tasks arrived with no `due`
+    at all, so installing the Todoist template blanked TASKS.DUE while the
+    badge still read `TODOIST: VIA N8N`.
+    """
+    from backend.connectors import gcal, todoist
+
+    monkeypatch.setattr(gcal, "list_events", lambda day, service=None: [])
+    monkeypatch.setattr(gcal, "configured", lambda: False)
+    monkeypatch.setattr(
+        todoist,
+        "list_tasks",
+        lambda api=None: [
+            TaskItem(text="Dated errand", due=TODAY, source="todoist"),
+            TaskItem(text="Undated inbox item", source="todoist"),
+        ],
+    )
+    monkeypatch.setattr(todoist, "configured", lambda: True)
+    client = TestClient(create_app(Settings(_vault_path=vault)))
+
+    texts = [task["text"] for task in client.get("/api/agenda").json()["tasks"]]
+
+    assert "Dated errand" in texts
+    assert "Undated inbox item" in texts
+
+
+def test_agenda_caps_how_many_undated_external_tasks_it_carries(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The connector returns every open task across every project — unlike the
+    template, which limits to 25. TASKS.DUE is a dashboard panel, not an inbox."""
+    from backend.connectors import gcal, todoist
+    from backend.features.tasks.router import UNDATED_EXTERNAL_LIMIT
+
+    monkeypatch.setattr(gcal, "list_events", lambda day, service=None: [])
+    monkeypatch.setattr(gcal, "configured", lambda: False)
+    monkeypatch.setattr(
+        todoist,
+        "list_tasks",
+        lambda api=None: [TaskItem(text=f"Item {i}", source="todoist") for i in range(200)],
+    )
+    monkeypatch.setattr(todoist, "configured", lambda: True)
+    client = TestClient(create_app(Settings(_vault_path=vault)))
+
+    external = [t for t in client.get("/api/agenda").json()["tasks"] if t["source"] == "todoist"]
+
+    assert len(external) == UNDATED_EXTERNAL_LIMIT
+
+
+def test_top_tasks_falls_back_to_someday_so_a_fresh_capture_is_visible(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capture with no date lands in `someday`. `top_tasks` fell back only as
+    far as `week`, so the task was written to the vault and then rendered
+    nowhere — the quick-add looked like it had done nothing at all."""
+    from backend.connectors import gcal, todoist
+
+    monkeypatch.setattr(gcal, "list_events", lambda day, service=None: [])
+    monkeypatch.setattr(gcal, "configured", lambda: False)
+    monkeypatch.setattr(todoist, "list_tasks", lambda api=None: [])
+    monkeypatch.setattr(todoist, "configured", lambda: False)
+    # Only an undated task exists — nothing overdue, due today, or this week.
+    (vault / "10-Daily" / "today.md").write_text("- [ ] Someday thing\n", encoding="utf-8")
+    client = TestClient(create_app(Settings(_vault_path=vault)))
+
+    payload = client.get("/api/agenda").json()
+
+    assert [t["text"] for t in payload["top_tasks"]] == ["Someday thing"]
+
+
 def test_tasks_board_buckets(client: TestClient) -> None:
     board = client.get("/api/tasks").json()
     today_texts = [task["text"] for task in board["today"]]

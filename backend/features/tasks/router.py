@@ -24,6 +24,11 @@ from backend.vault.errors import raise_http
 from backend.vault.tasks import TaskItem, bucket_of, bucketed_tasks, refresh_cache
 from backend.vault.writer import WriterError, append_capture
 
+#: How many undated external tasks the agenda will carry. Matches the shipped
+#: `todoist` template's own `limit`, so the n8n and connector paths agree on
+#: roughly how much of a long list reaches the dashboard.
+UNDATED_EXTERNAL_LIMIT = 25
+
 
 class AgendaResponse(BaseModel):
     """Everything the Today view needs for one date."""
@@ -86,9 +91,23 @@ def build_tasks_router(settings: Settings) -> APIRouter:
 
         vault_today = buckets["overdue"] + buckets["today"]
         external = [task for task in todoist_tasks if not task.done]
-        due_external = [task for task in external if task.due and task.due <= target.isoformat()]
-        day_tasks = vault_today + due_external
-        top = day_tasks[:3] if day_tasks else buckets["week"][:3]
+        horizon = target.isoformat()
+        due_external = [task for task in external if task.due and task.due <= horizon]
+        # An external task with no due date used to be dropped here. That is
+        # what an inbox item *is* in both Todoist and the n8n `tasks` widget —
+        # the majority of a normal list — so the filter did not trim the panel,
+        # it emptied it. Capped rather than unbounded because the connector
+        # (unlike the template, which limits to 25) returns every open task
+        # across every project, and TASKS.DUE is a dashboard panel.
+        undated_external = [task for task in external if not task.due][:UNDATED_EXTERNAL_LIMIT]
+        day_tasks = vault_today + due_external + undated_external
+        # `someday` is where an undated capture lands (`bucket_of`), so without
+        # it a task the user just typed is written to the vault and then shown
+        # nowhere — the capture looks like it did nothing.
+        top = next(
+            (group[:3] for group in (day_tasks, buckets["week"], buckets["someday"]) if group),
+            [],
+        )
 
         connector_errors: dict[str, str] = {}
         if gcal_error:
