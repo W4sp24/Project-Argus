@@ -102,8 +102,21 @@ store.upsert_widget(
     "timeline",
     {
         "entries": [
-            {"at": iso(now + timedelta(hours=1)), "text": "Team sync", "sub": "Conf room A"},
-            {"at": iso(now + timedelta(hours=3)), "text": "1:1 with manager"},
+            # `end` and `all_day` are what give PLANNER.TIMELINE a duration to
+            # render; without them every n8n event is zero-length.
+            {
+                "at": iso(now + timedelta(hours=1)),
+                "end": iso(now + timedelta(hours=2)),
+                "text": "Team sync",
+                "sub": "Conf room A",
+                "all_day": False,
+            },
+            {
+                "at": iso(now + timedelta(hours=3)),
+                "end": iso(now + timedelta(hours=4)),
+                "text": "1:1 with manager",
+                "all_day": False,
+            },
         ]
     },
     title="Upcoming events",
@@ -132,8 +145,18 @@ store.upsert_widget(
     "list",
     {
         "items": [
-            {"text": "Reply to registrar", "sub": "due today"},
-            {"text": "File expense report"},
+            # `due`/`priority`/`id` are what TASKS.DUE groups, colours, and
+            # completes by. Without `due` the agenda filters an external task
+            # out entirely; without `id` its checkbox can never be enabled.
+            {
+                "text": "Reply to registrar",
+                "sub": "due today",
+                "due": now.date().isoformat(),
+                "priority": "highest",
+                "id": "td-1",
+                "href": "https://app.todoist.com/app/task/td-1",
+            },
+            {"text": "File expense report", "id": "td-2", "tags": ["admin"]},
         ]
     },
     title="Active tasks",
@@ -247,6 +270,112 @@ store.upsert_workflow(
     now=frozen(now),
 )
 
+# --- installed action workflows --------------------------------------------
+#
+# `GET /automations/actions` resolves these by matching the cached workflow
+# *name* against the bundled template's name, so the names below must stay in
+# lockstep with templates/*.json's own `"name"`. They are what make TASKS.DUE's
+# quick-add write to Todoist and PLANNER.TIMELINE's `+ EVENT` appear at all;
+# without them both cards fall back to their no-n8n behaviour.
+
+TODOIST_INSERT_DEF = {
+    "id": "wf-todoist-insert-seed",
+    "name": "Argus: Add Todoist Task",
+    "active": True,
+    "tags": [{"id": "1", "name": "argus"}],
+    "nodes": [
+        {
+            "name": "New Task Form",
+            "type": "n8n-nodes-base.formTrigger",
+            "webhookId": "argus-todoist-insert",
+            "parameters": {
+                "path": "argus-todoist-insert",
+                "responseMode": "lastNode",
+                "formFields": {
+                    "values": [
+                        {"fieldLabel": "Task", "fieldType": "text", "requiredField": True},
+                        {"fieldLabel": "Due", "fieldType": "date"},
+                        {"fieldLabel": "Priority", "fieldType": "dropdown"},
+                    ]
+                },
+            },
+        }
+    ],
+    "connections": {},
+}
+store.upsert_workflow(
+    conn,
+    TODOIST_INSERT_DEF["id"],
+    name=TODOIST_INSERT_DEF["name"],
+    tags=["argus"],
+    schema_json=TODOIST_INSERT_DEF,
+    active=True,
+    instance_id=INSTANCE_A["id"],
+    now=frozen(now),
+)
+
+TODOIST_COMPLETE_DEF = {
+    "id": "wf-todoist-complete-seed",
+    "name": "Argus: Complete Todoist Task",
+    "active": True,
+    "tags": [{"id": "1", "name": "argus"}],
+    "nodes": [
+        {
+            "name": "Complete Task Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "webhookId": "argus-todoist-complete",
+            "parameters": {"path": "argus-todoist-complete", "responseMode": "responseNode"},
+        }
+    ],
+    "connections": {},
+}
+store.upsert_workflow(
+    conn,
+    TODOIST_COMPLETE_DEF["id"],
+    name=TODOIST_COMPLETE_DEF["name"],
+    tags=["argus"],
+    schema_json=TODOIST_COMPLETE_DEF,
+    active=True,
+    instance_id=INSTANCE_A["id"],
+    now=frozen(now),
+)
+
+CALENDAR_INSERT_DEF = {
+    "id": "wf-calendar-insert-seed",
+    "name": "Argus: Add Calendar Event",
+    "active": True,
+    "tags": [{"id": "1", "name": "argus"}],
+    "nodes": [
+        {
+            "name": "New Event Form",
+            "type": "n8n-nodes-base.formTrigger",
+            "webhookId": "argus-calendar-insert",
+            "parameters": {
+                "path": "argus-calendar-insert",
+                "responseMode": "lastNode",
+                "formFields": {
+                    "values": [
+                        {"fieldLabel": "Title", "fieldType": "text", "requiredField": True},
+                        {"fieldLabel": "Start", "fieldType": "date", "requiredField": True},
+                        {"fieldLabel": "End", "fieldType": "date", "requiredField": True},
+                    ]
+                },
+            },
+        }
+    ],
+    "connections": {},
+}
+store.upsert_workflow(
+    conn,
+    CALENDAR_INSERT_DEF["id"],
+    name=CALENDAR_INSERT_DEF["name"],
+    tags=["argus"],
+    schema_json=CALENDAR_INSERT_DEF,
+    active=True,
+    instance_id=INSTANCE_A["id"],
+    now=frozen(now),
+)
+
 # One finished run each, so RegisteredList's "last run … ok/failed" line and
 # ActionStateBadge (READY / FAILING) both have real data instead of the
 # never-run default.
@@ -338,5 +467,5 @@ store.record_event(
 conn.close()
 print(
     "seeded automations: 2 instances, 5 widgets (LIVE x2, STALE, EMPTY, WAITING), "
-    "2 workflows, 6 events"
+    "5 workflows (2 runnable + 3 actions), 6 events"
 )

@@ -64,8 +64,9 @@ test("renders the instance cards, the tab switcher, and the instance filter", as
 
 test("the ACTIVE tab lists both displays and actions in one list", async ({ page }) => {
   const registered = panel(page, "REGISTERED");
-  // 5 seeded widgets + 2 seeded cached workflows.
-  await expect(registered.getByText("REGISTERED · 7")).toBeVisible();
+  // 5 seeded widgets + 5 seeded cached workflows (2 generic runnables, plus
+  // the 3 installed action workflows the dashboard cards resolve by slug).
+  await expect(registered.getByText("REGISTERED · 10")).toBeVisible();
 
   // Displays — including the same "calendar" slug pushed by both instances,
   // rendered as two distinct rows under the composite (instance_id, slug) key.
@@ -138,6 +139,10 @@ test("the GALLERY tab lists bundled templates with their derived chips", async (
   await expect(gallery.getByText("Argus: Todoist → Task List Widget")).toBeVisible();
   await expect(gallery.getByText("Argus: Weather → Metric Widget")).toBeVisible();
   await expect(gallery.getByText("Argus: Mobile Capture")).toBeVisible();
+  // The write side of the Todoist integration — without these installed,
+  // TASKS.DUE can read tasks but never add or complete one.
+  await expect(gallery.getByText("Argus: Add Todoist Task")).toBeVisible();
+  await expect(gallery.getByText("Argus: Complete Todoist Task")).toBeVisible();
   await expect(gallery.getByText("Argus: Add Calendar Event")).toBeVisible();
 
   // exact: true throughout -- the card's own description prose also contains
