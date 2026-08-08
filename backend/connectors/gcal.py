@@ -53,6 +53,10 @@ class CalendarEvent(BaseModel):
     end: str
     all_day: bool = False
     source: str = "gcal"
+    #: Where the event is, when the source says. Additive and defaulted, so the
+    #: connector path (which does not read it) and every existing consumer are
+    #: unaffected; the n8n timeline path fills it from the entry's `sub`.
+    location: str | None = None
 
 
 def _stored_token() -> str | None:

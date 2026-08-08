@@ -25,6 +25,7 @@ stale n8n source must never quietly replace a working connector.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -33,6 +34,8 @@ from typing import Any
 from backend.features.automations import store
 
 logger = logging.getLogger("argus.automations.sources")
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 #: Widget slugs the shipped templates push to. These are the contract between
 #: `templates/google-calendar.json` / `templates/todoist.json` and this module.
@@ -187,14 +190,41 @@ def _events_from_timeline(widget: dict[str, Any], day: date) -> list[Any] | None
                 CalendarEvent(
                     title=str(entry.get("text") or "(untitled)"),
                     start=at,
+                    # `end` absent means the source told us nothing about
+                    # duration, not that the event is instantaneous — but an
+                    # event has to end somewhere, and `at` is the only honest
+                    # answer available. The renderer shows no duration for a
+                    # zero-length event rather than inventing one.
                     end=str(entry.get("end") or at),
-                    all_day=bool(entry.get("all_day", False)),
+                    # A bare `YYYY-MM-DD` with no time component is how both
+                    # Google and the timeline contract spell an all-day event,
+                    # so infer it when the push didn't say either way.
+                    all_day=bool(entry.get("all_day", "T" not in at)),
+                    location=entry.get("sub") or None,
                     source="n8n",
                 )
             )
         except Exception:  # noqa: BLE001 - a bad entry must not sink the rest
             logger.debug("skipping malformed timeline entry: %r", entry)
     return events
+
+
+def _iso_date_or_none(value: Any) -> str | None:
+    """``value`` if it is an ISO ``YYYY-MM-DD`` date, else ``None``.
+
+    Used to read a due date out of a list item's ``sub`` when the workflow
+    pushed no explicit ``due``. Older and hand-written workflows put the date
+    in the subtext because that is all the contract used to carry, and a task
+    with no due date is filtered out of the agenda entirely — so recovering one
+    here is the difference between a populated panel and an empty one.
+
+    Deliberately narrow: only an exact ISO date. Todoist's own ``due.string``
+    is human prose ("every day", "tomorrow"), and guessing at that would put
+    invented dates on real tasks.
+    """
+    if not isinstance(value, str):
+        return None
+    return value if _ISO_DATE_RE.match(value) else None
 
 
 def _tasks_from_list(widget: dict[str, Any]) -> list[Any] | None:
@@ -217,9 +247,11 @@ def _tasks_from_list(widget: dict[str, Any]) -> list[Any] | None:
                 TaskItem(
                     text=text,
                     done=bool(item.get("done", False)),
-                    due=item.get("due"),
+                    due=item.get("due") or _iso_date_or_none(item.get("sub")),
                     priority=item.get("priority"),
                     tags=list(item.get("tags") or []),
+                    external_id=item.get("id"),
+                    href=item.get("href"),
                     source="n8n",
                 )
             )

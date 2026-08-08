@@ -15,6 +15,7 @@ import pytest
 
 from backend.core.db import connect, init_schema
 from backend.features.automations import sources, store
+from backend.features.automations.schema import validate_widget_payload
 
 DAY = date(2026, 8, 5)
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
@@ -63,6 +64,153 @@ def _push_tasks(conn, *, at: datetime, interval: int | None, text: str = "Ship i
         expected_interval_seconds=interval,
         now=_clock(at),
     )
+
+
+def _push_through_validation(conn, slug: str, payload: dict, *, at: datetime) -> None:
+    """Store a payload the way a *real* push does — through the validator.
+
+    Every other helper in this file calls `store.upsert_widget` directly, which
+    is why the suite was blind to the bug this guards: `validate_widget_payload`
+    does not pass payloads through, it **rebuilds each item from a whitelist**.
+    A field the whitelist omits is dropped silently at the door, so a mapping
+    here that reads it is testing something the HTTP path can never deliver.
+    """
+    validated = validate_widget_payload(payload)
+    store.upsert_widget(
+        conn,
+        slug,
+        validated.kind,
+        validated.payload,
+        title=validated.title,
+        expected_interval_seconds=validated.expected_interval_seconds,
+        now=_clock(at),
+    )
+
+
+# --- the push path must actually carry what the consumers read ----------------
+
+
+def test_a_pushed_task_keeps_the_fields_tasks_due_needs(conn) -> None:
+    """The whole n8n task path in one assertion.
+
+    `due` decides whether the agenda shows the task at all, `external_id`
+    whether it can ever be completed, and `priority`/`tags`/`href` what the row
+    looks like. All five used to be dropped by `_validate_list`, so every
+    n8n-sourced task arrived undated and anonymous — and an undated external
+    task is filtered out of `/api/agenda` entirely. Installing the Todoist
+    template emptied TASKS.DUE.
+    """
+    _push_through_validation(
+        conn,
+        sources.TASKS_SLUG,
+        {
+            "widget": "list",
+            "expected_interval_seconds": 900,
+            "items": [
+                {
+                    "text": "Ship it",
+                    "id": "7291",
+                    "due": "2026-08-05",
+                    "priority": "highest",
+                    "tags": ["work"],
+                    "href": "https://app.todoist.com/app/task/7291",
+                }
+            ],
+        },
+        at=NOW,
+    )
+
+    tasks, error = sources.open_tasks(conn, now=_clock(NOW))
+
+    assert error is None
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.text == "Ship it"
+    assert task.due == "2026-08-05"
+    assert task.priority == "highest"
+    assert task.tags == ["work"]
+    assert task.external_id == "7291"
+    assert task.href == "https://app.todoist.com/app/task/7291"
+    assert task.source == "n8n"
+
+
+def test_a_pushed_event_keeps_its_end_and_location(conn) -> None:
+    """`end` is what gives an event a duration. Dropped, every n8n event was
+    zero-length: no duration label, and 0 meeting-hours in insights."""
+    _push_through_validation(
+        conn,
+        sources.CALENDAR_SLUG,
+        {
+            "widget": "timeline",
+            "expected_interval_seconds": 900,
+            "entries": [
+                {
+                    "at": f"{DAY.isoformat()}T09:00:00",
+                    "end": f"{DAY.isoformat()}T09:30:00",
+                    "text": "Standup",
+                    "sub": "Meet",
+                    "all_day": False,
+                }
+            ],
+        },
+        at=NOW,
+    )
+
+    events, error = sources.calendar_events(conn, DAY, now=_clock(NOW))
+
+    assert error is None
+    assert len(events) == 1
+    event = events[0]
+    assert event.start == f"{DAY.isoformat()}T09:00:00"
+    assert event.end == f"{DAY.isoformat()}T09:30:00"
+    assert event.location == "Meet"
+    assert event.all_day is False
+
+
+def test_an_all_day_push_is_marked_all_day(conn) -> None:
+    """A bare date with no time component is how both Google and the timeline
+    contract spell all-day, so it is inferred when the push omits the flag."""
+    _push_through_validation(
+        conn,
+        sources.CALENDAR_SLUG,
+        {
+            "widget": "timeline",
+            "expected_interval_seconds": 900,
+            "entries": [{"at": DAY.isoformat(), "text": "Public holiday"}],
+        },
+        at=NOW,
+    )
+
+    events, _ = sources.calendar_events(conn, DAY, now=_clock(NOW))
+
+    assert events[0].all_day is True
+    assert events[0].end == DAY.isoformat()
+
+
+def test_a_due_date_is_recovered_from_sub_when_no_due_was_pushed(conn) -> None:
+    """Older workflows put the date in the subtext, because that is all the
+    contract carried. Recovering an exact ISO date there is the difference
+    between a populated panel and an empty one — but only an exact one:
+    Todoist's own `due.string` is prose, and guessing at it would stamp
+    invented dates on real tasks."""
+    _push_through_validation(
+        conn,
+        sources.TASKS_SLUG,
+        {
+            "widget": "list",
+            "expected_interval_seconds": 900,
+            "items": [
+                {"text": "Dated", "sub": "2026-08-05"},
+                {"text": "Prose", "sub": "every other tuesday"},
+            ],
+        },
+        at=NOW,
+    )
+
+    tasks, _ = sources.open_tasks(conn, now=_clock(NOW))
+
+    assert tasks[0].due == "2026-08-05"
+    assert tasks[1].due is None
 
 
 # --- fallback when there is no n8n data at all --------------------------------
