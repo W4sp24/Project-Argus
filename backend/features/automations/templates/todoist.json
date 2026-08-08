@@ -50,7 +50,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ \"widget\": \"list\", \"title\": \"Tasks\", \"expected_interval_seconds\": 900, \"items\": $input.all().map(i => ({ \"text\": i.json.content, \"sub\": i.json.due ? i.json.due.string : null })) }) }}"
+        "jsonBody": "={{ JSON.stringify({ \"widget\": \"list\", \"title\": \"Tasks\", \"expected_interval_seconds\": 900, \"items\": $input.all().map(i => ({ \"id\": String(i.json.id), \"text\": i.json.content, \"sub\": i.json.due ? i.json.due.string : null, \"due\": i.json.due ? (i.json.due.date || '').slice(0, 10) || null : null, \"priority\": ({ 4: 'highest', 3: 'high', 2: 'medium' })[i.json.priority] || null, \"tags\": i.json.labels || [], \"href\": i.json.url || null })) }) }}"
       }
     }
   ],

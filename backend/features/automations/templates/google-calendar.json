@@ -55,7 +55,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ \"widget\": \"timeline\", \"title\": \"Upcoming Events\", \"expected_interval_seconds\": 900, \"entries\": $input.all().map(i => ({ \"at\": i.json.start.dateTime || i.json.start.date, \"text\": i.json.summary, \"sub\": i.json.location })) }) }}"
+        "jsonBody": "={{ JSON.stringify({ \"widget\": \"timeline\", \"title\": \"Upcoming Events\", \"expected_interval_seconds\": 900, \"entries\": $input.all().map(i => ({ \"at\": i.json.start.dateTime || i.json.start.date, \"end\": i.json.end.dateTime || i.json.end.date, \"all_day\": !i.json.start.dateTime, \"text\": i.json.summary || '(untitled)', \"sub\": i.json.location || null })) }) }}"
       }
     }
   ],
