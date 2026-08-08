@@ -22,6 +22,7 @@ share it.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -386,6 +387,74 @@ def _validate_href(value: Any, field_name: str) -> str | None:
     return safe
 
 
+#: Priority vocabulary, identical to `backend.vault.tasks.PRIORITY_MARKS`' names.
+#: A pushed task and a vault task must be comparable by the same consumer, so a
+#: workflow has to speak Argus's vocabulary rather than its own service's
+#: numbering — the translation belongs in the template's expression, where the
+#: source system's encoding is actually known.
+_VALID_PRIORITIES = ("highest", "high", "medium", "low")
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _optional_date(value: Any, field_name: str) -> str | None:
+    """An ISO ``YYYY-MM-DD`` date, or ``None``.
+
+    Validated rather than passed through because every consumer compares these
+    lexicographically against `date.isoformat()` (see
+    `backend.features.tasks.router.agenda`). A `"tomorrow"` or `"12/07/2026"`
+    that reached the store would not raise anywhere — it would just sort wrong,
+    forever, in a panel nobody thinks to distrust.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _ISO_DATE_RE.match(value):
+        raise WidgetValidationError(f"'{field_name}' must be an ISO date (YYYY-MM-DD)")
+    return value
+
+
+def _optional_priority(value: Any, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value.lower() not in _VALID_PRIORITIES:
+        raise WidgetValidationError(
+            f"'{field_name}' must be one of: {', '.join(_VALID_PRIORITIES)}"
+        )
+    return value.lower()
+
+
+def _optional_tags(value: Any, field_name: str) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(t, str) for t in value):
+        raise WidgetValidationError(f"'{field_name}' must be a list of strings")
+    return [t for t in value if t]
+
+
+def _optional_bool(value: Any, field_name: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise WidgetValidationError(f"'{field_name}' must be a boolean")
+    return value
+
+
+def _optional_id(value: Any, field_name: str) -> str | None:
+    """An opaque upstream record id, normalised to a string.
+
+    Ints are accepted and coerced: whether a service's ids arrive as `12345`
+    or `"12345"` depends on the service *and* on whether the workflow's
+    expression happened to stringify them. Rejecting one shape would make the
+    action round-trip work or not work for reasons the user cannot see.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, str | int):
+        raise WidgetValidationError(f"'{field_name}' must be a string or integer")
+    text = str(value)
+    return text or None
+
+
 def _validate_title_and_interval(payload: dict[str, Any]) -> tuple[str | None, int | None]:
     title = _optional_str(payload.get("title"), "title")
 
@@ -426,6 +495,25 @@ def _validate_list(payload: dict[str, Any]) -> dict[str, Any]:
             entry["href"] = href
         if (state := _optional_str(item.get("state"), f"items[{idx}].state")) is not None:
             entry["state"] = state
+        # Task-shaped fields. Optional, because a `list` widget is still a
+        # generic list — a weather forecast pushes text/sub and nothing here.
+        # But `sources._tasks_from_list` maps this kind onto TaskItem for
+        # TASKS.DUE, and everything it needs to do that has to survive this
+        # function: a whitelist that drops `due` doesn't degrade the panel,
+        # it empties it (the agenda filters undated external tasks out).
+        if (due := _optional_date(item.get("due"), f"items[{idx}].due")) is not None:
+            entry["due"] = due
+        if (prio := _optional_priority(item.get("priority"), f"items[{idx}].priority")) is not None:
+            entry["priority"] = prio
+        if (tags := _optional_tags(item.get("tags"), f"items[{idx}].tags")) is not None:
+            entry["tags"] = tags
+        if (done := _optional_bool(item.get("done"), f"items[{idx}].done")) is not None:
+            entry["done"] = done
+        # The upstream record's own id — the handle an action workflow needs to
+        # act back on this row (close the Todoist task the user just ticked).
+        # Without it a pushed list is strictly read-only.
+        if (item_id := _optional_id(item.get("id"), f"items[{idx}].id")) is not None:
+            entry["id"] = item_id
         out_items.append(entry)
     return {"items": out_items}
 
@@ -460,6 +548,14 @@ def _validate_timeline(payload: dict[str, Any]) -> dict[str, Any]:
         }
         if (sub := _optional_str(entry.get("sub"), f"entries[{idx}].sub")) is not None:
             parsed_entry["sub"] = sub
+        # `end` is not validated as a date: `at` isn't either, and a timeline
+        # entry legitimately carries a datetime, a bare date, or (for a
+        # non-calendar timeline) some other ordering key. Requiring a shape
+        # here would reject payloads the renderer handles fine.
+        if (end := _optional_str(entry.get("end"), f"entries[{idx}].end")) is not None:
+            parsed_entry["end"] = end
+        if (all_day := _optional_bool(entry.get("all_day"), f"entries[{idx}].all_day")) is not None:
+            parsed_entry["all_day"] = all_day
         out_entries.append(parsed_entry)
     return {"entries": out_entries}
 

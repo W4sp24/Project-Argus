@@ -282,6 +282,112 @@ def test_valid_list_payload() -> None:
     assert v.payload["items"][0]["href"] == "https://x.com"
 
 
+def test_list_item_keeps_its_task_fields() -> None:
+    """These are whitelisted, not passed through. Anything absent from
+    `_validate_list` is dropped silently, and `sources._tasks_from_list` reads
+    every one of these — a drop here empties TASKS.DUE rather than degrading
+    it, because the agenda filters out an external task with no `due`."""
+    v = schema.validate_widget_payload(
+        {
+            "widget": "list",
+            "items": [
+                {
+                    "text": "a",
+                    "due": "2026-08-05",
+                    "priority": "highest",
+                    "tags": ["work", "urgent"],
+                    "done": False,
+                    "id": "7291",
+                }
+            ],
+        }
+    )
+    item = v.payload["items"][0]
+    assert item["due"] == "2026-08-05"
+    assert item["priority"] == "highest"
+    assert item["tags"] == ["work", "urgent"]
+    assert item["done"] is False
+    assert item["id"] == "7291"
+
+
+def test_list_item_id_accepts_an_integer_and_normalises_it() -> None:
+    """Whether a service's ids arrive as `12345` or `"12345"` depends on the
+    service *and* on whether the workflow's expression stringified them —
+    rejecting one shape would make completion work or not for invisible
+    reasons."""
+    v = schema.validate_widget_payload({"widget": "list", "items": [{"text": "a", "id": 12345}]})
+    assert v.payload["items"][0]["id"] == "12345"
+
+
+def test_list_item_priority_is_normalised_and_a_foreign_scale_is_rejected() -> None:
+    """Todoist's own `4` must be translated in the workflow, not here: this
+    module cannot know which service's scale a number came from."""
+    v = schema.validate_widget_payload(
+        {"widget": "list", "items": [{"text": "a", "priority": "HIGH"}]}
+    )
+    assert v.payload["items"][0]["priority"] == "high"
+
+    with pytest.raises(schema.WidgetValidationError, match=r"items\[0\]\.priority"):
+        schema.validate_widget_payload({"widget": "list", "items": [{"text": "a", "priority": 4}]})
+
+
+def test_list_item_due_must_be_an_iso_date() -> None:
+    """Consumers compare `due` lexicographically against `date.isoformat()`, so
+    prose would not raise anywhere — it would just sort wrong forever."""
+    with pytest.raises(schema.WidgetValidationError, match=r"items\[0\]\.due"):
+        schema.validate_widget_payload(
+            {"widget": "list", "items": [{"text": "a", "due": "tomorrow"}]}
+        )
+
+
+def test_list_item_tags_must_be_strings() -> None:
+    with pytest.raises(schema.WidgetValidationError, match=r"items\[0\]\.tags"):
+        schema.validate_widget_payload({"widget": "list", "items": [{"text": "a", "tags": [1, 2]}]})
+
+
+def test_list_item_still_drops_unknown_fields() -> None:
+    """Widening the whitelist must not turn it into a pass-through."""
+    v = schema.validate_widget_payload(
+        {"widget": "list", "items": [{"text": "a", "assignee": "someone", "project_id": 9}]}
+    )
+    assert v.payload["items"][0] == {"text": "a"}
+
+
+def test_timeline_entry_keeps_end_and_all_day() -> None:
+    """Without `end` every event is zero-length: no duration label, and
+    `insights._event_hours` counts a full calendar as 0 hours."""
+    v = schema.validate_widget_payload(
+        {
+            "widget": "timeline",
+            "entries": [
+                {
+                    "at": "2026-08-05T09:00:00",
+                    "end": "2026-08-05T09:30:00",
+                    "text": "Standup",
+                    "all_day": False,
+                }
+            ],
+        }
+    )
+    entry = v.payload["entries"][0]
+    assert entry["end"] == "2026-08-05T09:30:00"
+    assert entry["all_day"] is False
+
+
+def test_timeline_all_day_must_be_a_boolean() -> None:
+    with pytest.raises(schema.WidgetValidationError, match=r"entries\[0\]\.all_day"):
+        schema.validate_widget_payload(
+            {"widget": "timeline", "entries": [{"at": "x", "text": "y", "all_day": "yes"}]}
+        )
+
+
+def test_timeline_entry_still_drops_unknown_fields() -> None:
+    v = schema.validate_widget_payload(
+        {"widget": "timeline", "entries": [{"at": "x", "text": "y", "organizer": "someone"}]}
+    )
+    assert v.payload["entries"][0] == {"at": "x", "text": "y"}
+
+
 def test_valid_table_payload() -> None:
     v = schema.validate_widget_payload(
         {"widget": "table", "columns": ["a", "b"], "rows": [[1, 2], [3, 4]]}
