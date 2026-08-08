@@ -170,11 +170,28 @@ rendering as an empty box hours later.
 | Kind | Payload |
 |---|---|
 | `metric` | `label`, `value`, `sub?` |
-| `list` | `items[]` of `{text, sub?, href?}` |
+| `list` | `items[]` of `{text, sub?, href?, state?, due?, priority?, tags?, done?, id?}` |
 | `table` | `columns[]`, `rows[][]` |
-| `timeline` | `entries[]` of `{at, text, sub?}` |
+| `timeline` | `entries[]` of `{at, text, sub?, end?, all_day?}` |
 | `text` | `body` (markdown) |
 | `chart` | `kind: line\|bar`, `series[]` of `{label, points[][]}` |
+
+Every field not listed for a kind is **dropped at push time** — the validator
+rebuilds each item from the whitelist above rather than passing it through. So
+a field a panel needs has to be listed here, or it silently never arrives.
+
+The optional fields on `list` and `timeline` are what let a pushed widget stand
+in for a native source rather than merely sit beside one (§7):
+
+- `due` must be ISO `YYYY-MM-DD`, and `priority` one of
+  `highest`/`high`/`medium`/`low` — Argus's own vocabulary, not the upstream
+  service's numbering. Translate in the workflow's expression, where that
+  service's encoding is actually known (Todoist's `4` is `highest`).
+- `id` is the upstream record's own id. It is the handle an **action** workflow
+  needs to act back on a row — closing the Todoist task the user just ticked.
+  A list pushed without `id` is read-only by construction.
+- `end` and `all_day` on a timeline entry are what give a calendar event a
+  duration. Omit `end` and the event renders as an instant.
 
 ```http
 POST /api/external/widget/weather
