@@ -34,7 +34,11 @@ function quickLinksPanel(page: Page) {
  * and gets re-applied inside the candidate's subtree (where it can never
  * match), silently narrowing to zero elements and hanging until timeout. */
 function addForm(page: Page) {
-  return page.locator("form").filter({ has: page.getByRole("button", { name: "ADD" }) });
+  // `exact` matters: accessible-name matching is a case-insensitive substring
+  // by default, and TASKS.DUE's quick-add submit is labelled "Add task" — which
+  // contains "ADD", so a loose match resolves to two forms on this same page
+  // and every locator below fails the strict-mode check.
+  return page.locator("form").filter({ has: page.getByRole("button", { name: "ADD", exact: true }) });
 }
 
 /** Add a link and WAIT until its row has been persisted + rendered. The submit
@@ -47,7 +51,7 @@ async function addLink(page: Page, label: string, url: string) {
   const form = addForm(page);
   await form.getByLabel("Link label").fill(label);
   await form.getByLabel("Link URL").fill(url);
-  await form.getByRole("button", { name: "ADD" }).click();
+  await form.getByRole("button", { name: "ADD", exact: true }).click();
   await expect(quickLinksPanel(page).locator("li").filter({ hasText: label })).toBeVisible({
     timeout: 15_000,
   });
@@ -75,7 +79,7 @@ test("rejecting a dangerous URL shows a toast and adds no row", async ({ page })
   const form = addForm(page);
   await form.getByLabel("Link label").fill(label);
   await form.getByLabel("Link URL").fill("javascript:alert(1)");
-  await form.getByRole("button", { name: "ADD" }).click();
+  await form.getByRole("button", { name: "ADD", exact: true }).click();
 
   await expect(page.getByText("quick-links :: enter a label and a valid https URL")).toBeVisible();
 
@@ -172,7 +176,7 @@ test("adding a link with a preset icon renders an svg in the row", async ({ page
   await form.getByLabel("Link label").fill(label);
   await form.getByLabel("Link URL").fill("https://github.com");
   await form.getByRole("button", { name: "Use github icon" }).click();
-  await form.getByRole("button", { name: "ADD" }).click();
+  await form.getByRole("button", { name: "ADD", exact: true }).click();
 
   const panel = quickLinksPanel(page);
   const row = panel.locator("li").filter({ hasText: label });
@@ -231,7 +235,7 @@ test("uploading an image icon via the hidden file input renders as an img", asyn
   // (asserted below) reflects a fully-processed icon_value, not a race.
   await expect(form.locator('img[src^="data:image/png"]')).toBeVisible({ timeout: 10_000 });
 
-  await form.getByRole("button", { name: "ADD" }).click();
+  await form.getByRole("button", { name: "ADD", exact: true }).click();
 
   const panel = quickLinksPanel(page);
   const row = panel.locator("li").filter({ hasText: label });

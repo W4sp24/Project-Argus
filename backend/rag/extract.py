@@ -13,9 +13,9 @@ from typing import Any
 
 import frontmatter
 
-logger = logging.getLogger("argus.rag")
+from backend.vault.privacy import is_no_ai
 
-NO_AI_TAG = "no-ai"
+logger = logging.getLogger("argus.rag")
 
 
 @dataclass
@@ -26,20 +26,11 @@ class Block:
     meta: dict[str, Any] = field(default_factory=dict)
 
 
-def _is_private(post: frontmatter.Post) -> bool:
-    tags = post.metadata.get("tags") or []
-    if isinstance(tags, str):
-        tags = [tags]
-    if NO_AI_TAG in [str(tag).strip().lstrip("#") for tag in tags]:
-        return True
-    return f"#{NO_AI_TAG}" in post.content
-
-
 def _extract_markdown(file_path: Path) -> list[Block]:
     # No try/except here: extract_blocks already wraps every extractor call in
     # one, so failures are logged and collected in exactly one place.
     post = frontmatter.load(file_path)
-    if _is_private(post):
+    if is_no_ai(post):
         return []  # I3: tagged notes never enter the pipeline
     if not post.content.strip():
         return []

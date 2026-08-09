@@ -5,6 +5,8 @@ import AgentUsage from "@/components/AgentUsage";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
 import ActivityFeed from "@/components/dashboard/ActivityFeed";
+import AutomationWidgets from "@/components/dashboard/AutomationWidgets";
+import AutomationsHud from "@/components/dashboard/AutomationsHud";
 import BriefingCard from "@/components/dashboard/BriefingCard";
 import Heatmap from "@/components/dashboard/Heatmap";
 import IngestPanel from "@/components/dashboard/IngestPanel";
@@ -13,6 +15,7 @@ import PlannerTimeline from "@/components/dashboard/PlannerTimeline";
 import QuickLinks from "@/components/dashboard/QuickLinks";
 import TasksPanel from "@/components/dashboard/TasksPanel";
 import { useDashboardStats } from "@/lib/useDashboardStats";
+import { useAutomationsStatus } from "@/lib/useAutomationsStatus";
 import { useTypewriter } from "@/lib/useTypewriter";
 
 function formatToday(): string {
@@ -35,11 +38,17 @@ function greetingWord(): string {
 export default function DashboardPage() {
   const stats = useDashboardStats();
   const { output: greeting, done: greetingDone } = useTypewriter(`${greetingWord()}, Ethan.`);
+  // The ambient automations readout. Null until something is registered, so
+  // an install without automations reads exactly as it did before.
+  const automationsStatus = useAutomationsStatus();
+  const health = automationsStatus
+    ? `vault OK · index OK · ${automationsStatus}`
+    : "vault OK · index OK · agent idle";
 
   return (
     <>
       <header className="mb-8 animate-rise">
-        <p className="eyebrow mb-2">{`// SYS.GENERAL :: ${formatToday()} :: vault OK · index OK · agent idle`}</p>
+        <p className="eyebrow mb-2">{`// SYS.GENERAL :: ${formatToday()} :: ${health}`}</p>
         <h1 className="font-mono text-display font-semibold tracking-tight text-ink-bright">
           {greeting}
           <span className={`text-[var(--ac)] ${greetingDone ? "animate-blink" : ""}`}>▊</span>
@@ -54,6 +63,7 @@ export default function DashboardPage() {
         <div className="grid gap-4 lg:grid-cols-shell">
           <div className="flex min-w-0 flex-col gap-4">
             <PlannerTimeline />
+            <AutomationWidgets />
             <TasksPanel />
             <IngestPanel />
           </div>
@@ -61,6 +71,7 @@ export default function DashboardPage() {
           <div className="flex min-w-0 flex-col gap-4">
             {/* Chat moved to the ChatDrawer (TopBar CHAT / ⌘K), shared with /chat. */}
             <BriefingCard />
+            <AutomationsHud />
             <QuickLinks />
             <TokenUsage />
             <AgentUsage />
@@ -75,6 +86,9 @@ export default function DashboardPage() {
           </Link>
           <Link href="/review" className="transition-colors hover:text-ink-bright">
             → REVIEW
+          </Link>
+          <Link href="/automations" className="transition-colors hover:text-ink-bright">
+            → AUTOMATIONS
           </Link>
         </nav>
       </div>

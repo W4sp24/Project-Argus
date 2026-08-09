@@ -18,10 +18,16 @@ from backend.connectors import gcal, todoist
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.features.automations import sources
 from backend.vault import writer
 from backend.vault.errors import raise_http
 from backend.vault.tasks import TaskItem, bucket_of, bucketed_tasks, refresh_cache
 from backend.vault.writer import WriterError, append_capture
+
+#: How many undated external tasks the agenda will carry. Matches the shipped
+#: `todoist` template's own `limit`, so the n8n and connector paths agree on
+#: roughly how much of a long list reaches the dashboard.
+UNDATED_EXTERNAL_LIMIT = 25
 
 
 class AgendaResponse(BaseModel):
@@ -75,17 +81,34 @@ def build_tasks_router(settings: Settings) -> APIRouter:
         try:
             refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn, today=target)
+            # Read the external sources while the connection is still open:
+            # they consult the automations widget store first and fall back to
+            # the native connectors, so they need it.
+            todoist_tasks, todoist_error = sources.open_tasks(conn)
+            events, gcal_error = sources.calendar_events(conn, target)
         finally:
             conn.close()
 
         vault_today = buckets["overdue"] + buckets["today"]
-        todoist_tasks, todoist_error = todoist.list_tasks_safe()
         external = [task for task in todoist_tasks if not task.done]
-        due_external = [task for task in external if task.due and task.due <= target.isoformat()]
-        day_tasks = vault_today + due_external
-        top = day_tasks[:3] if day_tasks else buckets["week"][:3]
+        horizon = target.isoformat()
+        due_external = [task for task in external if task.due and task.due <= horizon]
+        # An external task with no due date used to be dropped here. That is
+        # what an inbox item *is* in both Todoist and the n8n `tasks` widget —
+        # the majority of a normal list — so the filter did not trim the panel,
+        # it emptied it. Capped rather than unbounded because the connector
+        # (unlike the template, which limits to 25) returns every open task
+        # across every project, and TASKS.DUE is a dashboard panel.
+        undated_external = [task for task in external if not task.due][:UNDATED_EXTERNAL_LIMIT]
+        day_tasks = vault_today + due_external + undated_external
+        # `someday` is where an undated capture lands (`bucket_of`), so without
+        # it a task the user just typed is written to the vault and then shown
+        # nowhere — the capture looks like it did nothing.
+        top = next(
+            (group[:3] for group in (day_tasks, buckets["week"], buckets["someday"]) if group),
+            [],
+        )
 
-        events, gcal_error = gcal.list_events_safe(target)
         connector_errors: dict[str, str] = {}
         if gcal_error:
             connector_errors["gcal"] = gcal_error
@@ -107,10 +130,10 @@ def build_tasks_router(settings: Settings) -> APIRouter:
         try:
             refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
             buckets = bucketed_tasks(conn)
+            todoist_tasks, _todoist_error = sources.open_tasks(conn)
         finally:
             conn.close()
         today = date.today()
-        todoist_tasks, _todoist_error = todoist.list_tasks_safe()
         for task in todoist_tasks:
             if not task.done:
                 buckets[bucket_of(task, today)].append(task)

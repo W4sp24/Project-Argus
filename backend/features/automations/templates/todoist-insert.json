@@ -1,0 +1,75 @@
+{
+  "name": "Argus: Add Todoist Task",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "New Task Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "argus-todoist-insert",
+      "parameters": {
+        "path": "argus-todoist-insert",
+        "formTitle": "Add Task",
+        "formDescription": "Creates a task in Todoist. Argus fires this from the TASKS.DUE quick-add, and the form works on its own from a phone.",
+        "responseMode": "lastNode",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Task",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "What needs doing"
+            },
+            {
+              "fieldLabel": "Due",
+              "fieldType": "date",
+              "requiredField": false
+            },
+            {
+              "fieldLabel": "Priority",
+              "fieldType": "dropdown",
+              "requiredField": false,
+              "fieldOptions": {
+                "values": [
+                  {"option": "P1"},
+                  {"option": "P2"},
+                  {"option": "P3"},
+                  {"option": "P4"}
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "todoist_create",
+      "name": "Create Todoist Task",
+      "type": "n8n-nodes-base.todoist",
+      "typeVersion": 2.2,
+      "position": [220, 0],
+      "parameters": {
+        "resource": "task",
+        "operation": "create",
+        "content": "={{ $json.Task }}",
+        "options": {
+          "dueDate": "={{ $json.Due || undefined }}",
+          "priority": "={{ ({ 'P1': 4, 'P2': 3, 'P3': 2, 'P4': 1 })[$json.Priority] || undefined }}"
+        }
+      },
+      "credentials": {
+        "todoistApi": {"name": "Todoist account"}
+      }
+    }
+  ],
+  "connections": {
+    "New Task Form": {
+      "main": [[{"node": "Create Todoist Task", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "argus"}]
+}

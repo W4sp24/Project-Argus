@@ -11,8 +11,12 @@ import {
 import { usePathname, useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 
-/** The four content modes plus SYSTEM — replaces per-page theming (§2). */
-export type Mode = "general" | "study" | "research" | "code" | "system";
+/** The four content modes, SYSTEM, and AUTOMATIONS — replaces per-page
+ * theming (§2). AUTOMATIONS earns a mode of its own because the approved
+ * design gives it one: its own tab and its own accent, so a screen driven by
+ * a second service you have to keep alive is never mistaken for a native one
+ * at a glance. */
+export type Mode = "general" | "study" | "research" | "code" | "system" | "automations";
 
 export const ACCENTS: Record<Mode, { ac: string; acBg: string }> = {
   general: { ac: "#a78bfa", acBg: "#171029" },
@@ -20,6 +24,7 @@ export const ACCENTS: Record<Mode, { ac: string; acBg: string }> = {
   research: { ac: "#e879f9", acBg: "#210f20" },
   code: { ac: "#34d399", acBg: "#0b1712" },
   system: { ac: "#fbbf24", acBg: "#201804" },
+  automations: { ac: "#60a5fa", acBg: "#0b1424" },
 };
 
 /** Where a mode tab's click navigates to. */
@@ -29,6 +34,7 @@ export const MODE_ROUTES: Record<Mode, string> = {
   research: "/research",
   code: "/code",
   system: "/system",
+  automations: "/automations",
 };
 
 const STORAGE_KEY = "argus-mode";
@@ -44,6 +50,7 @@ function modeFromPathname(pathname: string): Mode {
   if (pathname.startsWith("/research")) return "research";
   if (pathname.startsWith("/code")) return "code";
   if (pathname.startsWith("/system")) return "system";
+  if (pathname.startsWith("/automations")) return "automations";
   return "general";
 }
 

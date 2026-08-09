@@ -24,8 +24,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.core.config import ConfigError, Settings
+from backend.features.automations.router import build_automations_router
 from backend.features.briefing.router import build_briefing_router
 from backend.features.chat.router import ChatRunner, build_chat_router
+from backend.features.external.server import start_external_server
 from backend.features.flashcards.router import build_flashcards_router
 from backend.features.index.router import build_index_router
 from backend.features.ingest.router import build_ingest_router
@@ -141,9 +143,18 @@ def create_app(
             threading.Thread(
                 target=_auto_index_and_watch, args=(stop_event,), daemon=True
             ).start()
+        # The inbound automations surface, on its own app and its own loopback
+        # port. Gated on resolved.external_enabled, which defaults to False, so
+        # an install that upgrades into this feature opens no port until asked
+        # — and test apps, which never set it, bind nothing.
+        external = await start_external_server(resolved)
+        if external is not None:
+            _app.state.external_port = external.port
         try:
             yield
         finally:
+            if external is not None:
+                await external.stop()
             stop_event.set()
             if scheduler is not None:
                 scheduler.shutdown(wait=False)
@@ -218,6 +229,7 @@ def create_app(
     app.include_router(build_briefing_router(resolved, briefing_composer or _default_composer()))
     app.include_router(build_insights_router(resolved))
     app.include_router(build_chat_router(resolved, chat_runner))
+    app.include_router(build_automations_router(resolved))
 
     return app
 

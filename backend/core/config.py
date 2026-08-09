@@ -20,10 +20,39 @@ from backend.core.taxonomy import Taxonomy, set_active_taxonomy
 # reindex, watch, and init_vault's _write_env without changing any signature.
 DEFAULT_ENV_FILE = Path(os.environ.get("ARGUS_ENV_FILE", ".env"))
 DEFAULT_BACKEND_PORT = 8000
+#: The inbound automations surface. Deliberately not adjacent to 8000 — a
+#: fat-fingered tunnel config pointed one port off should fail to connect, not
+#: quietly expose the unauthenticated main API to the internet.
+DEFAULT_EXTERNAL_PORT = 8787
 
 
 class ConfigError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
+
+
+def _parse_bool(raw: str | None, default: bool) -> bool:
+    """Defensively parse a boolean env value; a malformed value keeps ``default``.
+
+    Startup must never crash on a typo'd ``.env`` value, so this never raises.
+    """
+    if raw is None:
+        return default
+    trimmed = raw.strip().lower()
+    if trimmed in ("1", "true", "yes", "on"):
+        return True
+    if trimmed in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _parse_int(raw: str | None, default: int) -> int:
+    """Defensively parse an int env value; a malformed value keeps ``default``."""
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except (ValueError, AttributeError):
+        return default
 
 
 def parse_env_file(env_file: Path) -> dict[str, str]:
@@ -51,6 +80,19 @@ class Settings:
     backend_port: int = DEFAULT_BACKEND_PORT
     _vault_path: Path | None = field(default=None, repr=False)
     taxonomy: Taxonomy = field(default_factory=Taxonomy)
+    # The n8n automations inbound surface (backend/features/automations/) is
+    # opt-in: a webhook receiver listening on a port is a public attack
+    # surface the moment it's reachable, so it must default to closed rather
+    # than silently on for every existing install.
+    external_enabled: bool = False
+    #: Fixed, not OS-assigned. The main backend takes an ephemeral port because
+    #: only the Electron shell needs to find it, and it learns it over a stdout
+    #: handshake. This port is different: a tunnel is configured against it by
+    #: hand, so a port that moves between restarts would silently break that
+    #: tunnel every time Argus restarted — the exact failure mode the design
+    #: warns about for ephemeral tunnel hostnames.
+    external_port: int = DEFAULT_EXTERNAL_PORT
+    external_base_url: str = ""
 
     @classmethod
     def load(cls, env_file: Path | None = None) -> Settings:
@@ -66,6 +108,9 @@ class Settings:
             backend_port=int(values.get("BACKEND_PORT", DEFAULT_BACKEND_PORT)),
             _vault_path=Path(vault_raw) if vault_raw else None,
             taxonomy=taxonomy,
+            external_enabled=_parse_bool(values.get("ARGUS_EXTERNAL_ENABLED"), False),
+            external_port=_parse_int(values.get("ARGUS_EXTERNAL_PORT"), DEFAULT_EXTERNAL_PORT),
+            external_base_url=values.get("ARGUS_EXTERNAL_BASE_URL", "").strip(),
         )
 
     @property
@@ -101,6 +146,11 @@ class Settings:
     def mcp_servers_file(self) -> Path:
         """Where registered external MCP servers persist, beside ``models.json``."""
         return self.db_path.parent / "mcp-servers.json"
+
+    @property
+    def automations_file(self) -> Path:
+        """Where the single registered n8n instance persists, beside ``models.json``."""
+        return self.db_path.parent / "automations.json"
 
     @property
     def gcal_credentials_file(self) -> Path:

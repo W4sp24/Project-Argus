@@ -18,10 +18,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from backend.connectors import gcal
 from backend.connectors.gcal import CalendarEvent
 from backend.core.config import Settings
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.features.automations import sources
 from backend.vault.tasks import TaskItem, bucketed_tasks, parse_task_line, refresh_cache
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,11 @@ MAX_WEAK_TOPICS = 5
 UNCHECKED_RE = re.compile(r"^\s*[-*]\s+\[ \]\s+(.*)$")
 
 Composer = Callable[["BriefingData"], str]
+
+#: Predicate over a vault-relative note path: may this note's content leave
+#: this machine? Only the outward-facing surface supplies one (see
+#: :func:`briefing_data`); local callers pass nothing.
+NoteVisible = Callable[[str | None], bool]
 
 
 class BriefingData(BaseModel):
@@ -46,11 +51,18 @@ class BriefingData(BaseModel):
 
 
 def _yesterday_unfinished(
-    vault_path: Path, today: date, *, taxonomy: Taxonomy | None = None
+    vault_path: Path,
+    today: date,
+    *,
+    taxonomy: Taxonomy | None = None,
+    note_visible: NoteVisible | None = None,
 ) -> list[str]:
     tax = taxonomy or active_taxonomy()
-    note = vault_path / tax.daily / f"{(today - timedelta(days=1)).isoformat()}.md"
+    rel = f"{tax.daily}/{(today - timedelta(days=1)).isoformat()}.md"
+    note = vault_path / rel
     if not note.is_file():
+        return []
+    if note_visible is not None and not note_visible(rel):
         return []
     unfinished = []
     for line in note.read_text(encoding="utf-8").splitlines():
@@ -70,10 +82,19 @@ def _exam_countdowns(buckets: dict[str, list[TaskItem]], today: date) -> list[di
     return sorted(countdowns, key=lambda item: item["days_left"])
 
 
-def _weak_topics(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[str]:
+def _weak_topics(
+    vault_path: Path,
+    *,
+    taxonomy: Taxonomy | None = None,
+    note_visible: NoteVisible | None = None,
+) -> list[str]:
     tax = taxonomy or active_taxonomy()
     topics = []
     for queue_file in sorted(vault_path.glob(tax.review_queue_glob)):
+        if note_visible is not None:
+            rel = queue_file.relative_to(vault_path).as_posix()
+            if not note_visible(rel):
+                continue
         for line in queue_file.read_text(encoding="utf-8").splitlines():
             match = UNCHECKED_RE.match(line)
             if match:
@@ -81,21 +102,48 @@ def _weak_topics(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[
     return topics[:MAX_WEAK_TOPICS]
 
 
-def briefing_data(settings: Settings, conn: sqlite3.Connection, today: date) -> BriefingData:
-    """Assemble the day's facts. Connectors degrade to empty when unconfigured."""
+def briefing_data(
+    settings: Settings,
+    conn: sqlite3.Connection,
+    today: date,
+    *,
+    note_visible: NoteVisible | None = None,
+) -> BriefingData:
+    """Assemble the day's facts. Connectors degrade to empty when unconfigured.
+
+    ``note_visible`` is an optional per-note predicate applied to every vault
+    source before anything is derived from it. It exists for the outward-facing
+    surface (``/api/external/briefing``), which must satisfy the full I3 check
+    rather than the directory-only filtering the task cache does.
+
+    It is applied to the **buckets**, not to the finished ``BriefingData``,
+    because filtering the output is not equivalent: ``exam_countdowns`` derives
+    its titles from the same tasks, so a post-filter on ``due_today`` and
+    ``overdue`` alone would still leak the text of a withheld task. Filtering
+    the input makes every derived field correct at once.
+
+    Local callers pass nothing and behave exactly as before.
+    """
     vault = settings.vault_path
     tax = settings.taxonomy
     refresh_cache(conn, vault, taxonomy=tax)
     buckets = bucketed_tasks(conn, today=today)
-    events, _gcal_error = gcal.list_events_safe(today)
+    if note_visible is not None:
+        buckets = {
+            name: [task for task in items if note_visible(task.path)]
+            for name, items in buckets.items()
+        }
+    events, _gcal_error = sources.calendar_events(conn, today)
     return BriefingData(
         date=today.isoformat(),
         events=events,
         due_today=buckets["today"],
         overdue=buckets["overdue"],
-        yesterday_unfinished=_yesterday_unfinished(vault, today, taxonomy=tax),
+        yesterday_unfinished=_yesterday_unfinished(
+            vault, today, taxonomy=tax, note_visible=note_visible
+        ),
         exam_countdowns=_exam_countdowns(buckets, today),
-        weak_topics=_weak_topics(vault, taxonomy=tax),
+        weak_topics=_weak_topics(vault, taxonomy=tax, note_visible=note_visible),
     )
 
 

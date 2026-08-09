@@ -40,6 +40,13 @@ class TaskItem(BaseModel):
     source: str = "vault"
     path: str | None = None
     line: int | None = None
+    #: The upstream record's own id, for tasks that came from a service rather
+    #: than the vault. `path`/`line` are the vault's equivalent handle; this is
+    #: what lets an n8n action workflow close the real task the user ticked.
+    #: `None` for vault tasks, which are edited through the writer instead.
+    external_id: str | None = None
+    #: Deep link back to the task in its own service, when it supplies one.
+    href: str | None = None
 
 
 def parse_task_line(line: str) -> TaskItem | None:

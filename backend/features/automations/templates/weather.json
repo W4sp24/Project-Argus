@@ -1,0 +1,73 @@
+{
+  "name": "Argus: Weather → Metric Widget",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "minutes", "minutesInterval": 30}]
+        }
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch Current Weather",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [220, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.open-meteo.com/v1/forecast",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "latitude", "value": "40.7128"},
+            {"name": "longitude", "value": "-74.0060"},
+            {"name": "current_weather", "value": "true"},
+            {"name": "temperature_unit", "value": "fahrenheit"}
+          ]
+        }
+      }
+    },
+    {
+      "id": "push",
+      "name": "Push Weather Widget",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [440, 0],
+      "executeOnce": true,
+      "parameters": {
+        "method": "POST",
+        "url": "{{ARGUS_URL}}/api/external/widget/weather",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ARGUS_TOKEN}}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"widget\": \"metric\", \"title\": \"Weather\", \"expected_interval_seconds\": 1800, \"label\": \"Now\", \"value\": $json.current_weather.temperature, \"sub\": \"\\u00b0F, wind \" + $json.current_weather.windspeed + \" mph\" }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [[{"node": "Fetch Current Weather", "type": "main", "index": 0}]]
+    },
+    "Fetch Current Weather": {
+      "main": [[{"node": "Push Weather Widget", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "argus"}]
+}

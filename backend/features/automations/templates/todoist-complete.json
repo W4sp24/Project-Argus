@@ -1,0 +1,56 @@
+{
+  "name": "Argus: Complete Todoist Task",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Complete Task Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "argus-todoist-complete",
+      "parameters": {
+        "path": "argus-todoist-complete",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "todoist_close",
+      "name": "Close Todoist Task",
+      "type": "n8n-nodes-base.todoist",
+      "typeVersion": 2.2,
+      "position": [220, 0],
+      "parameters": {
+        "resource": "task",
+        "operation": "close",
+        "taskId": "={{ $json.body.taskId }}"
+      },
+      "credentials": {
+        "todoistApi": {"name": "Todoist account"}
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond To Argus",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [440, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ \"ok\": true, \"message\": \"closed in Todoist\" }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Complete Task Webhook": {
+      "main": [[{"node": "Close Todoist Task", "type": "main", "index": 0}]]
+    },
+    "Close Todoist Task": {
+      "main": [[{"node": "Respond To Argus", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "argus"}]
+}

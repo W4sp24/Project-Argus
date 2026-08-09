@@ -62,7 +62,7 @@ export class ApiError extends Error {
 export async function mutateJSON<T>(
   url: string,
   body: unknown,
-  method: "POST" | "PUT" | "DELETE" = "POST",
+  method: "POST" | "PUT" | "PATCH" | "DELETE" = "POST",
 ): Promise<T> {
   const response = await apiFetch(url, {
     method,
@@ -1006,4 +1006,651 @@ export function updateQuickLink(
 /** Delete a quick link. DELETE /api/quick-links/{id}. */
 export function deleteQuickLink(id: number) {
   return mutateJSON<{ ok: boolean }>(`/api/quick-links/${id}`, undefined, "DELETE");
+}
+
+// --- Automations (n8n) ---------------------------------------------------
+//
+// Mirrors backend/features/automations/router.py exactly — see that file's
+// response models for the source of truth. Two directions of credential are
+// in play here and must never be conflated: `AutomationInstance`/the
+// register|test|delete flow is Argus calling *out* to n8n (n8n's API key);
+// n8n calling *back into* Argus (the external/tunnel bearer token) belongs to
+// a different, not-yet-built surface — see ConnectN8nDialog's step 3.
+
+/** The single registered n8n instance. Never carries its API key (I4). */
+export interface AutomationInstance {
+  id: string;
+  name: string;
+  /** "LOCAL" | "REMOTE" — where the instance runs, not how it is reached. */
+  kind: string;
+  base_url: string;
+  has_key: boolean;
+  key_state: KeyState;
+  /** Live reachability, re-probed per instance on every list call. A false
+   * here is a normal degraded state, not an error: cached widgets and cards
+   * keep rendering regardless. */
+  connected: boolean;
+}
+
+/** Mirrors N8nProbeResult — what the "Test connection" step renders. */
+export interface N8nProbeResult {
+  ok: boolean;
+  detail: string;
+  latency_ms: number | null;
+  workflow_count: number | null;
+  /** Failure class, so the dialog can tell "wrong key" from "wrong URL"
+   * without pattern-matching `detail`, which is prose free to be reworded:
+   * "ok" | "auth" | "unreachable" | "timeout" | "not_n8n" | "api_disabled"
+   * | "error". */
+  reason: string;
+}
+
+/** One parsed Form Trigger field — `dataclasses.asdict(FormField)` on the wire. */
+export interface AutomationField {
+  name: string;
+  label: string;
+  type: string;
+  required: boolean;
+  placeholder: string | null;
+  default: string | null;
+  options: string[] | null;
+  multiple: boolean;
+  html: string | null;
+  secret: boolean;
+  hidden: boolean;
+  unrecognized: boolean;
+  raw_type: string | null;
+}
+
+/** One row of `automation_runs`. */
+export interface AutomationRun {
+  id: string;
+  workflow_id: string;
+  workflow_name: string | null;
+  /** Which n8n instance this run belongs to — see AutomationCard.instance_id. */
+  instance_id: string;
+  started_at: string;
+  finished_at: string | null;
+  /** "running" | "ok" | "failed" | "timeout" */
+  status: string;
+  /** "ack" | "status" | "widget" | null */
+  mode: string | null;
+  message: string | null;
+  execution_id: string | null;
+  payload: unknown;
+}
+
+/** One cached workflow, parsed for the dashboard/management page. */
+export interface AutomationCard {
+  id: string;
+  /** Which n8n instance this workflow was pulled from — the join key for the
+   * instance filter and for OriginChip. */
+  instance_id: string;
+  name: string | null;
+  tags: string[];
+  /** "form" | "button" | "none" */
+  kind: string;
+  fields: AutomationField[];
+  webhook_id: string | null;
+  webhook_path: string | null;
+  basic_auth: boolean;
+  /** argus:confirm — the UI must gate firing behind a ConfirmDialog. */
+  confirm: boolean;
+  /** argus:async, wire key "async" (FastAPI serializes by alias). */
+  async: boolean;
+  active: boolean;
+  last_seen_at: string;
+  last_run: AutomationRun | null;
+}
+
+export interface AutomationsResponse {
+  instance: AutomationInstance | null;
+  /** Every registered instance. Supersedes `instance`, which stays byte-
+   * identical for 0/1 registered instances and degrades to `null` for 2+. */
+  instances: AutomationInstance[];
+  workflows: AutomationCard[];
+  /** Whether n8n answered the live reachability check on this request — false
+   * (with cached cards still populated) is a normal, fully-supported state. */
+  connected: boolean;
+  detail: string;
+}
+
+/** Computed, not stored — see backend store.widget_state. */
+export type WidgetState = "live" | "stale" | "empty" | "waiting";
+
+export interface AutomationWidget {
+  slug: string;
+  /** Which n8n instance pushed this. The same slug on two instances is two
+   * widgets, not one, so this is part of the widget's identity — not a label. */
+  instance_id: string;
+  title: string | null;
+  /** "metric" | "list" | "table" | "timeline" | "text" | "chart" */
+  kind: string;
+  payload: unknown;
+  last_seen_at: string | null;
+  expected_interval_seconds: number | null;
+  created_at: string;
+  position: number | null;
+  pinned: boolean;
+  hidden: boolean;
+  state: WidgetState;
+  /** Grid span, 1..4. Auto-placed widgets still carry a sensible default —
+   * this is never null, unlike `position`. */
+  grid_cols: number;
+  grid_rows: number;
+  /** Has the user taken control of THIS widget's layout (drag/resize/reorder)?
+   * Per-widget, not global — see AutomationWidgets.tsx's "take control" model. */
+  layout_locked: boolean;
+}
+
+export interface AutomationRefreshResult {
+  ok: boolean;
+  count: number;
+  dropped: number;
+}
+
+/** Mirrors RunResponse — the result of firing one workflow. */
+export interface AutomationRunResult {
+  run_id: string;
+  /** "running" | "ok" | "failed" | "timeout" */
+  status: string;
+  /** "ack" | "status" | "widget" | null */
+  mode: string | null;
+  message: string | null;
+  execution_id: string | null;
+  execution_url: string | null;
+  payload: unknown;
+  /** For a widget-mode run: which widget it wrote. `payload` carries only the
+   * kind-specific fields (the backend's ValidatedWidget strips slug and kind),
+   * so without these the result can be rendered but never acted on. */
+  widget_slug: string | null;
+  widget_kind: string | null;
+  instance_id: string | null;
+}
+
+/** Registered automations + the instance's live connection state. GET /api/automations. */
+export function useAutomations() {
+  return useSWR<AutomationsResponse>("/api/automations", fetcher);
+}
+
+/**
+ * Run history, newest first, optionally scoped to one workflow. GET
+ * /api/automations/runs.
+ *
+ * `options.refreshInterval` turns this into a poll — the command palette's
+ * RUN mode uses it to watch an `argus:async` workflow's fire-and-forget run
+ * settle, since the initial POST response for those never carries the final
+ * status (see `RunResponse.status === "running"`). `options.enabled: false`
+ * suppresses the request entirely (a `null` SWR key) rather than fetching
+ * and discarding — most callers of this hook don't want to poll at all.
+ */
+export function useAutomationRuns(
+  workflowId?: string,
+  limit?: number,
+  options?: { refreshInterval?: number; enabled?: boolean },
+) {
+  const enabled = options?.enabled ?? true;
+  const params = new URLSearchParams();
+  if (workflowId) params.set("workflow_id", workflowId);
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  const key = enabled ? `/api/automations/runs${qs ? `?${qs}` : ""}` : null;
+  return useSWR<AutomationRun[]>(
+    key,
+    fetcher,
+    options?.refreshInterval ? { refreshInterval: options.refreshInterval } : undefined,
+  );
+}
+
+/** Dashboard widgets pushed by workflows, with computed state. GET /api/automations/widgets. */
+export function useAutomationWidgets() {
+  return useSWR<AutomationWidget[]>("/api/automations/widgets", fetcher);
+}
+
+/** Every registered n8n instance, each re-probed for reachability.
+ * GET /api/automations/instances. */
+export function useAutomationInstances() {
+  return useSWR<AutomationInstance[]>("/api/automations/instances", fetcher);
+}
+
+/** Probe an n8n instance without saving anything — the TEST CONNECTION step. */
+export function testN8nInstance(body: { base_url: string; api_key: string }) {
+  return mutateJSON<N8nProbeResult>("/api/automations/instance/test", body);
+}
+
+/**
+ * Register an n8n instance. The backend re-probes before it saves (409 on a
+ * duplicate name, 422 on probe failure) — `POST /api/automations/instances`,
+ * the multi-instance route (F5). `kind` defaults server-side to "REMOTE"
+ * when omitted.
+ */
+export function registerN8nInstance(body: {
+  name: string;
+  base_url: string;
+  api_key: string;
+  kind?: "LOCAL" | "REMOTE";
+}) {
+  return mutateJSON<AutomationInstance>("/api/automations/instances", body);
+}
+
+/** Forget the registered n8n instance and its stored API key. Deletes
+ * `instances[0]`, 404 when empty — the pre-multi-instance compat route. */
+export function deleteN8nInstance() {
+  return mutateJSON<ConnectResult>("/api/automations/instance", undefined, "DELETE");
+}
+
+/** Forget one registered n8n instance (by id) and its stored API key —
+ * `DELETE /api/automations/instances/{id}`. */
+export function deleteAutomationInstance(id: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/automations/instances/${encodeURIComponent(id)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+/** Re-pull workflows tagged `argus` from n8n and reconcile the cache. */
+export function refreshAutomations() {
+  return mutateJSON<AutomationRefreshResult>("/api/automations/refresh", undefined);
+}
+
+/** Re-pull workflows tagged `argus` from one instance and reconcile its
+ * cache — `POST /api/automations/instances/{id}/refresh`. Also doubles as
+ * "try reconnecting": it re-runs the same call the reachability probe does. */
+export function refreshAutomationInstance(id: string) {
+  return mutateJSON<AutomationRefreshResult>(
+    `/api/automations/instances/${encodeURIComponent(id)}/refresh`,
+    undefined,
+  );
+}
+
+/**
+ * Fire one workflow's trigger. `payload` is forwarded verbatim as the
+ * form/webhook body.
+ *
+ * Pass `instanceId` (every `AutomationCard` carries one) to hit the
+ * instance-scoped route, `POST /automations/instances/{instance_id}/workflows/
+ * {workflow_id}/run` — required once two instances can register the same
+ * workflow id, and the route F9 keeps once the unscoped compat shim below is
+ * removed. `instanceId` is optional only so callers outside this chunk's
+ * scope that still invoke the two-argument form keep working unchanged
+ * against the compat route (`POST /automations/{workflow_id}/run`), which
+ * 409s if the id turns out to be ambiguous across instances rather than
+ * guessing.
+ */
+export function runAutomation(
+  workflowId: string,
+  payload: Record<string, unknown> = {},
+  instanceId?: string,
+) {
+  const path = instanceId
+    ? `/api/automations/instances/${encodeURIComponent(instanceId)}/workflows/${encodeURIComponent(workflowId)}/run`
+    : `/api/automations/${encodeURIComponent(workflowId)}/run`;
+  return mutateJSON<AutomationRunResult>(path, { payload });
+}
+
+/**
+ * Best-effort cancellation of a still-`running` run — stops it via n8n's
+ * stop API when an execution id was recorded, marks the run `failed` with a
+ * message saying a human stopped it (the backend never uses a `'cancelled'`
+ * status value; see `router.cancel_run`), and frees the workflow's in-flight
+ * lock so it can be re-run immediately.
+ */
+export function cancelAutomationRun(runId: string) {
+  return mutateJSON<AutomationRun>(
+    `/api/automations/runs/${encodeURIComponent(runId)}/cancel`,
+    undefined,
+    "POST",
+  );
+}
+
+/**
+ * Pin/hide/reorder/resize a widget. `instanceId` scopes the slug the same
+ * way `deleteAutomationWidget` does — a bare slug is ambiguous once two
+ * instances push the same one, and the backend has no default to fall back
+ * on for a PATCH the way it does for a DELETE.
+ *
+ * Any call marks that widget's `layout_locked` true server-side — this is
+ * unconditional and per-widget, never global (see AutomationWidgets.tsx's
+ * "take control" model). There is no documented way to clear it back through
+ * this endpoint; see the comment on `restoreAutoPlace` there.
+ */
+export function patchAutomationWidget(
+  slug: string,
+  instanceId: string,
+  body: { pinned?: boolean; hidden?: boolean; position?: number; grid_cols?: number; grid_rows?: number },
+) {
+  return mutateJSON<AutomationWidget>(
+    `/api/automations/widgets/${encodeURIComponent(slug)}?instance_id=${encodeURIComponent(instanceId)}`,
+    body,
+    "PATCH",
+  );
+}
+
+/** Hand every widget back to auto-placement.
+ *
+ * One route rather than a patch per widget: every layout write implicitly
+ * locks the widget it touches, so unlocking through that path is impossible
+ * by construction — sending the patch is what re-locks it. */
+export function resetAutomationLayout() {
+  return mutateJSON<AutomationRefreshResult>(
+    "/api/automations/widgets/layout/reset",
+    undefined,
+  );
+}
+
+/** A bundled n8n workflow template from the shipped gallery. */
+export interface AutomationTemplate {
+  id: string;
+  name: string;
+  description: string;
+  kind: "display" | "action";
+  widget_slug: string | null;
+  /** The connector module this template replaces, when it replaces one. */
+  replaces: string | null;
+  /** Credentials the user must grant in n8n — the one manual step by design. */
+  requires: string[];
+  /** Short factual badges (renderer, field count, cadence) derived from the
+   * bundled definition — rendered as small bordered tags on the card. */
+  chips: string[];
+  installed: boolean;
+}
+
+export interface TemplateInstallResult {
+  workflow_id: string;
+  /** Where the user goes to grant the credential; installing cannot do it. */
+  open_in_n8n: string;
+  /**
+   * Whether n8n accepted the activation. `false` is the expected outcome for
+   * any template with a non-empty `requires` — n8n refuses to activate a
+   * workflow whose credentials are not configured yet, and they are granted
+   * after this install, via `open_in_n8n`.
+   */
+  active: boolean;
+  /** n8n's own words for a refused activation, or null when it succeeded. */
+  activation_error: string | null;
+}
+
+export function useAutomationTemplates() {
+  return useSWR<AutomationTemplate[]>("/api/automations/templates", fetcher);
+}
+
+export function installAutomationTemplate(templateId: string) {
+  return mutateJSON<TemplateInstallResult>(
+    `/api/automations/templates/${encodeURIComponent(templateId)}/install`,
+    undefined,
+  );
+}
+
+export interface WorkflowActivateResult {
+  workflow_id: string;
+  active: boolean;
+}
+
+/**
+ * Activate a workflow that installed inactive — the other half of the
+ * credential hand-off, once the user has granted it in n8n.
+ */
+export function activateAutomationWorkflow(instanceId: string, workflowId: string) {
+  return mutateJSON<WorkflowActivateResult>(
+    `/api/automations/instances/${encodeURIComponent(instanceId)}/workflows/${encodeURIComponent(workflowId)}/activate`,
+    undefined,
+  );
+}
+
+/**
+ * Destroy the workflow in n8n. Irreversible — Argus keeps no copy of the
+ * definition, so there is nothing to restore from.
+ */
+export function deleteAutomationWorkflow(instanceId: string, workflowId: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/automations/instances/${encodeURIComponent(instanceId)}/workflows/${encodeURIComponent(workflowId)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+/**
+ * Drop the `argus` tag: the workflow leaves Argus but survives in n8n, and
+ * re-tagging it there brings it back.
+ */
+export function unregisterAutomationWorkflow(instanceId: string, workflowId: string) {
+  return mutateJSON<ConnectResult>(
+    `/api/automations/instances/${encodeURIComponent(instanceId)}/workflows/${encodeURIComponent(workflowId)}/unregister`,
+    undefined,
+  );
+}
+
+/** The inbound surface's configuration — never its token. */
+export interface ExternalSurfaceInfo {
+  enabled: boolean;
+  port: number;
+  base_url: string;
+  token_state: KeyState;
+}
+
+/** A freshly issued bearer token. The only response that ever carries its value. */
+export interface ExternalTokenResult {
+  token: string;
+  rotated: boolean;
+  header_name: string;
+  header_value: string;
+  base_url: string;
+}
+
+export function useExternalSurface() {
+  return useSWR<ExternalSurfaceInfo>("/api/automations/external", fetcher);
+}
+
+/**
+ * Issue or rotate the token n8n uses to call back into Argus.
+ *
+ * The value comes back exactly once — the keyring holds the only copy and
+ * there is no read-it-back endpoint — so the caller must show it immediately.
+ */
+export function issueExternalToken(instanceId?: string) {
+  // Scoped when we know which instance: each one carries its own token, so
+  // revoking one never silences the others. The unscoped compat route is
+  // only valid while exactly one instance is registered.
+  const path = instanceId
+    ? `/api/automations/instances/${encodeURIComponent(instanceId)}/external/token`
+    : "/api/automations/external/token";
+  return mutateJSON<ExternalTokenResult>(path, undefined);
+}
+
+/** One `argus`-tagged workflow found on an instance that is not registered yet. */
+export interface DiscoveredWorkflow {
+  id: string;
+  name: string | null;
+  active: boolean;
+  /** "display" | "action" */
+  kind: string;
+  tagged: boolean;
+}
+
+/**
+ * The `argus`-tagged workflows on an instance, before registering it.
+ *
+ * Persists nothing and needs no registration — it exists so the connect
+ * dialog can show what it is about to register before committing. Only
+ * tagged workflows come back: the tag is the consent.
+ */
+export function discoverN8nWorkflows(body: { base_url: string; api_key: string }) {
+  return mutateJSON<DiscoveredWorkflow[]>("/api/automations/instances/discover", body);
+}
+
+/** One input an action workflow's trigger asks for. `name` is the payload key. */
+export interface AutomationActionField {
+  name: string;
+  type: string;
+  required: boolean;
+}
+
+/**
+ * An installed workflow that provides a capability a native panel can use.
+ *
+ * A panel knows it wants to *create a task*; it cannot know the workflow id,
+ * because the user's own n8n minted that at install time. So it asks by
+ * `action_slug` and fires whatever comes back.
+ */
+export interface AutomationAction {
+  /** "calendar.create" | "task.create" | "task.complete" */
+  action_slug: string;
+  template_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  instance_id: string;
+  instance_name: string;
+  /** Installed but inactive — nearly always an ungranted credential in n8n. */
+  active: boolean;
+  fields: AutomationActionField[];
+}
+
+/**
+ * Installed action workflows, indexed by slug — GET /api/automations/actions.
+ *
+ * Returns a lookup rather than the raw list because every caller wants "is
+ * this one capability available?", never the whole set.
+ */
+export function useAutomationActions(): {
+  actions: Record<string, AutomationAction>;
+  isLoading: boolean;
+} {
+  const { data, isLoading } = useSWR<AutomationAction[]>("/api/automations/actions", fetcher);
+  const actions: Record<string, AutomationAction> = {};
+  for (const action of data ?? []) actions[action.action_slug] = action;
+  return { actions, isLoading };
+}
+
+/**
+ * Fire an action workflow with a payload keyed by its own field names.
+ *
+ * `values` is keyed by the *label* the workflow's form declares, which is why
+ * callers build it from `action.fields` rather than hardcoding: renaming a
+ * field in n8n changes the payload keys, and a hardcoded key would silently
+ * send nothing under the new name.
+ */
+export function runAutomationAction(
+  action: AutomationAction,
+  values: Record<string, unknown>,
+): Promise<AutomationRunResult> {
+  return runAutomation(action.workflow_id, values, action.instance_id);
+}
+
+/** Find an action's field name case-insensitively, or undefined if it has none. */
+export function actionFieldName(
+  action: AutomationAction,
+  wanted: string,
+): string | undefined {
+  return action.fields.find((f) => f.name.toLowerCase() === wanted.toLowerCase())?.name;
+}
+
+/** One calendar event on the agenda. `source` is "gcal" or "n8n". */
+export interface AgendaEvent {
+  title: string;
+  start: string;
+  end: string;
+  all_day: boolean;
+  source?: string;
+  location?: string | null;
+}
+
+/** One task on the agenda — from the vault, a connector, or an n8n widget. */
+export interface AgendaTask {
+  text: string;
+  done: boolean;
+  due: string | null;
+  scheduled: string | null;
+  priority: string | null;
+  tags: string[];
+  source: string;
+  path: string | null;
+  line: number | null;
+  external_id?: string | null;
+  href?: string | null;
+}
+
+/** GET /api/agenda — everything the Today view needs for one date. */
+export interface Agenda {
+  date: string;
+  events: AgendaEvent[];
+  tasks: AgendaTask[];
+  top_tasks: AgendaTask[];
+  configured: { gcal: boolean; todoist: boolean };
+  /** Populated only for a connector that failed *this* request. */
+  connector_errors?: Record<string, string>;
+}
+
+/**
+ * The agenda for one day, or today when `day` is omitted.
+ *
+ * One hook rather than the three hand-mirrored `useSWR("/api/agenda")` calls
+ * this replaced: those each declared their own local `Agenda` interface, and
+ * each had drifted to a different subset of the real response —
+ * `connector_errors` was in none of them, which is why a failing connector
+ * rendered as an empty panel with a healthy badge.
+ *
+ * Omitting `day` keeps the key as the bare `/api/agenda`, so the server and
+ * client agree on the first render; a date only appears in the key once the
+ * user navigates, which is necessarily after mount.
+ */
+export function useAgenda(day?: string | null) {
+  return useSWR<Agenda>(day ? `/api/agenda?day=${encodeURIComponent(day)}` : "/api/agenda", fetcher);
+}
+
+/** Which path is currently answering for each migratable source. */
+export interface SourceProvenance {
+  /** "n8n" | "connector" */
+  calendar: string;
+  tasks: string;
+}
+
+/**
+ * Provenance for the dashboard's `VIA N8N` markers.
+ *
+ * Read from the backend rather than inferred from widget state here: the
+ * server already applies a freshness rule to decide which path supplies the
+ * data, and re-deriving that in the client would be a second copy of the
+ * decision, free to drift from the one that actually picks it.
+ */
+export function useSourceProvenance() {
+  return useSWR<SourceProvenance>("/api/automations/sources", fetcher);
+}
+
+/** One row of `automation_events` — the ACTIVITY tab's real feed of pushes,
+ * runs, installs, and captures, not only runs. */
+export interface AutomationEvent {
+  ts: string;
+  instance_id: string;
+  /** "RUN" | "PUSH" | "FAIL" | "INSTALL" | "CAPTURE" */
+  tag: string;
+  /** The workflow/template name responsible, when known. */
+  subject: string | null;
+  text: string;
+}
+
+/**
+ * Activity feed, newest first — GET /api/automations/events. `tag` is sent
+ * as-is; the backend normalizes case before matching (`RUN`/`run` both
+ * work), so callers can pass the lowercase filter chip value directly.
+ */
+export function useAutomationEvents(tag?: string, instanceId?: string, limit?: number) {
+  const params = new URLSearchParams();
+  if (tag) params.set("tag", tag);
+  if (instanceId) params.set("instance_id", instanceId);
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  return useSWR<AutomationEvent[]>(`/api/automations/events${qs ? `?${qs}` : ""}`, fetcher);
+}
+
+/** Remove a widget from the dashboard. */
+export function deleteAutomationWidget(slug: string, instanceId?: string) {
+  // A bare slug is ambiguous once two instances push the same one — the
+  // backend 409s rather than guessing, so scope it whenever we know.
+  const qs = instanceId ? `?instance_id=${encodeURIComponent(instanceId)}` : "";
+  return mutateJSON<ConnectResult>(
+    `/api/automations/widgets/${encodeURIComponent(slug)}${qs}`,
+    undefined,
+    "DELETE",
+  );
 }

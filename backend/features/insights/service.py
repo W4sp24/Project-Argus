@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from backend.connectors import gcal
 from backend.core.config import Settings
+from backend.features.automations import sources
 from backend.vault.tasks import refresh_cache
 
 DONE_DATE_RE = re.compile(r"✅\s*(\d{4}-\d{2}-\d{2})")
@@ -62,9 +63,9 @@ def _completions_by_day(settings: Settings) -> dict[str, int]:
     return counts
 
 
-def _event_hours(day: date) -> float:
+def _event_hours(day: date, conn: sqlite3.Connection | None = None) -> float:
     hours = 0.0
-    events, _gcal_error = gcal.list_events_safe(day)
+    events, _gcal_error = sources.calendar_events(conn, day)
     for event in events:
         if event.all_day:
             continue
@@ -126,7 +127,7 @@ def insights_summary(
     calendar = []
     for offset in range(CALENDAR_DAYS - 1, -1, -1):
         day = today - timedelta(days=offset)
-        event_hours = _event_hours(day)
+        event_hours = _event_hours(day, conn)
         calendar.append(
             {
                 "date": day.isoformat(),

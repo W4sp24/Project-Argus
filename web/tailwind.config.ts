@@ -25,6 +25,20 @@ const config: Config = {
         },
         ok: "#34d399",
         danger: "#fb7185",
+        // Warning semantic token. Same hue family as mode.system's amber, but
+        // named for what it means (STALE chrome, P2 priority, "needs setup")
+        // rather than for the System mode that happens to share the color —
+        // three call sites used the literal `amber-400` before this existed.
+        warn: "#fbbf24",
+        // Muted violet used only by non-mode provenance/status chrome — AUTO,
+        // WAITING, AUTH (see web/components/automations/chips.tsx). Deliberately
+        // distinct from `mode.general`/--ac: these chips are informational
+        // chrome, not the mode's live accent, and must read quieter than it
+        // everywhere both appear together.
+        auto: {
+          DEFAULT: "#8b7bc0",
+          line: "#3d2f66",
+        },
         // mode accents (CSS var driven at runtime — see --ac in globals.css)
         mode: {
           general: "#a78bfa",
@@ -32,6 +46,7 @@ const config: Config = {
           research: "#e879f9",
           code: "#34d399",
           system: "#fbbf24",
+          automations: "#60a5fa",
         },
       },
       fontFamily: {

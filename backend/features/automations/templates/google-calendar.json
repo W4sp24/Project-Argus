@@ -1,0 +1,74 @@
+{
+  "name": "Argus: Google Calendar → Timeline Widget",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "minutes", "minutesInterval": 15}]
+        }
+      }
+    },
+    {
+      "id": "gcal",
+      "name": "Get Upcoming Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [220, 0],
+      "parameters": {
+        "operation": "getAll",
+        "calendar": "primary",
+        "returnAll": false,
+        "limit": 10,
+        "timeMin": "={{ $now.toISO() }}",
+        "timeMax": "={{ $now.plus({ days: 7 }).toISO() }}",
+        "options": {
+          "recurringEventHandling": "expand",
+          "orderBy": "startTime"
+        }
+      },
+      "credentials": {
+        "googleCalendarOAuth2Api": {"name": "Google Calendar account"}
+      }
+    },
+    {
+      "id": "push",
+      "name": "Push Timeline Widget",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [440, 0],
+      "executeOnce": true,
+      "parameters": {
+        "method": "POST",
+        "url": "{{ARGUS_URL}}/api/external/widget/calendar",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ARGUS_TOKEN}}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"widget\": \"timeline\", \"title\": \"Upcoming Events\", \"expected_interval_seconds\": 900, \"entries\": $input.all().map(i => ({ \"at\": i.json.start.dateTime || i.json.start.date, \"end\": i.json.end.dateTime || i.json.end.date, \"all_day\": !i.json.start.dateTime, \"text\": i.json.summary || '(untitled)', \"sub\": i.json.location || null })) }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [[{"node": "Get Upcoming Events", "type": "main", "index": 0}]]
+    },
+    "Get Upcoming Events": {
+      "main": [[{"node": "Push Timeline Widget", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "argus"}]
+}

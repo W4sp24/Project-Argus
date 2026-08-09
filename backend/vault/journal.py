@@ -16,11 +16,11 @@ import frontmatter
 from pydantic import BaseModel
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.vault.privacy import is_no_ai
 
 # Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
 # settings.taxonomy.journal / active_taxonomy().journal.
 JOURNAL_DIR = Taxonomy().journal
-NO_AI_TAG = "no-ai"
 SESSION_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(.+)\.md$")
 BRANCH_RE = re.compile(r"\*\*branch:\*\*\s*`([^`]+)`")
 FILES_RE = re.compile(r"\*\*files changed:\*\*\s*(\d+)")
@@ -67,12 +67,7 @@ def _load_visible(file_path: Path) -> frontmatter.Post | None:
         post = frontmatter.load(file_path)
     except Exception:
         return None
-    tags = post.metadata.get("tags") or []
-    if isinstance(tags, str):
-        tags = [tags]
-    if NO_AI_TAG in [str(tag).strip().lstrip("#") for tag in tags]:
-        return None
-    if f"#{NO_AI_TAG}" in post.content:
+    if is_no_ai(post):
         return None
     return post
 

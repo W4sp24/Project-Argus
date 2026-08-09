@@ -6,7 +6,7 @@ import { useDoctor } from "@/lib/api";
 
 const STATUS_CLASS: Record<string, string> = {
   OK: "border-ok text-ok",
-  WARN: "border-amber-400 text-amber-400",
+  WARN: "border-warn text-warn",
   FAIL: "border-danger text-danger",
 };
 

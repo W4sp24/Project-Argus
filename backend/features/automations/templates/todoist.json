@@ -1,0 +1,69 @@
+{
+  "name": "Argus: Todoist → Task List Widget",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "minutes", "minutesInterval": 15}]
+        }
+      }
+    },
+    {
+      "id": "todoist",
+      "name": "Get Active Tasks",
+      "type": "n8n-nodes-base.todoist",
+      "typeVersion": 2.2,
+      "position": [220, 0],
+      "parameters": {
+        "resource": "task",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 25,
+        "filters": {}
+      },
+      "credentials": {
+        "todoistApi": {"name": "Todoist account"}
+      }
+    },
+    {
+      "id": "push",
+      "name": "Push Task List Widget",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [440, 0],
+      "executeOnce": true,
+      "parameters": {
+        "method": "POST",
+        "url": "{{ARGUS_URL}}/api/external/widget/tasks",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ARGUS_TOKEN}}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"widget\": \"list\", \"title\": \"Tasks\", \"expected_interval_seconds\": 900, \"items\": $input.all().map(i => ({ \"id\": String(i.json.id), \"text\": i.json.content, \"sub\": i.json.due ? i.json.due.string : null, \"due\": i.json.due ? (i.json.due.date || '').slice(0, 10) || null : null, \"priority\": ({ 4: 'highest', 3: 'high', 2: 'medium' })[i.json.priority] || null, \"tags\": i.json.labels || [], \"href\": i.json.url || null })) }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [[{"node": "Get Active Tasks", "type": "main", "index": 0}]]
+    },
+    "Get Active Tasks": {
+      "main": [[{"node": "Push Task List Widget", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "argus"}]
+}
