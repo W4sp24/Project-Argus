@@ -52,7 +52,13 @@ def is_private_path(rel_path: str | Path, *, taxonomy: Taxonomy | None = None) -
     never reimplemented here.
     """
     tax = taxonomy or active_taxonomy()
-    parts = PurePosixPath(Path(rel_path).as_posix()).parts
+    # `Path(rel_path).as_posix()` rewrites separators only on Windows. On a
+    # POSIX host a backslash is an ordinary filename character, so
+    # "99-Private\secret.md" stays one segment and the zone check misses it --
+    # the predicate silently answered False off-Windows. Paths reach here from
+    # os.walk *and* from API payloads, so normalise both separators here
+    # rather than letting the host OS decide what counts as one.
+    parts = PurePosixPath(str(rel_path).replace("\\", "/")).parts
     return any(part in tax.excluded_top_dirs for part in parts)
 
 
