@@ -93,6 +93,12 @@ class Settings:
     #: warns about for ephemeral tunnel hostnames.
     external_port: int = DEFAULT_EXTERNAL_PORT
     external_base_url: str = ""
+    # Cross-encoder reranking (backend/rag/rerank.py) is opt-in: it's a real
+    # latency cost (another forward pass per candidate) and, in the packaged
+    # desktop app, a real staging risk (HF_HUB_OFFLINE=1 is process-global —
+    # a half-staged cross-encoder model fails hard instead of degrading), so
+    # it must default to closed rather than silently on for every install.
+    rerank_enabled: bool = False
 
     @classmethod
     def load(cls, env_file: Path | None = None) -> Settings:
@@ -111,6 +117,7 @@ class Settings:
             external_enabled=_parse_bool(values.get("ARGUS_EXTERNAL_ENABLED"), False),
             external_port=_parse_int(values.get("ARGUS_EXTERNAL_PORT"), DEFAULT_EXTERNAL_PORT),
             external_base_url=values.get("ARGUS_EXTERNAL_BASE_URL", "").strip(),
+            rerank_enabled=_parse_bool(values.get("ARGUS_RAG_RERANK"), False),
         )
 
     @property

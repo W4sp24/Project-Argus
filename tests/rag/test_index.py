@@ -261,3 +261,63 @@ def test_delete_also_invalidates_the_cached_corpus(index) -> None:
     index.delete_file("50-Reference/algorithms.md")
     after = index.all_chunks()
     assert len(after) < len(before), "deleted chunks still served from cache"
+
+
+# --- link index caching -------------------------------------------------------
+# build_link_index() rglob()s the whole vault and parses every note's YAML
+# frontmatter -- retrieve() used to pay that cost on every single call with
+# expand_links=True, wikilinks or not.
+
+
+def test_link_index_is_built_once_across_repeated_queries_and_invalidates_on_upsert(
+    index, vault: Path, monkeypatch
+) -> None:
+    """``index.link_index()`` itself is expected to be called on every
+    retrieve() -- what must happen only once (until a mutation) is the
+    expensive walk inside ``build_link_index``, which is what's counted here."""
+    from backend.rag import index as index_module
+    from backend.rag.retrieve import retrieve
+
+    calls = {"n": 0}
+    real_build = index_module.build_link_index
+
+    def counting_build(*args, **kwargs):
+        calls["n"] += 1
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(index_module, "build_link_index", counting_build)
+
+    for _ in range(3):
+        retrieve(index, "shortest paths priority queue", vault, k=4)
+    assert calls["n"] == 1, f"link index rebuilt {calls['n']} times across 3 identical queries"
+
+    (vault / "50-Reference" / "extra.md").write_text(
+        "---\ntitle: Extra\n---\n\nA brand new note about Kruskal. See [[Mom]].\n",
+        encoding="utf-8",
+    )
+    index.upsert_file(vault, "50-Reference/extra.md")
+
+    retrieve(index, "shortest paths priority queue", vault, k=4)
+    assert calls["n"] == 2, "link index cache survived a mutation"
+
+
+def test_build_link_index_not_called_when_no_hit_has_wikilinks(
+    index, vault: Path, monkeypatch
+) -> None:
+    from backend.rag.retrieve import retrieve
+
+    calls = {"n": 0}
+    real_link_index = index.link_index
+
+    def counting_link_index(*args, **kwargs):
+        calls["n"] += 1
+        return real_link_index(*args, **kwargs)
+
+    monkeypatch.setattr(index, "link_index", counting_link_index)
+
+    # Mom.md has no wikilinks of its own, and this query is specific enough
+    # that it (not the [[Mom]]-linking algorithms.md note) should be the
+    # only/top hit.
+    retrieve(index, "Mom's birthday is in March", vault, k=1, expand_links=True)
+
+    assert calls["n"] == 0, "link index built even though the top-k had no wikilinks"

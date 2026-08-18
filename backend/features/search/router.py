@@ -24,7 +24,15 @@ SNIPPET_CHARS = 500
 
 
 class SearchResult(BaseModel):
-    """One cited snippet: enough to render + open the source note."""
+    """One cited snippet: enough to render + open the source note.
+
+    ``score`` is the fused (RRF x recency) rank score produced by
+    :func:`backend.rag.retrieve.retrieve` — a hit only appears here at all
+    once it has cleared that module's similarity floor (or qualified via a
+    strong BM25 match), so a nonzero ``score`` is no longer just "closest of
+    whatever we had." If a ``similarity`` field is ever added here, it is the
+    raw cosine similarity from the vector search, not comparable to ``score``.
+    """
 
     snippet: str
     source_path: str
