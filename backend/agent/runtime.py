@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import threading
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -22,13 +22,16 @@ from typing import Any
 from backend.agent.adapters import (
     Message,
     TextDelta,
+    ToolFinished,
     ToolSpec,
+    ToolStarted,
     ToolSummary,
     UsageReported,
     json_schema,
     resolve_adapter,
     text_result,
 )
+from backend.agent.history import budget_history
 from backend.core.config import Settings
 from backend.core.taxonomy import Taxonomy
 from backend.rag.index import VaultIndex
@@ -337,14 +340,32 @@ class ChatAgent:
         return str(entry.get("model_id") or entry["name"])
 
     async def stream_chat(
-        self, message: str, model: str | None = None, course: str | None = None
-    ) -> AsyncIterator[str]:
-        """Yield text deltas for one user message, on whichever backend is chosen.
+        self,
+        message: str,
+        model: str | None = None,
+        course: str | None = None,
+        history: Sequence[Message] | None = None,
+        thread_id: int | None = None,
+    ) -> AsyncIterator[str | ToolStarted | ToolFinished]:
+        """Yield the turn's events, on whichever backend is chosen.
+
+        Text arrives as plain ``str`` deltas — the shape every caller has
+        always consumed — with tool events interleaved as themselves, so the
+        websocket can show what the agent is doing while it does it rather
+        than only what it eventually said.
+
+        ``history`` is the *prior* conversation; ``message`` is the current
+        turn and is never inside it. Trimming to what actually fits is
+        :func:`backend.agent.history.budget_history`'s job, applied here so
+        every caller gets the same policy without having to know it.
 
         ``course``, when given, fixes ``search_vault``'s retrieval scope to
         one course — see :func:`build_vault_tools`. Passed by the Course Hub
         chat frame (``backend.features.chat.router``); the global chat dock
         omits it.
+
+        ``thread_id`` is accepted but not yet used: session resume reads it
+        in the commit that follows.
         """
         from backend.telemetry.usage import record_result_usage
 
@@ -371,16 +392,20 @@ class ChatAgent:
 
         tools = tools + build_automation_tools(self._settings)
 
+        turns = budget_history([*(history or []), Message("user", message)])
+
         recorded = False
         try:
             async for event in adapter.run(
                 system_prompt=_load_system_prompt(self._settings.taxonomy),
-                messages=[Message("user", message)],
+                messages=turns,
                 tools=tools,
                 max_turns=MAX_TURNS,
             ):
                 if isinstance(event, TextDelta):
                     yield event.text
+                elif isinstance(event, ToolStarted | ToolFinished):
+                    yield event
                 elif isinstance(event, UsageReported):
                     # Fire-and-forget usage logging (§14) — never breaks chat.
                     record_result_usage(

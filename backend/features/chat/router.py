@@ -7,6 +7,7 @@ stream instead of the agent SDK.
 
 from __future__ import annotations
 
+import inspect
 import sqlite3
 from collections.abc import AsyncIterator, Callable
 
@@ -14,11 +15,17 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
+from backend.agent.adapters import Message, ToolFinished, ToolStarted
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.chat import store
+from backend.vault.paths import is_indexable
 
-ChatRunner = Callable[[str], AsyncIterator[str]]
+# ``backend.agent.adapters`` is stdlib-only (no chromadb, no SDK), so importing
+# it here is safe -- unlike ``backend.agent.runtime``, which pulls in VaultIndex
+# and is why ``default_chat_runner`` imports lazily.
+ChatEvent = str | ToolStarted | ToolFinished
+ChatRunner = Callable[..., AsyncIterator[ChatEvent]]
 
 
 class ChatMessageInfo(BaseModel):
@@ -60,36 +67,156 @@ class ThreadPatch(BaseModel):
     archived: bool | None = None
 
 
-def _call_runner(
-    runner: ChatRunner, message: str, model: str | None, course: str | None
-) -> AsyncIterator[str]:
-    """Call ``runner`` with the richest signature it accepts.
+def _accepted_kwargs(runner: ChatRunner) -> frozenset[str] | None:
+    """Which keyword names ``runner`` declares; ``None`` means it takes ``**kwargs``.
 
-    Two optional trailing keywords have landed independently: ``model`` (§7
-    model selection) and ``course`` (Course Hub scoping — forces
-    ``search_vault``'s course filter in ``backend.agent.runtime`` rather than
-    leaving it to the model's discretion). A runner that only knows one, or
-    neither (every single-argument test fake), must keep working untouched.
-    The ``TypeError`` this catches can only be a signature mismatch: it is
-    raised while the async-generator function object is being *created*, not
-    awaited, so no application code has run yet.
+    An unreadable signature (a C callable, an exotic partial) yields the empty
+    set, which degrades to calling ``runner(message)`` — the one call every
+    runner has always accepted.
     """
-    if model is not None and course is not None:
-        try:
-            return runner(message, model, course=course)
-        except TypeError:
-            pass
-    if course is not None:
-        try:
-            return runner(message, course=course)
-        except TypeError:
-            pass
-    if model is not None:
-        try:
-            return runner(message, model)
-        except TypeError:
-            pass
-    return runner(message)
+    try:
+        parameters = inspect.signature(runner).parameters
+    except (TypeError, ValueError):
+        return frozenset()
+    names: set[str] = set()
+    for name, param in parameters.items():
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return None
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            names.add(name)
+    return frozenset(names)
+
+
+def _call_runner(runner: ChatRunner, message: str, **extras: object) -> AsyncIterator[ChatEvent]:
+    """Call ``runner`` with whichever of ``extras`` its signature declares.
+
+    This replaces a cascade of ``try: runner(...) except TypeError`` fallbacks,
+    one nested block per optional keyword. That cascade was correct — the
+    ``TypeError`` could only ever be a signature mismatch, because it is raised
+    while the async-generator function object is being *created*, before any
+    body code runs — but it needed a branch per subset of the optional
+    arguments, so it doubled in size with each one. ``history`` and
+    ``thread_id`` would have taken it to sixteen.
+
+    Asking the signature instead is both smaller and stricter: a ``TypeError``
+    raised from somewhere else entirely can no longer be silently mistaken for
+    "this runner doesn't take that argument". Runners that declare nothing but
+    ``message`` (every legacy test fake) still get called with exactly that.
+    """
+    accepted = _accepted_kwargs(runner)
+    kwargs = {
+        name: value
+        for name, value in extras.items()
+        if value is not None and (accepted is None or name in accepted)
+    }
+    return runner(message, **kwargs)
+
+
+def _tool_frame(event: ToolStarted | ToolFinished) -> dict:
+    """Render a tool event as its wire frame.
+
+    One ``tool`` type with a ``phase`` rather than two frame types: the browser
+    ignores frame types it does not know, so an older frontend against a newer
+    backend degrades to text-only instead of breaking, and that tolerance is
+    worth more the fewer new type names it has to cover.
+
+    The finished frame re-checks every path through ``is_indexable``. The tools
+    already exclude the private zone and ``#no-ai`` notes, so this should never
+    drop anything — but a path list leaving the process is a new egress surface
+    and I3 is binding, so it is cheaper to enforce twice than to reason about
+    which upstream guarantee still holds after a refactor.
+    """
+    if isinstance(event, ToolStarted):
+        return {
+            "type": "tool",
+            "phase": "start",
+            "call_id": event.call_id,
+            "name": event.name,
+            "args": event.args,
+        }
+    summary = event.summary
+    return {
+        "type": "tool",
+        "phase": "end",
+        "call_id": event.call_id,
+        "name": event.name,
+        "label": summary.label,
+        "detail": summary.detail,
+        "paths": [path for path in summary.paths if is_indexable(path)],
+        "ok": summary.ok,
+    }
+
+
+# Upper bound on rows pulled out of a thread to build history. The agent
+# budgets far more tightly than this (backend/agent/history.py); this only
+# stops a very long thread from loading its entire transcript into memory
+# just to have most of it discarded a moment later.
+HISTORY_FETCH_LIMIT = 100
+
+
+def _open_turn(
+    db: Callable[[], sqlite3.Connection],
+    thread_id: int | None,
+    message: str,
+    course: str | None,
+) -> tuple[dict, list[Message]]:
+    """Resolve (or create) the thread, read prior turns, record the user's.
+
+    History is read *before* the user's message is appended, so the returned
+    list is genuinely the prior conversation and the current turn is not
+    duplicated into it — the runner receives them as separate arguments.
+    """
+    conn = db()
+    try:
+        if thread_id is None:
+            thread = store.create_thread(conn, title=store.derive_title(message), course=course)
+        else:
+            found = store.get_thread(conn, thread_id)
+            if found is None:
+                raise ValueError(f"no thread {thread_id}")
+            thread = found
+        history = [
+            Message(row["role"], row["text"])
+            for row in store.list_messages(conn, thread["id"], limit=HISTORY_FETCH_LIMIT)
+        ]
+        store.append_message(conn, thread["id"], role="user", text=message)
+        # A thread made from the sidebar's "New chat" button has the
+        # placeholder title until someone actually says something; this is
+        # where it earns a real one.
+        if thread["title"] == store.DEFAULT_TITLE:
+            renamed = store.rename_thread(conn, thread["id"], store.derive_title(message))
+            thread = renamed or thread
+        return thread, history
+    finally:
+        conn.close()
+
+
+def _close_turn(
+    db: Callable[[], sqlite3.Connection],
+    thread_id: int,
+    text_parts: list[str],
+    steps: list[dict],
+    model: str | None,
+) -> int | None:
+    """Persist the assistant turn. Returns its id, or ``None`` if it was empty."""
+    if not text_parts and not steps:
+        return None
+    conn = db()
+    try:
+        row = store.append_message(
+            conn,
+            thread_id,
+            role="assistant",
+            text="".join(text_parts),
+            model=model,
+            tools=steps,
+        )
+        return int(row["id"])
+    finally:
+        conn.close()
 
 
 def _connected(websocket: WebSocket) -> bool:
@@ -148,14 +275,51 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
                 message = str(payload.get("message", "")).strip()
                 model = str(payload.get("model") or "").strip() or None
                 course = str(payload.get("course") or "").strip() or None
+                raw_thread = payload.get("thread_id")
+                thread_id = int(raw_thread) if isinstance(raw_thread, int | str) and (
+                    str(raw_thread).strip().isdigit()
+                ) else None
                 if not message:
                     await websocket.send_json({"type": "error", "detail": "empty message"})
                     continue
                 try:
-                    stream = _call_runner(runner, message, model, course)
-                    async for delta in stream:
-                        await websocket.send_json({"type": "delta", "text": delta})
-                    await websocket.send_json({"type": "done"})
+                    thread, history = _open_turn(db, thread_id, message, course)
+                    await websocket.send_json(
+                        {"type": "thread", "thread_id": thread["id"], "title": thread["title"]}
+                    )
+                    text_parts: list[str] = []
+                    steps: list[dict] = []
+                    try:
+                        stream = _call_runner(
+                            runner,
+                            message,
+                            model=model,
+                            course=course or thread["course"],
+                            history=history,
+                            thread_id=thread["id"],
+                        )
+                        async for item in stream:
+                            if isinstance(item, str):
+                                text_parts.append(item)
+                                await websocket.send_json({"type": "delta", "text": item})
+                            else:
+                                frame = _tool_frame(item)
+                                steps.append(frame)
+                                await websocket.send_json(frame)
+                    finally:
+                        # Send-free on purpose. This runs on the disconnect path
+                        # too, and a send from a `finally` on a socket already
+                        # known to be gone is precisely the bug
+                        # test_a_disconnect_mid_stream_does_not_kill_the_handler
+                        # exists to prevent, one level deeper than where it bit.
+                        #
+                        # Banking a partial answer mirrors what stream_chat
+                        # already does with partial_usage(): the turn happened,
+                        # the tokens were spent, and a thread that loses its
+                        # half-written answer because a tab closed is worse than
+                        # one that keeps it.
+                        message_id = _close_turn(db, thread["id"], text_parts, steps, model)
+                    await websocket.send_json({"type": "done", "message_id": message_id})
                 except WebSocketDisconnect:
                     # Must be re-raised before the broad handler below, which
                     # would otherwise swallow it and try to send an error frame
