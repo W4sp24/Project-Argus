@@ -16,6 +16,7 @@ from backend.vault.writer import (
     WriterForbidden,
     WriterMissing,
     append_capture,
+    edit_note,
     guard_user_path,
 )
 
@@ -333,3 +334,65 @@ def test_create_note_refuses_protected_zones(tmp_path):
     vault = _make_vault(tmp_path)
     with pytest.raises(WriterForbidden):
         writer.create_note(vault, "99-Private/secret.md", "x\n")
+
+
+# --- edit_note (the guarded diff path the chat write tools use) ---------------
+
+
+def _diff(old: str, new: str) -> str:
+    return f"@@ -1,1 +1,1 @@\n-{old}\n+{new}\n"
+
+
+def test_edit_note_applies_a_diff(vault: Path) -> None:
+    edit_note(vault, "Welcome.md", _diff("# Hi", "# Hello"))
+
+    assert (vault / "Welcome.md").read_text(encoding="utf-8") == "# Hello\n"
+
+
+def test_edit_note_snapshots_before_writing(vault: Path) -> None:
+    """I2: the snapshot is the undo. _apply_note_diff takes none of its own --
+    it relies on its caller -- so a wrapper that forgot would write
+    irreversibly."""
+    before = _git(vault, "log", "--oneline").count("\n")
+
+    edit_note(vault, "Welcome.md", _diff("# Hi", "# Hello"))
+
+    log = _git(vault, "log", "--oneline")
+    assert log.count("\n") == before + 1, "I2 violation: no pre-apply commit"
+    assert "pre-apply snapshot" in log
+
+
+def test_edit_note_refuses_to_escape_the_vault(vault: Path) -> None:
+    """I3: _apply_note_diff resolves vault_path / rel_path raw, so without the
+    guard this is a write to an arbitrary file on disk."""
+    outside = vault.parent / "escaped.md"
+    outside.write_text("# Hi\n", encoding="utf-8")
+
+    with pytest.raises(WriterForbidden):
+        edit_note(vault, "../escaped.md", _diff("# Hi", "# Owned"))
+
+    assert outside.read_text(encoding="utf-8") == "# Hi\n", "wrote outside the vault"
+
+
+def test_edit_note_refuses_a_protected_zone(vault: Path) -> None:
+    private = vault / Taxonomy().private
+    private.mkdir(parents=True)
+    (private / "diary.md").write_text("# Hi\n", encoding="utf-8")
+
+    with pytest.raises(WriterForbidden):
+        edit_note(vault, f"{Taxonomy().private}/diary.md", _diff("# Hi", "# Leaked"))
+
+    assert (private / "diary.md").read_text(encoding="utf-8") == "# Hi\n"
+
+
+def test_edit_note_reports_a_missing_note(vault: Path) -> None:
+    with pytest.raises(WriterMissing):
+        edit_note(vault, "nope.md", _diff("# Hi", "# Hello"))
+
+
+def test_edit_note_fails_clean_on_drift(vault: Path) -> None:
+    """A drifted diff must leave the file untouched, not half-applied."""
+    with pytest.raises(WriterError):
+        edit_note(vault, "Welcome.md", _diff("# Something else", "# Hello"))
+
+    assert (vault / "Welcome.md").read_text(encoding="utf-8") == "# Hi\n"

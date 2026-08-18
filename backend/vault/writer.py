@@ -473,6 +473,35 @@ def update_note(
     _argus_log(vault_path, f"edited note {rel_path}", taxonomy=tax)
 
 
+def edit_note(
+    vault_path: Path, rel_path: str, diff: str, *, taxonomy: Taxonomy | None = None
+) -> str:
+    """Apply a unified diff to one note, guarded and snapshot-first (I1/I2/I3).
+
+    The diff engine itself is :func:`_apply_note_diff`, which is deliberately
+    *not* public: it resolves ``vault_path / rel_path`` raw and does no
+    snapshotting, because its only caller is :func:`apply_suggestion`, which
+    has already guarded the path and taken the snapshot before dispatching on
+    the suggestion's kind.
+
+    Exposing that helper directly to a caller that has not done those two
+    things -- an agent tool, say -- would hand it a write path that accepts
+    ``../`` escapes and leaves no undo point, silently breaking two binding
+    invariants. So the guard and the snapshot live here, in the same order and
+    for the same reasons as :func:`update_note`, and the engine stays private.
+
+    Returns the same one-line summary ``_apply_note_diff`` returns.
+    """
+    tax = taxonomy or active_taxonomy()
+    note = guard_user_path(vault_path, rel_path, taxonomy=tax)
+    if not note.is_file():
+        raise WriterMissing(f"{rel_path} does not exist")
+    _git_snapshot(vault_path, f"edit note {rel_path}")
+    summary = _apply_note_diff(vault_path, {"path": rel_path, "diff": diff})
+    _argus_log(vault_path, f"edited note {rel_path}", taxonomy=tax)
+    return summary
+
+
 def delete_note(vault_path: Path, rel_path: str, *, taxonomy: Taxonomy | None = None) -> None:
     """Delete one note (user-initiated); the pre-apply snapshot is the undo."""
     tax = taxonomy or active_taxonomy()
