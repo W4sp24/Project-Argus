@@ -16,6 +16,7 @@ import pytest
 
 from backend.agent.adapters import (
     AgentError,
+    Message,
     TextDelta,
     ToolFinished,
     ToolSpec,
@@ -92,7 +93,7 @@ async def collect(adapter: AnthropicAPIAdapter, tools: list[ToolSpec], max_turns
         event
         async for event in adapter.run(
             system_prompt="be helpful",
-            user_message="what did I write about Dijkstra?",
+            messages=[Message("user", "what did I write about Dijkstra?")],
             tools=tools,
             max_turns=max_turns,
         )
@@ -393,7 +394,7 @@ async def test_partial_usage_survives_an_abandoned_stream() -> None:
     )
 
     stream = adapter.run(
-        system_prompt="", user_message="explain everything", tools=[], max_turns=1
+        system_prompt="", messages=[Message("user", "explain everything")], tools=[], max_turns=1
     )
     assert isinstance(await stream.__anext__(), TextDelta)  # first delta, then give up
     await stream.aclose()
@@ -401,6 +402,34 @@ async def test_partial_usage_survives_an_abandoned_stream() -> None:
     partial = adapter.partial_usage()
     assert partial is not None
     assert partial.input_tokens == 500, "message_start had already reported the input cost"
+
+
+@pytest.mark.anyio
+async def test_multi_message_history_preserves_roles_and_keeps_system_top_level() -> None:
+    sent: list[dict] = []
+    adapter = adapter_for([sse(text_delta("ok"))], record=sent)
+
+    events = [
+        event
+        async for event in adapter.run(
+            system_prompt="be helpful",
+            messages=[
+                Message("user", "what did I write about Dijkstra?"),
+                Message("assistant", "You covered it in algorithms.md"),
+                Message("user", "and what about A*?"),
+            ],
+            tools=[],
+            max_turns=1,
+        )
+    ]
+
+    assert texts(events) == "ok"
+    assert sent[0]["system"] == "be helpful"
+    assert sent[0]["messages"] == [
+        {"role": "user", "content": "what did I write about Dijkstra?"},
+        {"role": "assistant", "content": "You covered it in algorithms.md"},
+        {"role": "user", "content": "and what about A*?"},
+    ]
 
 
 @pytest.mark.anyio

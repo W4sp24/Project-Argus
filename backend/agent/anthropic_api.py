@@ -27,12 +27,14 @@ from backend.agent.adapters import (
     PROVIDER_ANTHROPIC_API,
     AgentError,
     AgentEvent,
+    Message,
     TextDelta,
     ToolFinished,
     ToolSpec,
     ToolStarted,
     UsageReported,
     flatten_tool_result,
+    require_user_turn,
     summarize_tool_result,
 )
 
@@ -147,11 +149,14 @@ class AnthropicAPIAdapter:
         self,
         *,
         system_prompt: str,
-        user_message: str,
+        messages: Sequence[Message],
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
-        messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+        require_user_turn(messages)
+        conversation: list[dict[str, Any]] = [
+            {"role": m.role, "content": m.text} for m in messages
+        ]
         by_name = {spec.name: spec for spec in tools}
         totals = {
             "input_tokens": 0,
@@ -167,7 +172,7 @@ class AnthropicAPIAdapter:
                 payload: dict[str, Any] = {
                     "model": self.model,
                     "max_tokens": self.max_tokens,
-                    "messages": messages,
+                    "messages": conversation,
                     "stream": True,
                 }
                 if system_prompt:
@@ -193,7 +198,7 @@ class AnthropicAPIAdapter:
                     {"type": "tool_use", "id": c["id"], "name": c["name"], "input": c["input"]}
                     for c in calls
                 )
-                messages.append({"role": "assistant", "content": assistant})
+                conversation.append({"role": "assistant", "content": assistant})
 
                 # Results go back as a *user* message of tool_result blocks —
                 # the Messages API has no dedicated tool role.
@@ -216,7 +221,7 @@ class AnthropicAPIAdapter:
                             "content": result_text,
                         }
                     )
-                messages.append({"role": "user", "content": results})
+                conversation.append({"role": "user", "content": results})
 
         yield UsageReported(**totals)
 

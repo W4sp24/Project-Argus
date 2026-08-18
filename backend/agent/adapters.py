@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 # Providers understood by the registry. "anthropic" is the historical value and
 # still means "the Claude Code CLI via claude-agent-sdk" (subscription auth,
@@ -121,6 +121,39 @@ def json_schema(
         "properties": properties,
         "required": list(properties if required is None else required),
     }
+
+
+# --- conversation -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Message:
+    """One turn of conversation, provider-agnostic.
+
+    This is the wire shape every adapter now takes instead of a bare string —
+    see :func:`require_user_turn` for the contract on the sequence as a whole.
+    """
+
+    role: Literal["user", "assistant"]
+    text: str
+
+
+def require_user_turn(messages: Sequence[Message]) -> Sequence[Message]:
+    """Validate that ``messages`` ends on a user turn the model can answer.
+
+    A run whose last message is not the user's has nothing to respond to —
+    catching that here, with a message that says what was wrong, is far more
+    legible than letting it reach a provider as a mid-stream 400. Every
+    adapter calls this first, before it spends any tokens building a request.
+    """
+    if not messages:
+        raise AgentError("no messages to run — at least one user message is required")
+    if messages[-1].role != "user":
+        raise AgentError(
+            f"the last message must be from the user, not {messages[-1].role!r} — "
+            "a run can only answer a question that was actually asked"
+        )
+    return messages
 
 
 # --- events -----------------------------------------------------------------
@@ -248,7 +281,7 @@ class AgentAdapter(Protocol):
         self,
         *,
         system_prompt: str,
-        user_message: str,
+        messages: Sequence[Message],
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
@@ -305,19 +338,27 @@ class ClaudeSDKAdapter:
         self,
         *,
         system_prompt: str,
-        user_message: str,
+        messages: Sequence[Message],
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
+        require_user_turn(messages)
+        # The SDK takes one prompt string, not a message list, so history is
+        # serialized once here and both paths below share a plain prompt —
+        # neither needs to know Message exists. serialize_history's one-message
+        # branch is what keeps this byte-identical to the pre-history prompt.
+        from backend.agent.history import serialize_history
+
+        prompt = serialize_history(messages)
         if not tools:
-            async for event in self._run_toolless(system_prompt, user_message, max_turns):
+            async for event in self._run_toolless(system_prompt, prompt, max_turns):
                 yield event
             return
-        async for event in self._run_with_tools(system_prompt, user_message, tools, max_turns):
+        async for event in self._run_with_tools(system_prompt, prompt, tools, max_turns):
             yield event
 
     async def _run_toolless(
-        self, system_prompt: str, user_message: str, max_turns: int
+        self, system_prompt: str, prompt: str, max_turns: int
     ) -> AsyncIterator[AgentEvent]:
         """The one-shot `query()` path generate.py has always used."""
         from claude_agent_sdk import (
@@ -334,7 +375,7 @@ class ClaudeSDKAdapter:
             disallowed_tools=list(self.disallowed_tools),
             **({"system_prompt": system_prompt} if system_prompt else {}),
         )
-        async for message in query(prompt=user_message, options=options):
+        async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock) and block.text:
@@ -345,7 +386,7 @@ class ClaudeSDKAdapter:
     async def _run_with_tools(
         self,
         system_prompt: str,
-        user_message: str,
+        prompt: str,
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
@@ -378,7 +419,7 @@ class ClaudeSDKAdapter:
         pending: dict[str, tuple[str, dict[str, Any]]] = {}
 
         async with ClaudeSDKClient(options=options) as client:
-            await client.query(user_message)
+            await client.query(prompt)
             streamed_any = False
             async for event in client.receive_response():
                 if isinstance(event, StreamEvent):
@@ -652,7 +693,10 @@ async def probe_tool_calling(adapter: AgentAdapter) -> ProbeResult:
     started = time.monotonic()
     try:
         async for _event in adapter.run(
-            system_prompt=PROBE_SYSTEM, user_message=PROBE_PROMPT, tools=[spec], max_turns=2
+            system_prompt=PROBE_SYSTEM,
+            messages=[Message("user", PROBE_PROMPT)],
+            tools=[spec],
+            max_turns=2,
         ):
             pass
     except Exception as exc:  # noqa: BLE001 - every failure becomes a readable verdict

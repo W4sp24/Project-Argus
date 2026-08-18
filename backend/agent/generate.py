@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.agent.adapters import TextDelta, UsageReported, resolve_adapter
+from backend.agent.adapters import Message, TextDelta, UsageReported, resolve_adapter
 
 MODEL = "claude-opus-4-8"
 # No tools, and no filesystem access either — this is a pure text call.
@@ -52,7 +52,9 @@ async def agent_generate(
     resolved_model = getattr(adapter, "model", MODEL)
 
     parts: list[str] = []
-    async for event in adapter.run(system_prompt="", user_message=prompt, tools=[], max_turns=1):
+    async for event in adapter.run(
+        system_prompt="", messages=[Message("user", prompt)], tools=[], max_turns=1
+    ):
         if isinstance(event, TextDelta):
             parts.append(event.text)
         elif isinstance(event, UsageReported):

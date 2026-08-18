@@ -15,6 +15,7 @@ import pytest
 
 from backend.agent.adapters import (
     AgentError,
+    Message,
     TextDelta,
     ToolFinished,
     ToolSpec,
@@ -22,6 +23,7 @@ from backend.agent.adapters import (
     ToolSummary,
     UsageReported,
     json_schema,
+    require_user_turn,
     text_result,
 )
 from backend.agent.openai_compat import (
@@ -106,7 +108,7 @@ async def collect(adapter: OpenAICompatAdapter, tools: list[ToolSpec], max_turns
         event
         async for event in adapter.run(
             system_prompt="be helpful",
-            user_message="what did I write about Dijkstra?",
+            messages=[Message("user", "what did I write about Dijkstra?")],
             tools=tools,
             max_turns=max_turns,
         )
@@ -115,6 +117,21 @@ async def collect(adapter: OpenAICompatAdapter, tools: list[ToolSpec], max_turns
 
 def texts(events: list) -> str:
     return "".join(event.text for event in events if isinstance(event, TextDelta))
+
+
+# --- require_user_turn -------------------------------------------------------
+
+
+def test_require_user_turn_rejects_an_empty_list() -> None:
+    with pytest.raises(AgentError, match="no messages"):
+        require_user_turn([])
+
+
+def test_require_user_turn_rejects_a_history_ending_on_an_assistant_turn() -> None:
+    with pytest.raises(AgentError, match="assistant"):
+        require_user_turn(
+            [Message("user", "hi"), Message("assistant", "an answer with nothing to reply to")]
+        )
 
 
 # --- url handling -----------------------------------------------------------
@@ -434,6 +451,34 @@ async def test_system_prompt_is_sent_first() -> None:
     await collect(adapter, [])
 
     assert sent[0]["messages"][0] == {"role": "system", "content": "be helpful"}
+
+
+@pytest.mark.anyio
+async def test_system_message_precedes_a_multi_message_history() -> None:
+    sent: list[dict] = []
+    adapter = adapter_for([sse(text_chunk("ok"))], record=sent)
+
+    events = [
+        event
+        async for event in adapter.run(
+            system_prompt="be helpful",
+            messages=[
+                Message("user", "what did I write about Dijkstra?"),
+                Message("assistant", "You covered it in algorithms.md"),
+                Message("user", "and what about A*?"),
+            ],
+            tools=[],
+            max_turns=1,
+        )
+    ]
+
+    assert texts(events) == "ok"
+    assert sent[0]["messages"] == [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "what did I write about Dijkstra?"},
+        {"role": "assistant", "content": "You covered it in algorithms.md"},
+        {"role": "user", "content": "and what about A*?"},
+    ]
 
 
 # --- errors -----------------------------------------------------------------

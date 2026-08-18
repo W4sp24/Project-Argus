@@ -33,12 +33,14 @@ from backend.agent.adapters import (
     PROVIDER_OPENAI_COMPAT,
     AgentError,
     AgentEvent,
+    Message,
     TextDelta,
     ToolFinished,
     ToolSpec,
     ToolStarted,
     UsageReported,
     flatten_tool_result,
+    require_user_turn,
     summarize_tool_result,
 )
 
@@ -184,14 +186,15 @@ class OpenAICompatAdapter:
         self,
         *,
         system_prompt: str,
-        user_message: str,
+        messages: Sequence[Message],
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
-        messages: list[dict[str, Any]] = []
+        require_user_turn(messages)
+        conversation: list[dict[str, Any]] = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_message})
+            conversation.append({"role": "system", "content": system_prompt})
+        conversation.extend({"role": m.role, "content": m.text} for m in messages)
 
         by_name = {spec.name: spec for spec in tools}
         totals = {"input_tokens": 0, "output_tokens": 0}
@@ -202,7 +205,7 @@ class OpenAICompatAdapter:
             for _turn in range(max(1, max_turns)):
                 payload: dict[str, Any] = {
                     "model": self.model,
-                    "messages": messages,
+                    "messages": conversation,
                     "stream": True,
                 }
                 if tools:
@@ -220,7 +223,7 @@ class OpenAICompatAdapter:
                 if not calls:
                     break
 
-                messages.append(
+                conversation.append(
                     {
                         "role": "assistant",
                         "content": "".join(text_parts) or None,
@@ -249,7 +252,7 @@ class OpenAICompatAdapter:
                             by_name.get(call["name"]), call["name"], args, result_text
                         ),
                     )
-                    messages.append(
+                    conversation.append(
                         {
                             "role": "tool",
                             "tool_call_id": call["id"],

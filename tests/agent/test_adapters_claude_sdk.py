@@ -21,6 +21,7 @@ import pytest
 
 from backend.agent.adapters import (
     ClaudeSDKAdapter,
+    Message,
     TextDelta,
     ToolFinished,
     ToolSpec,
@@ -151,7 +152,7 @@ async def collect(adapter: ClaudeSDKAdapter, tools: list[ToolSpec]) -> list:
         event
         async for event in adapter.run(
             system_prompt="be helpful",
-            user_message="what did I write about Dijkstra?",
+            messages=[Message("user", "what did I write about Dijkstra?")],
             tools=tools,
             max_turns=4,
         )
@@ -296,6 +297,49 @@ async def test_is_error_yields_ok_false(monkeypatch: pytest.MonkeyPatch) -> None
 
     finished = next(e for e in events if isinstance(e, ToolFinished))
     assert finished.summary.ok is False
+
+
+@pytest.mark.anyio
+async def test_one_message_history_reaches_the_sdk_as_bare_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The verbatim guarantee at the adapter level.
+
+    ``serialize_history``'s single-message branch means a one-message run
+    must call the SDK's ``query()`` with exactly that message's text, byte
+    for byte — this is what keeps every existing call site behaviour-identical
+    now that ``run`` takes a message list instead of a bare string.
+    """
+    seen_prompts: list[str] = []
+    script = [ResultMessage(usage={})]
+
+    class RecordingClient:
+        def __init__(self, options: Any) -> None:
+            self.options = options
+
+        async def __aenter__(self) -> RecordingClient:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+        async def query(self, message: str) -> None:
+            seen_prompts.append(message)
+
+        async def receive_response(self) -> AsyncIterator[Any]:
+            for message in script:
+                yield message
+
+    module = make_fake_sdk_module(script)
+    module.ClaudeSDKClient = RecordingClient
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", module)
+
+    spec, _ = spy_tool()
+    adapter = ClaudeSDKAdapter(model="claude-sonnet-5")
+
+    await collect(adapter, [spec])
+
+    assert seen_prompts == ["what did I write about Dijkstra?"]
 
 
 @pytest.mark.anyio

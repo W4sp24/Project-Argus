@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.agent.adapters import (
+    Message,
     TextDelta,
     ToolSpec,
     ToolSummary,
@@ -374,7 +375,7 @@ class ChatAgent:
         try:
             async for event in adapter.run(
                 system_prompt=_load_system_prompt(self._settings.taxonomy),
-                user_message=message,
+                messages=[Message("user", message)],
                 tools=tools,
                 max_turns=MAX_TURNS,
             ):

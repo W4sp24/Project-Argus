@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.agent.adapters import (
+    Message,
     ToolSpec,
     UsageReported,
     json_schema,
@@ -215,7 +216,9 @@ async def run_planner(settings: Settings, instruction: str, model: str | None = 
         )
         async for event in adapter.run(
             system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
-            user_message=_planner_context(settings, conn, instruction, resolved_model),
+            messages=[
+                Message("user", _planner_context(settings, conn, instruction, resolved_model))
+            ],
             tools=build_propose_tools(conn),
             max_turns=MAX_TURNS,
         ):
