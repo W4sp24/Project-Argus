@@ -122,6 +122,33 @@ async def test_an_unlisted_tool_is_refused_not_dispatched(settings: Settings) ->
 
 
 @pytest.mark.anyio
+async def test_a_summarize_bearing_toolspec_still_builds_a_valid_mcp_tool(
+    settings: Settings,
+) -> None:
+    """The optional fifth ToolSpec field must never leak into the MCP surface
+    — `build_server` reads only .name/.description/.parameters/.handler."""
+    from backend.agent.adapters import ToolSummary
+
+    async def search(args: dict) -> dict:
+        return text_result({"results": []})
+
+    spec = ToolSpec(
+        "search_vault",
+        "search",
+        json_schema({"query": {"type": "string"}}),
+        search,
+        summarize=lambda args, result_text: ToolSummary(label="search_vault"),
+    )
+    server = build_server(settings, tools=[spec])
+
+    tools = {tool.name: tool for tool in await list_tools(server)}
+
+    assert tools["search_vault"].name == "search_vault"
+    reply = await call_tool(server, "search_vault", {"query": "x"})
+    assert json.loads(reply) == {"results": []}
+
+
+@pytest.mark.anyio
 async def test_tool_schemas_travel_intact(settings: Settings) -> None:
     server = build_server(settings, tools=fake_tools())
 

@@ -154,6 +154,49 @@ def test_automation_tools_are_not_on_the_mcp_surface() -> None:
 # --- the agent runs on the right instance ------------------------------------
 
 
+# --- tool summarizers --------------------------------------------------------
+
+
+def test_automation_tools_build_with_a_summarizer_set(settings: Settings) -> None:
+    _seed(settings, FORM_WORKFLOW)
+    spec = tools.build_automation_tools(settings)[0]
+    assert spec.summarize is not None
+
+
+def test_a_successful_run_summary_names_the_workflow_and_is_ok(settings: Settings) -> None:
+    _seed(settings, FORM_WORKFLOW)
+    spec = tools.build_automation_tools(settings)[0]
+    result_text = json.dumps({"run_id": "1", "status": "ok"})
+
+    summary = spec.summarize({"topic": "standup"}, result_text)
+
+    assert summary.ok is True
+    assert "Meeting prep" in summary.detail
+    assert summary.paths == ()
+
+
+def test_a_failed_run_status_summary_is_not_ok(settings: Settings) -> None:
+    _seed(settings, FORM_WORKFLOW)
+    spec = tools.build_automation_tools(settings)[0]
+    result_text = json.dumps({"run_id": "1", "status": "failed"})
+
+    summary = spec.summarize({}, result_text)
+
+    assert summary.ok is False
+
+
+def test_the_handlers_own_plain_text_failure_is_recognized_as_not_ok(settings: Settings) -> None:
+    """The handler's failure strings ("The automation could not be run: ...")
+    are plain text, not JSON, and carry no "error:" prefix the generic
+    fallback could key off — the summarizer must catch this itself."""
+    _seed(settings, FORM_WORKFLOW)
+    spec = tools.build_automation_tools(settings)[0]
+
+    summary = spec.summarize({}, "The automation did not run: boom")
+
+    assert summary.ok is False
+
+
 def test_agent_tool_targets_the_workflows_own_instance(tmp_path: Path, monkeypatch) -> None:
     """Workflow ids are unique only within one n8n, so two registered
     instances can hand out the same id. The unscoped route has to resolve

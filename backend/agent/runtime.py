@@ -11,9 +11,10 @@ any OpenAI-compatible endpoint including local Ollama. See
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from typing import Any
 from backend.agent.adapters import (
     TextDelta,
     ToolSpec,
+    ToolSummary,
     UsageReported,
     json_schema,
     resolve_adapter,
@@ -70,6 +72,71 @@ def _load_system_prompt(taxonomy: Taxonomy, today: date | None = None) -> str:
 def _tool_text(payload: Any) -> dict[str, Any]:
     """Wrap a payload as an MCP text content result."""
     return text_result(payload)
+
+
+# A search's cited paths ride the trace persisted per chat message and sent
+# over the websocket; capping keeps one broad query (up to 8 hits, plus any
+# future link expansion) from bloating either.
+MAX_SUMMARY_PATHS = 8
+
+
+def _parse_json(result_text: str) -> Any | None:
+    """Best-effort JSON parse of a flattened tool result, or None.
+
+    Handlers sometimes return plain text instead of a JSON payload (read_note
+    on failure returns ``"error: ..."``), and summarizers must be total — a
+    summarizer that raises on that just falls back to a bare ``ToolSummary``
+    via :func:`summarize_tool_result`, silently losing the detail a chip could
+    otherwise show.
+    """
+    try:
+        return json.loads(result_text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _capped_unique_paths(paths: Iterable[Any]) -> tuple[str, ...]:
+    """Dedupe, drop falsy values, and cap at :data:`MAX_SUMMARY_PATHS`."""
+    seen: list[str] = []
+    for path in paths:
+        if not path or str(path) in seen:
+            continue
+        seen.append(str(path))
+        if len(seen) >= MAX_SUMMARY_PATHS:
+            break
+    return tuple(seen)
+
+
+def _summarize_search_vault(args: dict[str, Any], result_text: str) -> ToolSummary:
+    """I6 (every citation traces to a tool result) becomes machine-checkable
+    here: the paths a chip would show are exactly the ones parsed back out of
+    the same JSON the model was handed."""
+    query = str(args.get("query") or "")
+    payload = _parse_json(result_text)
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not results:
+        # Finding nothing is a successful search, not a failed call.
+        detail = f"no matches for {query!r}" if query else "no matches"
+        return ToolSummary(label="search_vault", detail=detail)
+    paths = _capped_unique_paths(hit.get("path") for hit in results if isinstance(hit, dict))
+    return ToolSummary(label="search_vault", detail=query, paths=paths)
+
+
+def _summarize_read_note(args: dict[str, Any], result_text: str) -> ToolSummary:
+    path = str(args.get("path") or "")
+    return ToolSummary(
+        label="read_note",
+        detail=path,
+        paths=(path,) if path else (),
+        ok=not result_text.startswith("error:"),
+    )
+
+
+def _summarize_list_tasks(_args: dict[str, Any], result_text: str) -> ToolSummary:
+    payload = _parse_json(result_text)
+    buckets = payload.values() if isinstance(payload, dict) else []
+    count = sum(len(bucket) for bucket in buckets if isinstance(bucket, list))
+    return ToolSummary(label="list_tasks", detail=f"{count} tasks")
 
 
 def build_vault_tools(
@@ -198,6 +265,7 @@ def build_vault_tools(
                 required=["query"],
             ),
             handler=search_vault,
+            summarize=_summarize_search_vault,
         ),
         ToolSpec(
             name="read_note",
@@ -207,6 +275,7 @@ def build_vault_tools(
             ),
             parameters=json_schema({"path": {"type": "string"}}),
             handler=read_note,
+            summarize=_summarize_read_note,
         ),
         ToolSpec(
             name="list_tasks",
@@ -216,6 +285,7 @@ def build_vault_tools(
             ),
             parameters=json_schema({}),
             handler=list_tasks,
+            summarize=_summarize_list_tasks,
         ),
     ]
 

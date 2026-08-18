@@ -347,6 +347,117 @@ def test_the_system_prompt_carries_todays_date() -> None:
     assert "{{TODAY}}" not in prompt
 
 
+# --- tool summarizers --------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_search_vault_summary_carries_the_query_and_cited_paths_i6(
+    settings: Settings, monkeypatch
+) -> None:
+    """Invariant I6 (every citation traces to a tool result) becomes
+    machine-checkable here: the summary's paths are exactly what a chip would
+    show, parsed back out of the same JSON the model was handed."""
+    hits = [
+        {"meta": {"path": "50-Reference/algorithms.md"}, "text": "Dijkstra."},
+        {"meta": {"path": "50-Reference/graphs.md"}, "text": "BFS."},
+    ]
+    monkeypatch.setattr("backend.rag.retrieve.retrieve", lambda *a, **k: hits)
+
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "search_vault")
+    args = {"query": "graph search"}
+    result = await spec.handler(args)
+    summary = spec.summarize(args, result["content"][0]["text"])
+
+    assert summary.label == "search_vault"
+    assert summary.detail == "graph search"
+    assert summary.paths == ("50-Reference/algorithms.md", "50-Reference/graphs.md")
+    assert summary.ok is True
+
+
+@pytest.mark.anyio
+async def test_search_vault_summary_reports_an_empty_search_as_ok(
+    settings: Settings, monkeypatch
+) -> None:
+    """Finding nothing is a successful search, not a failed call."""
+    monkeypatch.setattr("backend.rag.retrieve.retrieve", lambda *a, **k: [])
+
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "search_vault")
+    args = {"query": "nonexistent topic"}
+    result = await spec.handler(args)
+    summary = spec.summarize(args, result["content"][0]["text"])
+
+    assert summary.ok is True
+    assert "no matches" in summary.detail
+    assert summary.paths == ()
+
+
+@pytest.mark.anyio
+async def test_read_note_summary_flags_an_error_result_as_not_ok(settings: Settings) -> None:
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "read_note")
+    args = {"path": "99-Private/secrets.md"}
+    result = await spec.handler(args)
+    summary = spec.summarize(args, result["content"][0]["text"])
+
+    assert summary.ok is False
+    assert summary.detail == "99-Private/secrets.md"
+    assert summary.paths == ("99-Private/secrets.md",)
+
+
+def test_search_vault_summary_handles_non_json_result_text_without_raising(
+    settings: Settings,
+) -> None:
+    """A handler can return a bare string; the summarizer must not raise."""
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "search_vault")
+
+    summary = spec.summarize({"query": "whatever"}, "not json at all")
+
+    assert summary.label == "search_vault"
+    assert summary.paths == ()
+    assert summary.ok is True
+
+
+def test_search_vault_summary_paths_are_capped_and_deduped(settings: Settings) -> None:
+    from backend.agent.runtime import MAX_SUMMARY_PATHS
+
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "search_vault")
+    result_text = json.dumps(
+        {
+            "results": [
+                {"path": "same.md"},
+                {"path": "same.md"},
+                *({"path": f"note-{i}.md"} for i in range(20)),
+                {"path": None},
+            ]
+        }
+    )
+
+    summary = spec.summarize({"query": "q"}, result_text)
+
+    assert len(summary.paths) == len(set(summary.paths)), "paths must be deduped"
+    assert len(summary.paths) <= MAX_SUMMARY_PATHS
+
+
+def test_list_tasks_summary_reports_a_count(settings: Settings) -> None:
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "list_tasks")
+    result_text = json.dumps({"overdue": [{"text": "a"}], "today": [{"text": "b"}], "week": []})
+
+    summary = spec.summarize({}, result_text)
+
+    assert summary.label == "list_tasks"
+    assert summary.detail == "2 tasks"
+
+
+def test_build_vault_tools_still_build_with_summarize_set(settings: Settings) -> None:
+    tools = build_vault_tools(settings, FakeIndex())
+    assert all(spec.summarize is not None for spec in tools)
+
+
 def test_the_system_prompt_no_longer_mandates_a_canned_refusal() -> None:
     """The verbatim "That's not in your notes." string was rule 3 until the
     retrieval floor made an empty result honest on its own. Pinning its absence
