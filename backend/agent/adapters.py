@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 # Providers understood by the registry. "anthropic" is the historical value and
@@ -70,12 +70,20 @@ class ToolSpec:
     ``handler`` returns an MCP-shaped result (``{"content": [{"type": "text",
     "text": ...}]}``); :func:`flatten_tool_result` renders that down to the
     plain string the non-MCP APIs want.
+
+    ``summarize`` is optional and defaulted so every existing construction
+    site keeps working untouched. Its signature is ``(args, result_text) ->
+    ToolSummary``, where ``result_text`` is :func:`flatten_tool_result`'s
+    output rather than the handler's raw MCP-shaped return — that is what lets
+    one summarizer work unchanged across the SDK adapter and both HTTP
+    adapters, which otherwise disagree about tool-result shape.
     """
 
     name: str
     description: str
     parameters: dict[str, Any]
     handler: Callable[[dict[str, Any]], Awaitable[Any]]
+    summarize: Callable[[dict[str, Any], str], ToolSummary] | None = None
 
 
 def text_result(payload: Any) -> dict[str, Any]:
@@ -126,10 +134,47 @@ class TextDelta:
 
 
 @dataclass(frozen=True)
-class ToolUsed:
-    """A tool the model actually invoked. Informational — handlers already ran."""
+class ToolSummary:
+    """What a tool did, in the shape a UI chip needs.
 
+    ``ok`` lives here rather than on :class:`ToolFinished` so there is exactly
+    one source of truth for "did this work" — a caller checking the event
+    would otherwise have to reconcile two possibly-disagreeing booleans.
+    """
+
+    label: str
+    detail: str = ""
+    paths: tuple[str, ...] = ()
+    ok: bool = True
+
+
+@dataclass(frozen=True)
+class ToolStarted:
+    """A tool call the model just made, before its handler has run.
+
+    ``call_id`` is the provider's id for this call (or, for OpenAI-compatible
+    providers that omit one, the synthesized ``call_{index}``) — it is what
+    lets a UI pair this event with the matching :class:`ToolFinished`.
+    """
+
+    call_id: str
     name: str
+    args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolFinished:
+    """The handler for a started tool call has returned (or failed).
+
+    ``summary`` is never None — adapters that have no :attr:`ToolSpec.summarize`
+    (or whose summarizer blew up) fall back to ``ToolSummary(label=name)`` via
+    :func:`summarize_tool_result`, so a UI never has to special-case a missing
+    summary.
+    """
+
+    call_id: str
+    name: str
+    summary: ToolSummary
 
 
 @dataclass(frozen=True)
@@ -157,7 +202,31 @@ class UsageReported:
         }
 
 
-AgentEvent = TextDelta | ToolUsed | UsageReported
+AgentEvent = TextDelta | ToolStarted | ToolFinished | UsageReported
+
+
+def summarize_tool_result(
+    spec: ToolSpec | None, name: str, args: dict[str, Any], result_text: str
+) -> ToolSummary:
+    """The one choke point every adapter calls to build a :class:`ToolFinished`.
+
+    A broken summarizer must never break a chat turn — it runs after the tool
+    already did its work and the model is waiting on the result — so any
+    exception here is swallowed, not logged-and-reraised, and degrades to the
+    same fallback as having no summarizer at all: ``ToolSummary(label=name)``.
+
+    That fallback also carries ``ok``. The HTTP adapters' ``_dispatch`` never
+    raises — it turns a handler exception or an unknown tool into an
+    ``"error: ..."`` string so the model can recover — so without a summarizer
+    to say otherwise, a result text starting with ``"error:"`` is the only
+    signal available that the call failed.
+    """
+    if spec is not None and spec.summarize is not None:
+        try:
+            return spec.summarize(args, result_text)
+        except Exception:  # noqa: BLE001 - degrade to the fallback, never break the turn
+            pass
+    return ToolSummary(label=name, ok=not result_text.startswith("error:"))
 
 
 # --- adapter interface ------------------------------------------------------
@@ -220,6 +289,18 @@ class ClaudeSDKAdapter:
             built.append(sdk_tool(spec.name, spec.description, spec.parameters)(spec.handler))
         return built
 
+    def _local_name(self, raw: str) -> str:
+        """Strip the ``mcp__{namespace}__`` prefix the SDK puts on tool names.
+
+        Without this, ``ToolStarted``/``ToolFinished`` would carry a name that
+        matches nothing in ``by_name`` on the frontend and nothing in the tool
+        belt's own ``ToolSpec.name`` — the whole point of routing tool events
+        through the same ``AgentEvent`` union as the HTTP adapters is that a
+        consumer never has to know which adapter produced one.
+        """
+        prefix = f"mcp__{self.tool_namespace}__"
+        return raw[len(prefix) :] if raw.startswith(prefix) else raw
+
     async def run(
         self,
         *,
@@ -275,6 +356,9 @@ class ClaudeSDKAdapter:
             ResultMessage,
             StreamEvent,
             TextBlock,
+            ToolResultBlock,
+            ToolUseBlock,
+            UserMessage,
             create_sdk_mcp_server,
         )
 
@@ -288,26 +372,72 @@ class ClaudeSDKAdapter:
             include_partial_messages=True,
             max_turns=max_turns,
         )
+        by_name = {spec.name: spec for spec in tools}
+        # ToolResultBlock only carries tool_use_id, so the name and args a
+        # ToolFinished needs are stashed here when its ToolStarted goes out.
+        pending: dict[str, tuple[str, dict[str, Any]]] = {}
 
         async with ClaudeSDKClient(options=options) as client:
             await client.query(user_message)
             streamed_any = False
             async for event in client.receive_response():
                 if isinstance(event, StreamEvent):
+                    # Tool use also appears here under include_partial_messages,
+                    # but only the assembled AssistantMessage is read for it
+                    # below — reading both would double-emit ToolStarted.
                     raw = event.event
                     if raw.get("type") == "content_block_delta":
                         delta = raw.get("delta", {})
                         if delta.get("type") == "text_delta" and delta.get("text"):
                             streamed_any = True
                             yield TextDelta(delta["text"])
-                elif isinstance(event, AssistantMessage) and not streamed_any:
-                    # Partial-message streaming is best-effort; fall back to the
-                    # assembled blocks so a run never yields nothing.
+                elif isinstance(event, AssistantMessage):
                     for block in event.content:
-                        if isinstance(block, TextBlock) and block.text:
+                        if isinstance(block, TextBlock) and block.text and not streamed_any:
+                            # Partial-message streaming is best-effort; fall back
+                            # to the assembled blocks so a run never yields nothing.
                             yield TextDelta(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            local_name = self._local_name(block.name)
+                            args = block.input or {}
+                            pending[block.id] = (local_name, args)
+                            yield ToolStarted(call_id=block.id, name=local_name, args=args)
+                elif isinstance(event, UserMessage):
+                    content = event.content
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, ToolResultBlock):
+                                local_name, args = pending.pop(
+                                    block.tool_use_id, (block.tool_use_id, {})
+                                )
+                                result_text = _flatten_sdk_tool_result(block.content)
+                                summary = summarize_tool_result(
+                                    by_name.get(local_name), local_name, args, result_text
+                                )
+                                if block.is_error:
+                                    summary = replace(summary, ok=False)
+                                yield ToolFinished(
+                                    call_id=block.tool_use_id, name=local_name, summary=summary
+                                )
                 elif isinstance(event, ResultMessage):
                     yield _usage_from_sdk(event)
+
+
+def _flatten_sdk_tool_result(content: str | list[dict[str, Any]] | None) -> str:
+    """Normalize a ``ToolResultBlock.content`` into what `flatten_tool_result` wants.
+
+    The SDK's result shape is *not* the ``{"content": [...]}`` MCP envelope
+    handlers return on the HTTP adapters — it is the block's content directly,
+    already unwrapped by the SDK. A string passes straight through; a list of
+    content-part dicts is re-wrapped in that envelope so the same
+    `flatten_tool_result` still applies; ``None`` (a tool that returned
+    nothing) becomes ``""``.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return flatten_tool_result({"content": content})
 
 
 def _usage_from_sdk(message: Any) -> UsageReported:

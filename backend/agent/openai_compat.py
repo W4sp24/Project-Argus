@@ -34,10 +34,12 @@ from backend.agent.adapters import (
     AgentError,
     AgentEvent,
     TextDelta,
+    ToolFinished,
     ToolSpec,
-    ToolUsed,
+    ToolStarted,
     UsageReported,
     flatten_tool_result,
+    summarize_tool_result,
 )
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
@@ -237,13 +239,22 @@ class OpenAICompatAdapter:
                 )
 
                 for call in calls:
-                    yield ToolUsed(call["name"])
+                    args = parse_tool_arguments(call["arguments"])
+                    yield ToolStarted(call_id=call["id"], name=call["name"], args=args)
+                    result_text = await _dispatch(by_name, call)
+                    yield ToolFinished(
+                        call_id=call["id"],
+                        name=call["name"],
+                        summary=summarize_tool_result(
+                            by_name.get(call["name"]), call["name"], args, result_text
+                        ),
+                    )
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": call["id"],
                             "name": call["name"],
-                            "content": await _dispatch(by_name, call),
+                            "content": result_text,
                         }
                     )
 

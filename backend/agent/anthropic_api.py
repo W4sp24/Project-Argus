@@ -28,10 +28,12 @@ from backend.agent.adapters import (
     AgentError,
     AgentEvent,
     TextDelta,
+    ToolFinished,
     ToolSpec,
-    ToolUsed,
+    ToolStarted,
     UsageReported,
     flatten_tool_result,
+    summarize_tool_result,
 )
 
 DEFAULT_ENDPOINT = "https://api.anthropic.com/v1"
@@ -197,12 +199,21 @@ class AnthropicAPIAdapter:
                 # the Messages API has no dedicated tool role.
                 results = []
                 for call in calls:
-                    yield ToolUsed(call["name"])
+                    args = call["input"] or {}
+                    yield ToolStarted(call_id=call["id"], name=call["name"], args=args)
+                    result_text = await _dispatch(by_name, call)
+                    yield ToolFinished(
+                        call_id=call["id"],
+                        name=call["name"],
+                        summary=summarize_tool_result(
+                            by_name.get(call["name"]), call["name"], args, result_text
+                        ),
+                    )
                     results.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": call["id"],
-                            "content": await _dispatch(by_name, call),
+                            "content": result_text,
                         }
                     )
                 messages.append({"role": "user", "content": results})

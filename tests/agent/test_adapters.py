@@ -16,8 +16,10 @@ import pytest
 from backend.agent.adapters import (
     AgentError,
     TextDelta,
+    ToolFinished,
     ToolSpec,
-    ToolUsed,
+    ToolStarted,
+    ToolSummary,
     UsageReported,
     json_schema,
     text_result,
@@ -174,7 +176,13 @@ async def test_single_tool_call_dispatches_then_answers() -> None:
 
     assert seen == [{"query": "dijkstra"}], "arguments reassembled across chunks"
     assert texts(events) == "You wrote about it in algorithms.md"
-    assert [e.name for e in events if isinstance(e, ToolUsed)] == ["search_vault"]
+    started = [e for e in events if isinstance(e, ToolStarted)]
+    finished = [e for e in events if isinstance(e, ToolFinished)]
+    assert [e.name for e in started] == ["search_vault"]
+    assert [e.name for e in finished] == ["search_vault"]
+    assert started[0].call_id == finished[0].call_id == "c1", "chip pairing needs a shared id"
+    assert started[0].args == {"query": "dijkstra"}
+    assert finished[0].summary == ToolSummary(label="search_vault", ok=True)
 
     # The second request must carry the assistant tool_calls turn and its result,
     # correlated by tool_call_id — this is what the SDK does internally.
@@ -209,7 +217,8 @@ async def test_parallel_tool_calls_accumulate_by_index_not_arrival_order() -> No
 
     assert search_seen == [{"query": "x"}]
     assert read_seen == [{"path": "n.md"}]
-    assert [e.name for e in events if isinstance(e, ToolUsed)] == ["search_vault", "read_note"]
+    assert [e.name for e in events if isinstance(e, ToolStarted)] == ["search_vault", "read_note"]
+    assert [e.name for e in events if isinstance(e, ToolFinished)] == ["search_vault", "read_note"]
     assert texts(events) == "both done"
 
 
@@ -296,6 +305,102 @@ async def test_handler_exception_becomes_tool_text_not_a_crash() -> None:
     events = await collect(adapter, [spec])
 
     assert "index is cold" in sent[1]["messages"][-1]["content"]
+    assert texts(events) == "carried on"
+
+
+@pytest.mark.anyio
+async def test_error_dispatch_produces_a_failed_summary() -> None:
+    """No summarizer means the fallback reads "error: ..." to set ok=False."""
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="c1", name="delete_everything", arguments="{}")),
+            sse(text_chunk("sorry")),
+        ]
+    )
+    spec, _ = spy_tool()
+
+    events = await collect(adapter, [spec])
+
+    finished = next(e for e in events if isinstance(e, ToolFinished))
+    assert finished.summary.ok is False
+
+
+@pytest.mark.anyio
+async def test_synthesized_call_id_reaches_both_start_and_finish() -> None:
+    """A provider that omits ids still lets a frontend pair the two events."""
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, name="search_vault", arguments="{}")),
+            sse(text_chunk("done")),
+        ]
+    )
+    spec, _ = spy_tool()
+
+    events = await collect(adapter, [spec])
+
+    started = next(e for e in events if isinstance(e, ToolStarted))
+    finished = next(e for e in events if isinstance(e, ToolFinished))
+    assert started.call_id == finished.call_id == "call_0"
+
+
+@pytest.mark.anyio
+async def test_tool_spec_summarize_shapes_the_finished_summary() -> None:
+    def summarize(args: dict, result_text: str) -> ToolSummary:
+        return ToolSummary(
+            label=f"searched for {args['query']}", detail=result_text, paths=("algorithms.md",)
+        )
+
+    async def handler(_args: dict) -> dict:
+        return text_result("found it")
+
+    spec = ToolSpec(
+        name="search_vault",
+        description="search the vault",
+        parameters=json_schema({"query": {"type": "string"}}),
+        handler=handler,
+        summarize=summarize,
+    )
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="c1", name="search_vault", arguments='{"query":"x"}')),
+            sse(text_chunk("done")),
+        ]
+    )
+
+    events = await collect(adapter, [spec])
+
+    finished = next(e for e in events if isinstance(e, ToolFinished))
+    assert finished.summary == ToolSummary(
+        label="searched for x", detail="found it", paths=("algorithms.md",)
+    )
+
+
+@pytest.mark.anyio
+async def test_summarize_that_raises_falls_back_without_breaking_the_run() -> None:
+    def summarize(_args: dict, _result_text: str) -> ToolSummary:
+        raise RuntimeError("summarizer bug")
+
+    async def handler(_args: dict) -> dict:
+        return text_result("found it")
+
+    spec = ToolSpec(
+        name="search_vault",
+        description="search the vault",
+        parameters=json_schema({}),
+        handler=handler,
+        summarize=summarize,
+    )
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="c1", name="search_vault", arguments="{}")),
+            sse(text_chunk("carried on")),
+        ]
+    )
+
+    events = await collect(adapter, [spec])
+
+    finished = next(e for e in events if isinstance(e, ToolFinished))
+    assert finished.summary == ToolSummary(label="search_vault")
     assert texts(events) == "carried on"
 
 
