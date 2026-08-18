@@ -241,6 +241,56 @@ CREATE TABLE IF NOT EXISTS automation_events (
 CREATE INDEX IF NOT EXISTS idx_automation_events_ts ON automation_events(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_automation_events_instance
     ON automation_events(instance_id, ts DESC);
+
+-- `title` is derived from the first user message (see store.derive_title)
+-- rather than asked for up front -- a thread the user never bothered to name
+-- still has to be findable in the sidebar.
+--
+-- `course` is the Course Hub scope (NULL = global) and is fixed at creation:
+-- a thread that started scoped to one course stays scoped, because its whole
+-- transcript was retrieved under that filter, and re-scoping it later would
+-- make earlier turns answer for a filter they were never run against.
+--
+-- `session_id`/`session_provider`/`session_model` are the claude-agent-sdk
+-- resume token and the exact backend it belongs to. All three must match the
+-- adapter about to run, or the token is ignored and history is replayed into
+-- the prompt instead: a session id minted by the Claude CLI means nothing to
+-- an Ollama model, and resuming it would silently answer from the wrong
+-- transcript. NULL until the first run completes.
+CREATE TABLE IF NOT EXISTS chat_threads (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    title            TEXT NOT NULL,
+    course           TEXT,
+    session_id       TEXT,
+    session_provider TEXT,
+    session_model    TEXT,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    archived         INTEGER NOT NULL DEFAULT 0
+);
+-- archived-first because the sidebar's only query is "newest unarchived".
+-- id DESC is a tiebreaker column, not part of the filter: store.list_threads
+-- orders ``updated_at DESC, id DESC`` so two threads touched in the same
+-- second still sort deterministically.
+CREATE INDEX IF NOT EXISTS idx_chat_threads_updated_at
+    ON chat_threads(archived, updated_at DESC, id DESC);
+
+-- `tools_json` holds the tool trace for an assistant turn as the WIRE shape
+-- it was streamed in, not a re-derivable form: the trace records what
+-- actually happened, and re-running a summarizer over it later would
+-- describe a vault that has since changed. NULL on user rows.
+-- `ON DELETE CASCADE` relies on connect()'s PRAGMA foreign_keys=ON.
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id  INTEGER NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    text       TEXT NOT NULL,
+    model      TEXT,
+    tools_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread
+    ON chat_messages(thread_id, id);
 """
 
 
