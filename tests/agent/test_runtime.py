@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import threading
 import time
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from backend.agent.runtime import ChatAgent, build_vault_tools
+from backend.agent.runtime import ChatAgent, _load_system_prompt, build_vault_tools
 from backend.core.config import Settings
+from backend.core.taxonomy import Taxonomy
 
 
 class FakeIndex:
@@ -326,3 +328,30 @@ async def test_stream_chat_forwards_course_to_the_tool_belt(
         pass
 
     assert captured.get("course") == "CS201"
+
+
+def test_the_system_prompt_names_the_configured_private_dir() -> None:
+    """I3 depends on it: a prompt naming the wrong folder tells the model the
+    protected zone is somewhere it isn't."""
+    prompt = _load_system_prompt(Taxonomy.from_env({"VAULT_PRIVATE_DIR": "Secrets"}))
+
+    assert "Secrets/" in prompt
+    assert "{{PRIVATE_DIR}}" not in prompt
+
+
+def test_the_system_prompt_carries_todays_date() -> None:
+    """Without it the model resolves "this week" against its training cutoff."""
+    prompt = _load_system_prompt(Taxonomy(), today=date(2026, 8, 18))
+
+    assert "2026-08-18" in prompt
+    assert "{{TODAY}}" not in prompt
+
+
+def test_the_system_prompt_no_longer_mandates_a_canned_refusal() -> None:
+    """The verbatim "That's not in your notes." string was rule 3 until the
+    retrieval floor made an empty result honest on its own. Pinning its absence
+    keeps a well-meaning edit from reintroducing a scripted answer."""
+    prompt = _load_system_prompt(Taxonomy())
+
+    assert "That's not in your notes." not in prompt
+    assert "Answer ONLY from tool results" not in prompt

@@ -45,8 +45,8 @@ DISALLOWED_TOOLS = ("Bash", "Write", "Edit")  # read-only agent (P1)
 WARM_TIMEOUT_SECONDS = 90.0
 
 
-def _load_system_prompt(taxonomy: Taxonomy) -> str:
-    """``chat.md`` with the taxonomy's folder names templated in.
+def _load_system_prompt(taxonomy: Taxonomy, today: date | None = None) -> str:
+    """``chat.md`` with the taxonomy's folder names and today's date templated in.
 
     The prompt tells the model which folder is off-limits (I3); if the
     taxonomy is configurable, a prompt naming the wrong folder would actively
@@ -54,8 +54,17 @@ def _load_system_prompt(taxonomy: Taxonomy) -> str:
     folder is the protected one. Simple string substitution, not str.format,
     so the markdown's own braces (none today, but future-proof) are never at
     risk of a KeyError.
+
+    ``{{TODAY}}`` is substituted for the same reason the folder name is: a
+    model with no date cannot resolve "this week" or "since Friday" against a
+    vault whose notes are all dated, and would quietly answer as of its
+    training cutoff instead.
     """
-    return PROMPT_PATH.read_text(encoding="utf-8").replace("{{PRIVATE_DIR}}", taxonomy.private)
+    return (
+        PROMPT_PATH.read_text(encoding="utf-8")
+        .replace("{{PRIVATE_DIR}}", taxonomy.private)
+        .replace("{{TODAY}}", (today or date.today()).isoformat())
+    )
 
 
 def _tool_text(payload: Any) -> dict[str, Any]:
