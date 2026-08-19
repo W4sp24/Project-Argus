@@ -86,9 +86,9 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
           </div>
         )}
 
-        {messages.map((message, i) =>
+        {messages.map((message) =>
           message.role === "user" ? (
-            <div key={i} className="animate-msg-in flex justify-end">
+            <div key={message.key} className="animate-msg-in flex justify-end">
               <div
                 className={`max-w-[85%] border border-lineHi bg-[var(--ac-bg)] px-3.5 py-2.5 leading-relaxed text-ink ${
                   compact ? "text-body" : "text-lead"
@@ -98,9 +98,9 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
               </div>
             </div>
           ) : compact ? (
-            <div key={i} className="animate-msg-in flex justify-start">
+            <div key={message.key} className="animate-msg-in flex justify-start">
               <div className="max-w-[85%] border border-line bg-void px-3.5 py-2.5 text-body leading-relaxed text-ink-muted">
-                {message.pending ? (
+                {message.status === "streaming" && !message.text ? (
                   <Pending />
                 ) : (
                   <span className="whitespace-pre-wrap">
@@ -110,13 +110,13 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
               </div>
             </div>
           ) : (
-            <div key={i} className="animate-msg-in flex gap-3">
+            <div key={message.key} className="animate-msg-in flex gap-3">
               <Orb />
               <div className="min-w-0 flex-1">
                 <p className="mb-1 font-mono text-meta uppercase tracking-[0.14em] text-ink-faint">
                   ARGUS · {model}
                 </p>
-                {message.pending ? (
+                {message.status === "streaming" && !message.text ? (
                   <Pending />
                 ) : (
                   <p className="whitespace-pre-wrap font-body text-lead leading-[1.7] text-ink">
