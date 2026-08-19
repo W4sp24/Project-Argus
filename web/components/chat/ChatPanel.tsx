@@ -139,9 +139,14 @@ export default function ChatPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {/* `log` is the transcript role: it names the region for a screen reader
+          and marks new turns as they arrive. ToolTrace keeps its own narrower
+          live region inside for step-by-step progress. */}
       <div
         ref={scrollRef}
         onScroll={trackPinned}
+        role="log"
+        aria-label="Conversation"
         className={`min-h-0 flex-1 overflow-y-auto ${compact ? "space-y-3 pr-1" : "space-y-5 py-4"}`}
       >
         {messages.length === 0 && (

@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { mutate } from "swr";
 import { apiFetch, getChatThread, wsBase } from "@/lib/api";
 import { selectedModel } from "@/lib/models";
 
@@ -203,6 +204,16 @@ export function ChatProvider({ children, course }: { children: ReactNode; course
             setThreadId(id);
           }
           setThreadTitle(String(frame.title ?? ""));
+          // The backend mints the row and derives its title inside `_open_turn`,
+          // before the model is called — so the rail has a thread to show from
+          // the first message on, but only if its SWR list is told to look
+          // again. Without this a brand-new conversation is invisible until
+          // something else happens to revalidate.
+          void mutate(
+            (key) => typeof key === "string" && key.startsWith("/api/chat/threads"),
+            undefined,
+            { revalidate: true },
+          );
           break;
         }
         case "delta": {

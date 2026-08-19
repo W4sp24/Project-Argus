@@ -78,6 +78,15 @@ execFileSync(python, [path.join(here, "seed_automations.py"), vault], {
   stdio: "inherit",
 });
 
+// Chat threads: a finished transcript with markdown and a tool trace, plus
+// one thread per rail bucket. e2e has no live agent (the ws errors), so a
+// real turn can never produce an answer to assert on -- see the module
+// docstring in seed_chat_threads.py.
+execFileSync(python, [path.join(here, "seed_chat_threads.py"), vault], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 const server = spawn(python, ["-m", "uvicorn", "backend.main:app", "--port", "8000"], {
   cwd: workdir,
   stdio: "inherit",
