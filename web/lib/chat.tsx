@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { apiFetch, wsBase } from "@/lib/api";
+import { apiFetch, getChatThread, wsBase } from "@/lib/api";
 import { selectedModel } from "@/lib/models";
 
 /** One dispatch of one tool, assembled from the `tool` start and end frames. */
@@ -54,6 +54,7 @@ interface ChatState {
   send: (text: string) => void;
   stop: () => void;
   newThread: () => void;
+  openThread: (id: number) => Promise<void>;
 }
 
 const ChatContext = createContext<ChatState | null>(null);
@@ -76,6 +77,45 @@ function patchLast(
   if (list.length === 0) return list;
   const next = [...list];
   next[next.length - 1] = patch(next[next.length - 1]);
+  return next;
+}
+
+/**
+ * Fold one `tool` frame into a step list, upserting by `call_id`.
+ *
+ * The frames streamed over the socket and the `tools_json` rows a thread
+ * restores from are the same objects — `_tool_frame()` produces both, and the
+ * router appends every frame it sends — so they must fold through one
+ * function or a reloaded trace would quietly differ from the one you watched
+ * being built.
+ */
+function applyToolFrame(steps: ToolStep[], frame: Record<string, unknown>): ToolStep[] {
+  const callId = String(frame.call_id ?? "");
+  const name = String(frame.name ?? "");
+  const next = [...steps];
+  const at = next.findIndex((step) => step.callId === callId);
+  if (frame.phase === "start") {
+    const started: ToolStep = {
+      callId,
+      name,
+      args: (frame.args as Record<string, unknown>) ?? undefined,
+      startedAt: Date.now(),
+    };
+    if (at === -1) next.push(started);
+    else next[at] = { ...next[at], ...started };
+    return next;
+  }
+  const finished = {
+    label: String(frame.label ?? name),
+    detail: String(frame.detail ?? ""),
+    paths: Array.isArray(frame.paths) ? (frame.paths as string[]) : [],
+    ok: frame.ok !== false,
+    endedAt: Date.now(),
+  };
+  // An end frame with no matching start can only come from a truncated
+  // persisted trace; keep the summary rather than dropping the step.
+  if (at === -1) next.push({ callId, name, startedAt: Date.now(), ...finished });
+  else next[at] = { ...next[at], ...finished };
   return next;
 }
 
@@ -174,33 +214,8 @@ export function ChatProvider({ children, course }: { children: ReactNode; course
           // Flush first, so the trace and the prose it interleaves with stay
           // in the order they were streamed.
           flush();
-          const callId = String(frame.call_id ?? "");
-          const name = String(frame.name ?? "");
           setMessages((prev) =>
-            patchLast(prev, (m) => {
-              const steps = [...m.steps];
-              const at = steps.findIndex((step) => step.callId === callId);
-              if (frame.phase === "start") {
-                const step: ToolStep = {
-                  callId,
-                  name,
-                  args: (frame.args as Record<string, unknown>) ?? undefined,
-                  startedAt: Date.now(),
-                };
-                if (at === -1) steps.push(step);
-                else steps[at] = { ...steps[at], ...step };
-              } else if (at !== -1) {
-                steps[at] = {
-                  ...steps[at],
-                  label: String(frame.label ?? name),
-                  detail: String(frame.detail ?? ""),
-                  paths: Array.isArray(frame.paths) ? (frame.paths as string[]) : [],
-                  ok: frame.ok !== false,
-                  endedAt: Date.now(),
-                };
-              }
-              return { ...m, steps };
-            }),
+            patchLast(prev, (m) => ({ ...m, steps: applyToolFrame(m.steps, frame) })),
           );
           break;
         }
@@ -277,7 +292,15 @@ export function ChatProvider({ children, course }: { children: ReactNode; course
         status: "done",
         local: true,
       },
-      { key: nextKey(), role: "assistant", text: "", steps: [], status: "streaming", local: true },
+      {
+        key: nextKey(),
+        role: "assistant",
+        text: "",
+        steps: [],
+        status: "streaming",
+        startedAt: Date.now(),
+        local: true,
+      },
     ]);
     let text: string;
     try {
@@ -370,9 +393,40 @@ export function ChatProvider({ children, course }: { children: ReactNode; course
     threadIdRef.current = null;
   }, [stop]);
 
+  /**
+   * Load a thread from the database and make it the live one.
+   *
+   * `startedAt`/`endedAt` are deliberately left unset on restored turns: the
+   * wall-clock of a conversation from last week is not something the trace
+   * should claim to know, so it shows the step list without a duration.
+   */
+  const openThread = useCallback(
+    async (id: number) => {
+      if (busyRef.current) stop();
+      const detail = await getChatThread(id);
+      threadIdRef.current = detail.thread.id;
+      setThreadId(detail.thread.id);
+      setThreadTitle(detail.thread.title);
+      setMessages(
+        detail.messages.map((row) => ({
+          key: `s${row.id}`,
+          serverId: row.id,
+          role: row.role,
+          text: row.text,
+          steps: (Array.isArray(row.tools) ? row.tools : []).reduce<ToolStep[]>(
+            (steps, frame) => applyToolFrame(steps, frame),
+            [],
+          ),
+          status: "done" as const,
+        })),
+      );
+    },
+    [stop],
+  );
+
   const value = useMemo(
-    () => ({ messages, threadId, threadTitle, busy, offline, send, stop, newThread }),
-    [messages, threadId, threadTitle, busy, offline, send, stop, newThread],
+    () => ({ messages, threadId, threadTitle, busy, offline, send, stop, newThread, openThread }),
+    [messages, threadId, threadTitle, busy, offline, send, stop, newThread, openThread],
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

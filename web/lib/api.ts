@@ -1654,3 +1654,70 @@ export function deleteAutomationWidget(slug: string, instanceId?: string) {
     "DELETE",
   );
 }
+
+// --- Chat threads (persistent conversations) --------------------------------
+
+export interface ThreadInfo {
+  id: number;
+  title: string;
+  course: string | null;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+/**
+ * One persisted turn. `tools` is whatever `_tool_frame()` produced at write
+ * time, so the restore path treats it as read-only and shape-tolerant: a
+ * later protocol change must degrade to "no chips on old rows", never throw.
+ */
+export interface ChatMessageInfo {
+  id: number;
+  role: "user" | "assistant";
+  text: string;
+  model: string | null;
+  tools: Record<string, unknown>[];
+  created_at: string;
+}
+
+export interface ThreadDetail {
+  thread: ThreadInfo;
+  messages: ChatMessageInfo[];
+}
+
+/**
+ * The thread list behind the /chat rail.
+ *
+ * Passing no `course` deliberately returns course-scoped threads as well —
+ * `store.list_threads` filters only when asked, because the rail wants the
+ * global conversation and the one started inside a Course Hub side by side.
+ * They are told apart by `ThreadInfo.course`, not by living in separate lists.
+ */
+export function useChatThreads(course?: string, archived = false) {
+  const params = new URLSearchParams();
+  if (course) params.set("course", course);
+  if (archived) params.set("archived", "true");
+  const query = params.toString();
+  return useSWR<ThreadInfo[]>(`/api/chat/threads${query ? `?${query}` : ""}`, fetcher);
+}
+
+/** One thread with its whole transcript. The backend does not paginate these
+ *  yet, so a very long thread loads in full. */
+export function getChatThread(id: number) {
+  return fetcher<ThreadDetail>(`/api/chat/threads/${id}`);
+}
+
+export function createChatThread(body: { title?: string; course?: string } = {}) {
+  return mutateJSON<ThreadInfo>("/api/chat/threads", body);
+}
+
+/** Rename and/or archive. The backend 400s on an empty patch and on a blank
+ *  title rather than silently doing nothing, so callers must send a change. */
+export function patchChatThread(id: number, body: { title?: string; archived?: boolean }) {
+  return mutateJSON<ThreadInfo>(`/api/chat/threads/${id}`, body, "PATCH");
+}
+
+export function deleteChatThread(id: number) {
+  return mutateJSON<{ status: string }>(`/api/chat/threads/${id}`, undefined, "DELETE");
+}

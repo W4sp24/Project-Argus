@@ -4,9 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import Button from "@/components/ui/Button";
 import { fetcher } from "@/lib/api";
-import { useChat } from "@/lib/chat";
+import { useChat, type ChatMessage } from "@/lib/chat";
 import CitationChips from "@/components/chat/CitationChips";
 import Markdown from "@/components/chat/Markdown";
+import ToolTrace from "@/components/chat/ToolTrace";
 import { stripCitationMarkers } from "@/lib/citations";
 import { useSelectedModel } from "@/lib/models";
 
@@ -28,13 +29,22 @@ function Orb({ size = "h-6 w-6" }: { size?: string }) {
   );
 }
 
-function Pending() {
-  return (
-    <span className="font-mono text-label text-ink-muted" aria-label="Argus is thinking">
-      processing_query
-      <span className="animate-blink text-[var(--ac)]">▊</span>
-    </span>
-  );
+/** How a turn ended, when it did not end well. The old client overwrote the
+ *  answer with "Something went wrong: …", which also threw away whatever the
+ *  agent had already said; the partial text now stays and this sits under it. */
+function StatusLine({ message }: { message: ChatMessage }) {
+  if (message.status === "error") {
+    return (
+      <p className="flex items-start gap-1.5 border border-danger bg-void px-3 py-1.5 font-mono text-meta text-danger">
+        <span aria-hidden="true">✕</span>
+        <span className="min-w-0 flex-1">{message.error ?? "something went wrong"}</span>
+      </p>
+    );
+  }
+  if (message.status === "stopped") {
+    return <p className="font-mono text-meta text-ink-faint">■ stopped</p>;
+  }
+  return null;
 }
 
 /**
@@ -113,27 +123,37 @@ export default function ChatPanel({
             </div>
           ) : compact ? (
             <div key={message.key} className="animate-msg-in flex justify-start">
-              <div className="max-w-[85%] border border-line bg-void px-3.5 py-2.5 text-body leading-relaxed text-ink-muted">
-                {message.status === "streaming" && !message.text ? (
-                  <Pending />
-                ) : (
-                  <>
+              <div className="min-w-0 max-w-[85%] flex-1 space-y-2">
+                <ToolTrace
+                  steps={message.steps}
+                  status={message.status}
+                  startedAt={message.startedAt}
+                  endedAt={message.endedAt}
+                />
+                {message.text && (
+                  <div className="border border-line bg-void px-3.5 py-2.5 text-body leading-relaxed text-ink-muted">
                     <Markdown text={stripCitationMarkers(message.text)} />
                     <CitationChips steps={message.steps} vaultName={vaultName} />
-                  </>
+                  </div>
                 )}
+                <StatusLine message={message} />
               </div>
             </div>
           ) : (
             <div key={message.key} className="animate-msg-in flex gap-3">
               <Orb />
-              <div className="min-w-0 flex-1">
-                <p className="mb-1 font-mono text-meta uppercase tracking-[0.14em] text-ink-faint">
+              <div className="min-w-0 flex-1 space-y-2">
+                <p className="font-mono text-meta uppercase tracking-[0.14em] text-ink-faint">
                   ARGUS · {model}
+                  {message.local && <span className="ml-2 normal-case">· not saved to this thread</span>}
                 </p>
-                {message.status === "streaming" && !message.text ? (
-                  <Pending />
-                ) : (
+                <ToolTrace
+                  steps={message.steps}
+                  status={message.status}
+                  startedAt={message.startedAt}
+                  endedAt={message.endedAt}
+                />
+                {message.text && (
                   <>
                     <Markdown
                       text={stripCitationMarkers(message.text)}
@@ -142,6 +162,7 @@ export default function ChatPanel({
                     <CitationChips steps={message.steps} vaultName={vaultName} />
                   </>
                 )}
+                <StatusLine message={message} />
               </div>
             </div>
           ),
