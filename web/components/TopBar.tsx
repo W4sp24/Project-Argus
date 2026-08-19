@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { EngineTrigger } from "@/components/EnginePicker";
 import FocusTimer from "@/components/FocusTimer";
@@ -51,6 +52,7 @@ function Clock() {
  */
 function OverflowMenu() {
   const { setNoteOpen, toggleDrawer, startFocus } = useUi();
+  const onChatPage = usePathname() === "/chat";
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -72,7 +74,8 @@ function OverflowMenu() {
 
   const items: { label: string; run: () => void }[] = [
     { label: "+ NOTE", run: () => setNoteOpen(true) },
-    { label: "CHAT", run: toggleDrawer },
+    // See the CHAT control in TopBar for why this drops out on /chat.
+    ...(onChatPage ? [] : [{ label: "CHAT", run: toggleDrawer }]),
     { label: "◔ FOCUS", run: startFocus },
   ];
 
@@ -117,6 +120,10 @@ function OverflowMenu() {
 export default function TopBar() {
   const { mode, setMode } = useMode();
   const { toggleDrawer, setNoteOpen, setPaletteOpen } = useUi();
+  // The drawer and /chat share one ChatProvider, so on /chat the control only
+  // offers to slide a 360px copy of the page over the page. It is the way in
+  // from everywhere else, which is why it is hidden rather than removed.
+  const onChatPage = usePathname() === "/chat";
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   // APG roving-tabindex tab list: only the active tab is in the Tab order;
@@ -213,9 +220,11 @@ export default function TopBar() {
             <Button variant="quiet" onClick={() => setNoteOpen(true)}>
               + NOTE
             </Button>
-            <Button variant="quiet" aria-label="Chat" onClick={toggleDrawer}>
-              CHAT
-            </Button>
+            {!onChatPage && (
+              <Button variant="quiet" aria-label="Chat" onClick={toggleDrawer}>
+                CHAT
+              </Button>
+            )}
           </div>
           <FocusTimer />
           <OverflowMenu />
