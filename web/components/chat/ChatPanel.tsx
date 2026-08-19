@@ -40,7 +40,18 @@ function Pending() {
  * standard-chatbot layout: assistant orb + name row + unboxed prose, user
  * messages as right-aligned tinted bubbles, input pinned at the bottom.
  */
-export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
+export default function ChatPanel({
+  variant,
+  suggestions,
+  placeholder,
+}: {
+  variant: "dock" | "full";
+  /** Empty-state prompt buttons. The fullscreen surface falls back to the
+   *  generic EXAMPLES; the drawer shows none unless a caller supplies its own,
+   *  which is how the Course Hub keeps its course-specific prompts. */
+  suggestions?: string[];
+  placeholder?: string;
+}) {
   const { data: vault } = useSWR<{ name: string }>("/api/vault", fetcher);
   const { messages, busy, offline, send } = useChat();
   const model = useSelectedModel();
@@ -56,6 +67,7 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
 
   const compact = variant === "dock";
   const vaultName = vault?.name ?? "vault";
+  const prompts = suggestions ?? (compact ? [] : EXAMPLES);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -69,9 +81,9 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
             <p className={`text-center text-ink-muted ${compact ? "text-xs" : "text-sm"}`}>
               ask your vault — every answer cites the note it came from.
             </p>
-            {!compact && (
+            {prompts.length > 0 && (
               <div className="flex flex-wrap justify-center gap-2">
-                {EXAMPLES.map((example) => (
+                {prompts.map((example) => (
                   <button
                     key={example}
                     type="button"
@@ -146,7 +158,7 @@ export default function ChatPanel({ variant }: { variant: "dock" | "full" }) {
           <input
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder={busy ? "Argus is answering…" : "Ask your vault"}
+            placeholder={busy ? "Argus is answering…" : (placeholder ?? "Ask your vault")}
             aria-label="Ask your vault"
             disabled={busy}
             className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi disabled:opacity-50"
