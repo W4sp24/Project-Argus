@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
+import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
 import { fetcher } from "@/lib/api";
 import { useChat, type ChatMessage } from "@/lib/chat";
@@ -26,6 +27,32 @@ function Orb({ size = "h-6 w-6" }: { size?: string }) {
     >
       <span className="h-[35%] w-[35%] rounded-full bg-[var(--ac)]" />
     </span>
+  );
+}
+
+/** Copy a finished answer. Only claims success once `writeText` actually
+ *  resolves: `navigator.clipboard` is undefined outside a secure context and
+ *  rejects when the document is unfocused, and a toast that lies about it
+ *  sends the reader off to paste something else entirely
+ *  (web/components/system/ConnectN8nDialog.tsx:88 makes the same argument). */
+function CopyAnswer({ text }: { text: string }) {
+  const { show } = useToast();
+  return (
+    <button
+      type="button"
+      aria-label="Copy answer"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          show("copied :: answer on the clipboard");
+        } catch {
+          show("copy failed :: select the text and copy it by hand", { tone: "error" });
+        }
+      }}
+      className="font-mono text-meta lowercase text-ink-faint opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
+    >
+      copy
+    </button>
   );
 }
 
@@ -65,17 +92,46 @@ export default function ChatPanel({
   placeholder?: string;
 }) {
   const { data: vault } = useSWR<{ name: string }>("/api/vault", fetcher);
-  const { messages, busy, offline, send } = useChat();
+  const { messages, busy, offline, send, stop } = useChat();
   const model = useSelectedModel();
   const [input, setInput] = useState("");
+  const [pinned, setPinned] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
+  // §7 scroll fix: set scrollTop on the container instead of scrollIntoView
+  // (scrollIntoView can scroll ancestor containers / the page itself).
+  //
+  // Only while the reader is already at the bottom, though. This used to run
+  // on every change to `messages`, which meant scrolling up to re-read an
+  // earlier answer put you in a fight with the streaming reply for control of
+  // the viewport — it yanked you back down on every batched delta.
   useEffect(() => {
-    // §7 scroll fix: set scrollTop on the container instead of scrollIntoView
-    // (scrollIntoView can scroll ancestor containers / the page itself).
+    if (!pinned) return;
     const container = scrollRef.current;
     if (container) container.scrollTop = container.scrollHeight;
-  }, [messages]);
+  }, [messages, pinned]);
+
+  // Auto-grow the composer. Height is reset before measuring so the box
+  // shrinks again when text is deleted; `max-h-40` caps it and lets the
+  // textarea scroll past that rather than eating the transcript.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
+
+  function trackPinned(event: React.UIEvent<HTMLDivElement>) {
+    const el = event.currentTarget;
+    setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 64);
+  }
+
+  function submit() {
+    if (busy || !input.trim()) return;
+    send(input);
+    setInput("");
+  }
 
   const compact = variant === "dock";
   const vaultName = vault?.name ?? "vault";
@@ -85,6 +141,7 @@ export default function ChatPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollRef}
+        onScroll={trackPinned}
         className={`min-h-0 flex-1 overflow-y-auto ${compact ? "space-y-3 pr-1" : "space-y-5 py-4"}`}
       >
         {messages.length === 0 && (
@@ -140,7 +197,7 @@ export default function ChatPanel({
               </div>
             </div>
           ) : (
-            <div key={message.key} className="animate-msg-in flex gap-3">
+            <div key={message.key} className="animate-msg-in group flex gap-3">
               <Orb />
               <div className="min-w-0 flex-1 space-y-2">
                 <p className="font-mono text-meta uppercase tracking-[0.14em] text-ink-faint">
@@ -163,6 +220,9 @@ export default function ChatPanel({
                   </>
                 )}
                 <StatusLine message={message} />
+                {message.text && message.status !== "streaming" && (
+                  <CopyAnswer text={message.text} />
+                )}
               </div>
             </div>
           ),
@@ -174,35 +234,74 @@ export default function ChatPanel({
         )}
       </div>
 
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          send(input);
-          setInput("");
-        }}
-        className={compact ? "pt-2" : "border-t border-line pt-3"}
-      >
-        <div className="flex gap-2">
-          <input
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder={busy ? "Argus is answering…" : (placeholder ?? "Ask your vault")}
-            aria-label="Ask your vault"
-            disabled={busy}
-            className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi disabled:opacity-50"
-          />
-          <Button
-            type="submit"
-            size="md"
-            variant="primary"
-            aria-label="Send"
-            disabled={busy || !input.trim()}
-            className="shrink-0"
+      <div className={compact ? "relative pt-2" : "relative border-t border-line pt-3"}>
+        {!pinned && (
+          <button
+            type="button"
+            onClick={() => setPinned(true)}
+            className="animate-rise absolute -top-9 left-1/2 -translate-x-1/2 border border-line bg-panel px-2.5 py-1 font-mono text-meta text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
           >
-            SEND
-          </Button>
-        </div>
-      </form>
+            ↓ jump to latest
+          </button>
+        )}
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <div className="flex items-end gap-2">
+            {/* Deliberately not `FIELD_CONTROL` from ui/Field: that sets
+                text-label (13px), which is right for a settings form and
+                cramped for the box you compose a paragraph in next to 17px
+                prose. Same tokens, one size up. */}
+            <textarea
+              ref={composerRef}
+              rows={1}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                // Enter sends, Shift+Enter newlines. `isComposing` guards an
+                // IME candidate window, where Enter means "accept this
+                // character" and must not fire the message.
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder={busy ? "Argus is answering…" : (placeholder ?? "Ask your vault")}
+              aria-label="Ask your vault"
+              className="max-h-40 min-w-0 flex-1 resize-none border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi"
+            />
+            {/* The composer stays enabled while a turn runs, so a follow-up can
+                be typed while reading the answer. STOP replaces SEND rather
+                than greying the whole surface out. */}
+            {busy ? (
+              <Button
+                type="button"
+                size="md"
+                variant="secondary"
+                aria-label="Stop generating"
+                onClick={stop}
+                className="shrink-0"
+              >
+                STOP
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="md"
+                variant="primary"
+                aria-label="Send"
+                disabled={!input.trim()}
+                className="shrink-0"
+              >
+                SEND
+              </Button>
+            )}
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
