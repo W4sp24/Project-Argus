@@ -5,7 +5,8 @@ import useSWR from "swr";
 import Button from "@/components/ui/Button";
 import { fetcher } from "@/lib/api";
 import { useChat } from "@/lib/chat";
-import { renderWithCitations } from "@/lib/citations";
+import CitationChips from "@/components/chat/CitationChips";
+import { stripCitationMarkers } from "@/lib/citations";
 import { useSelectedModel } from "@/lib/models";
 
 const EXAMPLES = [
@@ -115,9 +116,12 @@ export default function ChatPanel({
                 {message.status === "streaming" && !message.text ? (
                   <Pending />
                 ) : (
-                  <span className="whitespace-pre-wrap">
-                    {renderWithCitations(message.text, vaultName)}
-                  </span>
+                  <>
+                    <span className="whitespace-pre-wrap">
+                      {stripCitationMarkers(message.text)}
+                    </span>
+                    <CitationChips steps={message.steps} vaultName={vaultName} />
+                  </>
                 )}
               </div>
             </div>
@@ -131,9 +135,12 @@ export default function ChatPanel({
                 {message.status === "streaming" && !message.text ? (
                   <Pending />
                 ) : (
-                  <p className="whitespace-pre-wrap font-body text-lead leading-[1.7] text-ink">
-                    {renderWithCitations(message.text, vaultName)}
-                  </p>
+                  <>
+                    <p className="whitespace-pre-wrap font-body text-lead leading-[1.7] text-ink">
+                      {stripCitationMarkers(message.text)}
+                    </p>
+                    <CitationChips steps={message.steps} vaultName={vaultName} />
+                  </>
                 )}
               </div>
             </div>
