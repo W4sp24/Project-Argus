@@ -28,6 +28,7 @@ from backend.agent.adapters import (
     KNOWN_PROVIDERS,
     PROVIDER_ANTHROPIC_API,
     PROVIDER_CLAUDE_CLI,
+    PROVIDER_GEMINI,
     PROVIDER_OPENAI_COMPAT,
     AgentError,
     ProbeResult,
@@ -338,8 +339,13 @@ def build_models_router(
         elif endpoint and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=422, detail="endpoint must be an http(s) URL")
 
+        # Both key-only providers, checked here rather than left to
+        # `adapter_for_entry`: a registration that succeeds and then fails on
+        # first use is far harder to act on than a 422 at the point of typing.
         if provider == PROVIDER_ANTHROPIC_API and not request.api_key:
             raise HTTPException(status_code=422, detail="an Anthropic API model needs an API key")
+        if provider == PROVIDER_GEMINI and not request.api_key:
+            raise HTTPException(status_code=422, detail="a Gemini model needs an API key")
 
         if any(model.name == name for model in _registry()):
             raise HTTPException(status_code=409, detail=f"model {name} already exists")
@@ -550,6 +556,15 @@ async def _list_available(
 
             return await asyncio.wait_for(
                 list_models(api_key, endpoint or DEFAULT_ENDPOINT), timeout=15
+            )
+        if provider == PROVIDER_GEMINI:
+            if not api_key:
+                return None
+            from backend.agent.gemini_api import DEFAULT_ENDPOINT as GEMINI_ENDPOINT
+            from backend.agent.gemini_api import list_models as gemini_list_models
+
+            return await asyncio.wait_for(
+                gemini_list_models(api_key, endpoint or GEMINI_ENDPOINT), timeout=15
             )
     except Exception:  # noqa: BLE001 - unreachable is a normal answer here
         return None

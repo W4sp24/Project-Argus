@@ -64,12 +64,23 @@ const PROVIDERS: ProviderOption[] = [
     id: "openai-compat",
     glyph: "◈",
     title: "Hosted API",
-    blurb: "Groq, Together, Fireworks, OpenRouter, and similar.",
+    blurb: "Groq, DeepSeek, Together, OpenRouter, and similar.",
     privacy: "Note excerpts are sent to that company's servers.",
     local: false,
     needsEndpoint: true,
     needsKey: true,
     failureHint: "Check the address ends in /v1 and the key is still valid.",
+  },
+  {
+    id: "gemini",
+    glyph: "◐",
+    title: "Google Gemini",
+    blurb: "Gemini models on a Google AI Studio key.",
+    privacy: "Note excerpts are sent to Google.",
+    local: false,
+    needsEndpoint: false,
+    needsKey: true,
+    failureHint: "Get a key at aistudio.google.com and check it is enabled for the API.",
   },
   {
     id: "anthropic-api",
@@ -98,6 +109,10 @@ const PROVIDERS: ProviderOption[] = [
 /** Base URLs for the hosted providers people actually use, so nobody hunts for them. */
 const HOSTED_PRESETS: { label: string; endpoint: string }[] = [
   { label: "Groq", endpoint: "https://api.groq.com/openai/v1" },
+  // deepseek-chat calls tools; deepseek-reasoner does not, and the
+  // registration probe rejects it — which is the right outcome, but only
+  // legible if the model step says so first.
+  { label: "DeepSeek", endpoint: "https://api.deepseek.com/v1" },
   { label: "Together", endpoint: "https://api.together.xyz/v1" },
   { label: "Fireworks", endpoint: "https://api.fireworks.ai/inference/v1" },
   { label: "OpenRouter", endpoint: "https://openrouter.ai/api/v1" },
@@ -495,6 +510,17 @@ export default function AddModelDialog({
                   {options.length > 0
                     ? `${endpoint.trim() || "That server"} serves ${options.length} model${options.length === 1 ? "" : "s"}. Pick one, then Argus checks it can use your notes.`
                     : "Enter the model id this server expects, then Argus checks it can use your notes."}
+                </p>
+              )}
+
+              {/* The probe rejects a model that will not call tools, which is
+                  correct but reads as "DeepSeek doesn't work" if you happened
+                  to pick the reasoner. Say which one to pick first. */}
+              {endpoint.includes("deepseek") && (
+                <p className="text-label text-ink-faint">
+                  Pick <code className="text-ink">deepseek-chat</code>.{" "}
+                  <code className="text-ink">deepseek-reasoner</code> cannot call tools, so Argus
+                  will refuse it — vault citations depend on them.
                 </p>
               )}
 

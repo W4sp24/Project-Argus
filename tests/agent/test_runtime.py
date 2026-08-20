@@ -7,15 +7,41 @@ background thread.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import time
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from backend.agent.runtime import ChatAgent, build_vault_tools
+from backend.agent.adapters import resolve_run_target
+from backend.agent.runtime import (
+    MODEL,
+    ChatAgent,
+    _load_system_prompt,
+    _summarize_list_notes,
+    build_vault_tools,
+)
 from backend.core.config import Settings
+from backend.core.model_registry import save_model_prefs, save_user_models
+from backend.core.taxonomy import Taxonomy
+
+BROKEN_HEADER_NOTE = """---
+tags: [unclosed
+---
+
+still mine
+"""
+
+
+NO_AI_NOTE = """---
+tags: [no-ai]
+---
+
+private thoughts
+"""
 
 
 class FakeIndex:
@@ -144,7 +170,7 @@ async def test_list_tasks_returns_real_vault_buckets(settings: Settings) -> None
 
 def test_build_vault_tools_exposes_only_read_only_tools(settings: Settings) -> None:
     names = {spec.name for spec in build_vault_tools(settings, FakeIndex())}
-    assert names == {"search_vault", "read_note", "list_tasks"}
+    assert names == {"search_vault", "read_note", "list_notes", "list_tasks"}
     assert not any(name.startswith("propose_") for name in names)
 
 
@@ -266,7 +292,9 @@ async def test_abandoning_the_stream_still_records_the_tokens(
     people actually abandon.
     """
     adapter = _AbandonableAdapter()
-    monkeypatch.setattr("backend.agent.runtime.resolve_adapter", lambda *a, **k: adapter)
+    monkeypatch.setattr(
+        "backend.agent.runtime.resolve_run_target", lambda *a, **k: (adapter, "test-model")
+    )
     monkeypatch.setattr("backend.agent.runtime.build_vault_tools", lambda *a, **k: [])
 
     agent = ChatAgent(settings)
@@ -286,7 +314,9 @@ async def test_a_completed_stream_records_usage_exactly_once(
 ) -> None:
     """The drain must not double-bill a turn that finished normally."""
     adapter = _AbandonableAdapter()
-    monkeypatch.setattr("backend.agent.runtime.resolve_adapter", lambda *a, **k: adapter)
+    monkeypatch.setattr(
+        "backend.agent.runtime.resolve_run_target", lambda *a, **k: (adapter, "test-model")
+    )
     monkeypatch.setattr("backend.agent.runtime.build_vault_tools", lambda *a, **k: [])
 
     agent = ChatAgent(settings)
@@ -296,11 +326,200 @@ async def test_a_completed_stream_records_usage_exactly_once(
     assert _usage_rows(settings) == [("chat", 400, 800)]
 
 
-def test_resolve_model_keeps_the_default_path(settings: Settings) -> None:
-    from backend.agent.runtime import MODEL
+@pytest.mark.anyio
+async def test_the_rerank_setting_reaches_retrieval(settings: Settings, monkeypatch) -> None:
+    """`ARGUS_RAG_RERANK=1` used to do nothing at all.
 
-    assert ChatAgent(settings)._resolve_model(None) == MODEL
+    `retrieve_result` takes a `rerank` flag, but both callers go through the
+    `retrieve` shim and the shim dropped it — so the setting was unreachable
+    while rerank.py's docstring claimed it gated the module.
+    """
+    seen: list[dict] = []
 
+    def fake_retrieve(*_args, **kwargs):
+        seen.append(kwargs)
+        return []
+
+    monkeypatch.setattr("backend.rag.retrieve.retrieve", fake_retrieve)
+    # Settings is frozen, so this is a replacement rather than a mutation.
+    reranking = dataclasses.replace(settings, rerank_enabled=True)
+
+    tools = build_vault_tools(reranking, FakeIndex())
+    await tool(tools, "search_vault").handler({"query": "dijkstra"})
+
+    assert seen[0]["rerank"] is True
+
+
+@pytest.mark.anyio
+async def test_a_missing_argument_is_explained_not_raised(settings: Settings) -> None:
+    """`str(args["query"])` used to raise KeyError, and the model read the whole
+    of `error: 'query'` — which names neither the tool nor the shape it wanted,
+    so the next attempt was another guess and the turn budget drained."""
+    tools = build_vault_tools(settings, FakeIndex())
+
+    searched = json.dumps(await tool(tools, "search_vault").handler({}))
+    read = json.dumps(await tool(tools, "read_note").handler({"path": "  "}))
+
+    assert "search_vault needs" in searched and "dijkstra" in searched
+    assert "read_note needs" in read and "vault-relative" in read
+
+
+@pytest.mark.anyio
+async def test_list_notes_browses_a_folder(settings: Settings) -> None:
+    """The escape hatch for a search that came back thin.
+
+    Before this the read surface was search / read-one / list-tasks, so a model
+    that could not phrase a query the embeddings liked had no way to discover
+    that a note existed at all.
+    """
+    course = settings.vault_path / "15-Courses" / "CS201"
+    course.mkdir(parents=True)
+    (course / "Lecture-03-Graphs.md").write_text("dijkstra", encoding="utf-8")
+    (course / "Exam-1-review.md").write_text("revision", encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({"folder": "15-Courses/CS201"})
+    paths = json.loads(json.loads(json.dumps(listed))["content"][0]["text"])["paths"]
+
+    assert sorted(paths) == [
+        "15-Courses/CS201/Exam-1-review.md",
+        "15-Courses/CS201/Lecture-03-Graphs.md",
+    ]
+    assert "50-Reference/algorithms.md" not in paths, "the folder filter is not advisory"
+
+
+@pytest.mark.anyio
+async def test_list_notes_matches_on_the_filename(settings: Settings) -> None:
+    """The case semantic search is worst at: the word is in the name, not the
+    body."""
+    (settings.vault_path / "50-Reference" / "Kruskal-notes.md").write_text("x", encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({"name_contains": "kruskal"})
+    paths = json.loads(listed["content"][0]["text"])["paths"]
+
+    assert paths == ["50-Reference/Kruskal-notes.md"]
+
+
+@pytest.mark.anyio
+async def test_list_notes_never_lists_a_no_ai_note(settings: Settings) -> None:
+    """I3 applies to a listing as much as to a read: a path is content."""
+    (settings.vault_path / "50-Reference" / "diary.md").write_text(NO_AI_NOTE, encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({})
+    paths = json.loads(listed["content"][0]["text"])["paths"]
+
+    assert "50-Reference/diary.md" not in paths
+    assert "50-Reference/algorithms.md" in paths, "only the tagged note is withheld"
+
+
+@pytest.mark.anyio
+async def test_a_broken_frontmatter_header_does_not_hide_a_note(settings: Settings) -> None:
+    """Failing closed on a parse error would make a note with a typo in its
+    YAML silently vanish from browse — the very complaint this tool answers."""
+    (settings.vault_path / "50-Reference" / "wonky.md").write_text(
+        BROKEN_HEADER_NOTE, encoding="utf-8"
+    )
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({})
+    paths = json.loads(listed["content"][0]["text"])["paths"]
+
+    assert "50-Reference/wonky.md" in paths
+
+
+@pytest.mark.anyio
+async def test_list_notes_caps_and_says_that_it_did(settings: Settings, monkeypatch) -> None:
+    monkeypatch.setattr("backend.agent.runtime.MAX_LIST_PATHS", 2)
+    for i in range(5):
+        (settings.vault_path / "50-Reference" / f"note-{i}.md").write_text("x", encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({})
+    payload = json.loads(listed["content"][0]["text"])
+
+    assert len(payload["paths"]) == 2
+    assert "narrow it" in payload["note"], "a silent truncation reads as a complete listing"
+
+
+def test_a_listed_path_is_not_a_citation() -> None:
+    """Citations come from the trace, so a summary carrying paths manufactures
+    them. The model has seen a filename here, not any content."""
+    summary = _summarize_list_notes(
+        {"folder": "15-Courses"}, json.dumps({"paths": ["15-Courses/a.md", "15-Courses/b.md"]})
+    )
+
+    assert summary.paths == ()
+    assert summary.detail == "2 notes in 15-Courses"
+
+
+@pytest.mark.anyio
+async def test_read_note_refuses_a_no_ai_note_outside_the_private_folder(
+    settings: Settings,
+) -> None:
+    """I3's tag half, which `is_indexable` never checked.
+
+    Indexing excludes a `#no-ai` note, so `search_vault` can never surface its
+    path — but `read_note` gated on the directory-and-suffix check alone, so a
+    model that guessed the path, or was handed it, read the file anyway. The
+    chat prompt's assurance that "the tools already exclude them" was true of
+    search and false here.
+    """
+    note = settings.vault_path / "50-Reference" / "diary.md"
+    note.write_text(NO_AI_NOTE, encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    result = await tool(tools, "read_note").handler({"path": "50-Reference/diary.md"})
+
+    assert "not readable" in json.dumps(result)
+    assert "private thoughts" not in json.dumps(result)
+
+
+@pytest.mark.anyio
+async def test_read_note_cannot_walk_out_of_the_vault(settings: Settings, tmp_path) -> None:
+    """`is_indexable` filters directory names and suffixes and has no opinion
+    on `..`, so a relative path was resolved against the vault raw. The model
+    picks this argument, so containment is checked where it is used."""
+    outside = tmp_path / "outside.md"
+    outside.write_text("not yours", encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    result = await tool(tools, "read_note").handler({"path": "../outside.md"})
+
+    assert "not readable" in json.dumps(result)
+    assert "not yours" not in json.dumps(result)
+
+
+def test_a_model_less_turn_is_labelled_with_the_model_that_actually_ran(
+    settings: Settings,
+) -> None:
+    """Chat used to answer `claude-opus-4-8` for every model-less turn.
+
+    `resolve_adapter` resolves a falsy model through `settings.default_model`,
+    but chat's own `_resolve_model` returned the hardcoded Claude Code id — so
+    on a machine defaulting to Ollama or DeepSeek the adapter ran that model
+    while every usage and audit row named Anthropic's. One resolution now
+    answers both questions, and the label is whatever adapter came back.
+    """
+    settings.models_file.parent.mkdir(parents=True, exist_ok=True)
+    save_user_models(
+        settings.models_file,
+        [
+            {
+                "name": "local-llama",
+                "provider": "openai-compat",
+                "endpoint": "http://127.0.0.1:11434/v1",
+                "model_id": "llama3.1:8b",
+            }
+        ],
+    )
+    save_model_prefs(settings.model_prefs_file, {"default": "local-llama"})
+
+    adapter, label = resolve_run_target(settings, None, fallback_model=MODEL)
+
+    assert adapter.model == "llama3.1:8b"
+    assert label == "llama3.1:8b", "the label followed the fallback, not the running model"
 
 @pytest.mark.anyio
 async def test_stream_chat_forwards_course_to_the_tool_belt(
@@ -317,7 +536,8 @@ async def test_stream_chat_forwards_course_to_the_tool_belt(
 
     monkeypatch.setattr("backend.agent.runtime.build_vault_tools", fake_build_vault_tools)
     monkeypatch.setattr(
-        "backend.agent.runtime.resolve_adapter", lambda *a, **k: _AbandonableAdapter()
+        "backend.agent.runtime.resolve_run_target",
+        lambda *a, **k: (_AbandonableAdapter(), "test-model"),
     )
 
     agent = ChatAgent(settings)
@@ -326,3 +546,152 @@ async def test_stream_chat_forwards_course_to_the_tool_belt(
         pass
 
     assert captured.get("course") == "CS201"
+
+
+def test_the_system_prompt_names_every_tool_the_belt_actually_has() -> None:
+    """A tool the prompt never mentions is one a weaker model will not reach
+    for. `list_notes` in particular exists to be the escalation step after a
+    thin search, which only works if the prompt says so."""
+    prompt = _load_system_prompt(Taxonomy())
+    names = {spec.name for spec in build_vault_tools(Settings(_vault_path=Path(".")), FakeIndex())}
+
+    for name in names:
+        assert f"`{name}(" in prompt or f"`{name}`" in prompt, f"{name} is undocumented"
+
+
+def test_the_system_prompt_names_the_configured_private_dir() -> None:
+    """I3 depends on it: a prompt naming the wrong folder tells the model the
+    protected zone is somewhere it isn't."""
+    prompt = _load_system_prompt(Taxonomy.from_env({"VAULT_PRIVATE_DIR": "Secrets"}))
+
+    assert "Secrets/" in prompt
+    assert "{{PRIVATE_DIR}}" not in prompt
+
+
+def test_the_system_prompt_carries_todays_date() -> None:
+    """Without it the model resolves "this week" against its training cutoff."""
+    prompt = _load_system_prompt(Taxonomy(), today=date(2026, 8, 18))
+
+    assert "2026-08-18" in prompt
+    assert "{{TODAY}}" not in prompt
+
+
+# --- tool summarizers --------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_search_vault_summary_carries_the_query_and_cited_paths_i6(
+    settings: Settings, monkeypatch
+) -> None:
+    """Invariant I6 (every citation traces to a tool result) becomes
+    machine-checkable here: the summary's paths are exactly what a chip would
+    show, parsed back out of the same JSON the model was handed."""
+    hits = [
+        {"meta": {"path": "50-Reference/algorithms.md"}, "text": "Dijkstra."},
+        {"meta": {"path": "50-Reference/graphs.md"}, "text": "BFS."},
+    ]
+    monkeypatch.setattr("backend.rag.retrieve.retrieve", lambda *a, **k: hits)
+
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "search_vault")
+    args = {"query": "graph search"}
+    result = await spec.handler(args)
+    summary = spec.summarize(args, result["content"][0]["text"])
+
+    assert summary.label == "search_vault"
+    assert summary.detail == "graph search"
+    assert summary.paths == ("50-Reference/algorithms.md", "50-Reference/graphs.md")
+    assert summary.ok is True
+
+
+@pytest.mark.anyio
+async def test_search_vault_summary_reports_an_empty_search_as_ok(
+    settings: Settings, monkeypatch
+) -> None:
+    """Finding nothing is a successful search, not a failed call."""
+    monkeypatch.setattr("backend.rag.retrieve.retrieve", lambda *a, **k: [])
+
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "search_vault")
+    args = {"query": "nonexistent topic"}
+    result = await spec.handler(args)
+    summary = spec.summarize(args, result["content"][0]["text"])
+
+    assert summary.ok is True
+    assert "no matches" in summary.detail
+    assert summary.paths == ()
+
+
+@pytest.mark.anyio
+async def test_read_note_summary_flags_an_error_result_as_not_ok(settings: Settings) -> None:
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "read_note")
+    args = {"path": "99-Private/secrets.md"}
+    result = await spec.handler(args)
+    summary = spec.summarize(args, result["content"][0]["text"])
+
+    assert summary.ok is False
+    assert summary.detail == "99-Private/secrets.md"
+    assert summary.paths == ("99-Private/secrets.md",)
+
+
+def test_search_vault_summary_handles_non_json_result_text_without_raising(
+    settings: Settings,
+) -> None:
+    """A handler can return a bare string; the summarizer must not raise."""
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "search_vault")
+
+    summary = spec.summarize({"query": "whatever"}, "not json at all")
+
+    assert summary.label == "search_vault"
+    assert summary.paths == ()
+    assert summary.ok is True
+
+
+def test_search_vault_summary_paths_are_capped_and_deduped(settings: Settings) -> None:
+    from backend.agent.runtime import MAX_SUMMARY_PATHS
+
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "search_vault")
+    result_text = json.dumps(
+        {
+            "results": [
+                {"path": "same.md"},
+                {"path": "same.md"},
+                *({"path": f"note-{i}.md"} for i in range(20)),
+                {"path": None},
+            ]
+        }
+    )
+
+    summary = spec.summarize({"query": "q"}, result_text)
+
+    assert len(summary.paths) == len(set(summary.paths)), "paths must be deduped"
+    assert len(summary.paths) <= MAX_SUMMARY_PATHS
+
+
+def test_list_tasks_summary_reports_a_count(settings: Settings) -> None:
+    tools = build_vault_tools(settings, FakeIndex())
+    spec = tool(tools, "list_tasks")
+    result_text = json.dumps({"overdue": [{"text": "a"}], "today": [{"text": "b"}], "week": []})
+
+    summary = spec.summarize({}, result_text)
+
+    assert summary.label == "list_tasks"
+    assert summary.detail == "2 tasks"
+
+
+def test_build_vault_tools_still_build_with_summarize_set(settings: Settings) -> None:
+    tools = build_vault_tools(settings, FakeIndex())
+    assert all(spec.summarize is not None for spec in tools)
+
+
+def test_the_system_prompt_no_longer_mandates_a_canned_refusal() -> None:
+    """The verbatim "That's not in your notes." string was rule 3 until the
+    retrieval floor made an empty result honest on its own. Pinning its absence
+    keeps a well-meaning edit from reintroducing a scripted answer."""
+    prompt = _load_system_prompt(Taxonomy())
+
+    assert "That's not in your notes." not in prompt
+    assert "Answer ONLY from tool results" not in prompt

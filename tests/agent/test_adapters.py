@@ -15,11 +15,16 @@ import pytest
 
 from backend.agent.adapters import (
     AgentError,
+    Message,
+    Notice,
     TextDelta,
+    ToolFinished,
     ToolSpec,
-    ToolUsed,
+    ToolStarted,
+    ToolSummary,
     UsageReported,
     json_schema,
+    require_user_turn,
     text_result,
 )
 from backend.agent.openai_compat import (
@@ -104,7 +109,7 @@ async def collect(adapter: OpenAICompatAdapter, tools: list[ToolSpec], max_turns
         event
         async for event in adapter.run(
             system_prompt="be helpful",
-            user_message="what did I write about Dijkstra?",
+            messages=[Message("user", "what did I write about Dijkstra?")],
             tools=tools,
             max_turns=max_turns,
         )
@@ -113,6 +118,21 @@ async def collect(adapter: OpenAICompatAdapter, tools: list[ToolSpec], max_turns
 
 def texts(events: list) -> str:
     return "".join(event.text for event in events if isinstance(event, TextDelta))
+
+
+# --- require_user_turn -------------------------------------------------------
+
+
+def test_require_user_turn_rejects_an_empty_list() -> None:
+    with pytest.raises(AgentError, match="no messages"):
+        require_user_turn([])
+
+
+def test_require_user_turn_rejects_a_history_ending_on_an_assistant_turn() -> None:
+    with pytest.raises(AgentError, match="assistant"):
+        require_user_turn(
+            [Message("user", "hi"), Message("assistant", "an answer with nothing to reply to")]
+        )
 
 
 # --- url handling -----------------------------------------------------------
@@ -174,7 +194,13 @@ async def test_single_tool_call_dispatches_then_answers() -> None:
 
     assert seen == [{"query": "dijkstra"}], "arguments reassembled across chunks"
     assert texts(events) == "You wrote about it in algorithms.md"
-    assert [e.name for e in events if isinstance(e, ToolUsed)] == ["search_vault"]
+    started = [e for e in events if isinstance(e, ToolStarted)]
+    finished = [e for e in events if isinstance(e, ToolFinished)]
+    assert [e.name for e in started] == ["search_vault"]
+    assert [e.name for e in finished] == ["search_vault"]
+    assert started[0].call_id == finished[0].call_id == "c1", "chip pairing needs a shared id"
+    assert started[0].args == {"query": "dijkstra"}
+    assert finished[0].summary == ToolSummary(label="search_vault", ok=True)
 
     # The second request must carry the assistant tool_calls turn and its result,
     # correlated by tool_call_id — this is what the SDK does internally.
@@ -209,7 +235,8 @@ async def test_parallel_tool_calls_accumulate_by_index_not_arrival_order() -> No
 
     assert search_seen == [{"query": "x"}]
     assert read_seen == [{"path": "n.md"}]
-    assert [e.name for e in events if isinstance(e, ToolUsed)] == ["search_vault", "read_note"]
+    assert [e.name for e in events if isinstance(e, ToolStarted)] == ["search_vault", "read_note"]
+    assert [e.name for e in events if isinstance(e, ToolFinished)] == ["search_vault", "read_note"]
     assert texts(events) == "both done"
 
 
@@ -244,19 +271,27 @@ async def test_max_turns_exhaustion_stops_the_loop() -> None:
 
 
 @pytest.mark.anyio
-async def test_malformed_tool_arguments_reach_the_handler_as_empty_dict() -> None:
+async def test_malformed_tool_arguments_come_back_with_the_shape_that_was_wanted() -> None:
+    """The handler used to be called with `{}` and raise `KeyError('query')`,
+    which reached the model as `error: 'query'` — naming neither the tool nor
+    what it should have sent, so the next attempt was another guess."""
+    sent: list[dict] = []
     adapter = adapter_for(
         [
             sse(tool_chunk(0, call_id="c1", name="search_vault", arguments="{not json")),
             sse(text_chunk("recovered")),
-        ]
+        ],
+        record=sent,
     )
     spec, seen = spy_tool()
 
     events = await collect(adapter, [spec])
 
-    assert seen == [{}], "the handler validates and replies; the turn is not aborted"
-    assert texts(events) == "recovered"
+    assert seen == [], "a call that did not parse never reaches the handler"
+    reply = next(m for m in sent[1]["messages"] if m.get("role") == "tool")
+    assert "not a JSON object" in reply["content"]
+    assert '{"query": "<string>"}' in reply["content"]
+    assert texts(events) == "recovered", "the turn is not aborted"
 
 
 @pytest.mark.anyio
@@ -300,6 +335,102 @@ async def test_handler_exception_becomes_tool_text_not_a_crash() -> None:
 
 
 @pytest.mark.anyio
+async def test_error_dispatch_produces_a_failed_summary() -> None:
+    """No summarizer means the fallback reads "error: ..." to set ok=False."""
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="c1", name="delete_everything", arguments="{}")),
+            sse(text_chunk("sorry")),
+        ]
+    )
+    spec, _ = spy_tool()
+
+    events = await collect(adapter, [spec])
+
+    finished = next(e for e in events if isinstance(e, ToolFinished))
+    assert finished.summary.ok is False
+
+
+@pytest.mark.anyio
+async def test_synthesized_call_id_reaches_both_start_and_finish() -> None:
+    """A provider that omits ids still lets a frontend pair the two events."""
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, name="search_vault", arguments="{}")),
+            sse(text_chunk("done")),
+        ]
+    )
+    spec, _ = spy_tool()
+
+    events = await collect(adapter, [spec])
+
+    started = next(e for e in events if isinstance(e, ToolStarted))
+    finished = next(e for e in events if isinstance(e, ToolFinished))
+    assert started.call_id == finished.call_id == "call_0"
+
+
+@pytest.mark.anyio
+async def test_tool_spec_summarize_shapes_the_finished_summary() -> None:
+    def summarize(args: dict, result_text: str) -> ToolSummary:
+        return ToolSummary(
+            label=f"searched for {args['query']}", detail=result_text, paths=("algorithms.md",)
+        )
+
+    async def handler(_args: dict) -> dict:
+        return text_result("found it")
+
+    spec = ToolSpec(
+        name="search_vault",
+        description="search the vault",
+        parameters=json_schema({"query": {"type": "string"}}),
+        handler=handler,
+        summarize=summarize,
+    )
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="c1", name="search_vault", arguments='{"query":"x"}')),
+            sse(text_chunk("done")),
+        ]
+    )
+
+    events = await collect(adapter, [spec])
+
+    finished = next(e for e in events if isinstance(e, ToolFinished))
+    assert finished.summary == ToolSummary(
+        label="searched for x", detail="found it", paths=("algorithms.md",)
+    )
+
+
+@pytest.mark.anyio
+async def test_summarize_that_raises_falls_back_without_breaking_the_run() -> None:
+    def summarize(_args: dict, _result_text: str) -> ToolSummary:
+        raise RuntimeError("summarizer bug")
+
+    async def handler(_args: dict) -> dict:
+        return text_result("found it")
+
+    spec = ToolSpec(
+        name="search_vault",
+        description="search the vault",
+        parameters=json_schema({}),
+        handler=handler,
+        summarize=summarize,
+    )
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="c1", name="search_vault", arguments="{}")),
+            sse(text_chunk("carried on")),
+        ]
+    )
+
+    events = await collect(adapter, [spec])
+
+    finished = next(e for e in events if isinstance(e, ToolFinished))
+    assert finished.summary == ToolSummary(label="search_vault")
+    assert texts(events) == "carried on"
+
+
+@pytest.mark.anyio
 async def test_usage_is_recorded_when_the_provider_reports_it() -> None:
     adapter = adapter_for([sse(text_chunk("hi"), usage_chunk(120, 30))])
 
@@ -329,6 +460,34 @@ async def test_system_prompt_is_sent_first() -> None:
     await collect(adapter, [])
 
     assert sent[0]["messages"][0] == {"role": "system", "content": "be helpful"}
+
+
+@pytest.mark.anyio
+async def test_system_message_precedes_a_multi_message_history() -> None:
+    sent: list[dict] = []
+    adapter = adapter_for([sse(text_chunk("ok"))], record=sent)
+
+    events = [
+        event
+        async for event in adapter.run(
+            system_prompt="be helpful",
+            messages=[
+                Message("user", "what did I write about Dijkstra?"),
+                Message("assistant", "You covered it in algorithms.md"),
+                Message("user", "and what about A*?"),
+            ],
+            tools=[],
+            max_turns=1,
+        )
+    ]
+
+    assert texts(events) == "ok"
+    assert sent[0]["messages"] == [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "what did I write about Dijkstra?"},
+        {"role": "assistant", "content": "You covered it in algorithms.md"},
+        {"role": "user", "content": "and what about A*?"},
+    ]
 
 
 # --- errors -----------------------------------------------------------------
@@ -375,6 +534,171 @@ async def test_api_key_rides_along_as_a_bearer_token() -> None:
     assert seen == ["Bearer secret-key"]
 
 
+@pytest.mark.anyio
+async def test_abandoning_the_stream_still_reports_what_was_counted() -> None:
+    """Closing the tab mid-answer must not lose the turn it happened in.
+
+    Usage is banked per turn, and the fold runs in `_stream_turn`'s `finally` —
+    but closing the outer generator leaves the inner one for the GC, so
+    `partial_usage` reads the in-flight turn itself rather than waiting.
+    """
+    adapter = adapter_for([sse(text_chunk("long "), usage_chunk(70, 5), text_chunk("answer"))])
+
+    stream = adapter.run(
+        system_prompt="", messages=[Message("user", "hi")], tools=[], max_turns=4
+    )
+    assert isinstance(await stream.__anext__(), TextDelta)
+    assert isinstance(await stream.__anext__(), TextDelta)  # past the usage chunk
+    await stream.aclose()
+
+    partial = adapter.partial_usage()
+    assert partial is not None
+    assert (partial.usage["input_tokens"], partial.usage["output_tokens"]) == (70, 5)
+
+
+# --- the turn limit ---------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_the_last_turn_is_spent_answering_not_calling_another_tool() -> None:
+    """Running out of turns used to end the reply mid-thought, silently.
+
+    The loop exits after dispatching the final turn's tool calls without ever
+    streaming a response to them, so the user saw a tool trace and then
+    nothing. The last turn now forbids tools, which turns a wasted call into an
+    answer built from whatever was already gathered.
+    """
+    spec, seen = spy_tool()
+    record: list[dict] = []
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="call_1", name="search_vault", arguments='{"query": "a"}')),
+            sse(text_chunk("here is what I found")),
+        ],
+        record=record,
+    )
+
+    events = await collect(adapter, [spec], max_turns=2)
+
+    assert [payload["tool_choice"] for payload in record] == ["auto", "none"]
+    assert len(seen) == 1
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "here is what I found"
+
+
+@pytest.mark.anyio
+async def test_hitting_the_turn_limit_says_so() -> None:
+    spec, _seen = spy_tool()
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="call_1", name="search_vault", arguments='{"query": "a"}')),
+            sse(text_chunk("partial")),
+        ]
+    )
+
+    events = await collect(adapter, [spec], max_turns=2)
+
+    notice = next(e for e in events if isinstance(e, Notice))
+    assert notice.kind == "turn_limit"
+    assert "2-step limit" in notice.detail
+
+
+@pytest.mark.anyio
+async def test_a_turn_that_ends_on_its_own_says_nothing() -> None:
+    """The notice must mean something, so it must not fire on every run."""
+    spec, _seen = spy_tool()
+    adapter = adapter_for([sse(text_chunk("answered straight away"))])
+
+    events = await collect(adapter, [spec], max_turns=8)
+
+    assert not [e for e in events if isinstance(e, Notice)]
+
+
+# --- usage on hosted endpoints ----------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_local_endpoint_is_not_asked_for_usage() -> None:
+    """Ollama and friends keep the minimal payload they have always had.
+
+    A local server is the one most likely to reject an unknown request field,
+    and its tokens are free anyway, so there is nothing to buy by asking.
+    """
+    record: list[dict] = []
+    adapter = adapter_for([sse(text_chunk("hi"))], record=record)
+
+    await collect(adapter, [])
+
+    assert "stream_options" not in record[0]
+
+
+@pytest.mark.anyio
+async def test_a_hosted_endpoint_asks_for_the_token_counts() -> None:
+    """DeepSeek and friends only report usage when asked, so every hosted turn
+    used to be recorded as zero tokens."""
+    record: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        record.append(json.loads(request.content))
+        return httpx.Response(200, content=sse(text_chunk("hi"), usage_chunk(90, 12)))
+
+    adapter = OpenAICompatAdapter(
+        model="deepseek-chat",
+        endpoint="https://api.deepseek.com/v1",
+        api_key="sk-test",
+        transport=httpx.MockTransport(handle),
+    )
+
+    events = await collect(adapter, [])
+
+    assert record[0]["stream_options"] == {"include_usage": True}
+    usage = next(e for e in events if isinstance(e, UsageReported))
+    assert (usage.usage["input_tokens"], usage.usage["output_tokens"]) == (90, 12)
+
+
+@pytest.mark.anyio
+async def test_a_server_that_rejects_stream_options_gets_the_turn_again_without_it() -> None:
+    """Guessing wrong about a hosted server must not cost the whole answer.
+
+    The status check runs before the body is read, so nothing has been streamed
+    when the 400 arrives and the turn can simply be re-sent. Every later turn
+    skips the field too, rather than paying the failed round trip again.
+    """
+    record: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        record.append(payload)
+        if "stream_options" in payload:
+            return httpx.Response(
+                400, json={"error": {"message": "unknown field: stream_options"}}
+            )
+        return httpx.Response(200, content=sse(text_chunk("recovered")))
+
+    adapter = OpenAICompatAdapter(
+        model="strict-model",
+        endpoint="https://strict.example.com/v1",
+        api_key="sk-test",
+        transport=httpx.MockTransport(handle),
+    )
+
+    events = await collect(adapter, [])
+
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "recovered"
+    assert [("stream_options" in payload) for payload in record] == [True, False]
+
+
+@pytest.mark.anyio
+async def test_usage_repeated_on_several_chunks_is_not_counted_twice() -> None:
+    """Usage arrives cumulative within one completion, so it is assigned there
+    and summed only across turns — the same split the Anthropic adapter makes."""
+    adapter = adapter_for([sse(text_chunk("hi"), usage_chunk(50, 5), usage_chunk(50, 9))])
+
+    events = await collect(adapter, [])
+
+    usage = next(e for e in events if isinstance(e, UsageReported))
+    assert (usage.usage["input_tokens"], usage.usage["output_tokens"]) == (50, 9)
+
+
 # --- model listing ----------------------------------------------------------
 
 
@@ -390,9 +714,11 @@ async def test_list_models_returns_sorted_ids() -> None:
     ]
 
 
-def test_parse_tool_arguments_tolerates_empty_and_non_object_json() -> None:
+def test_parse_tool_arguments_separates_absent_from_unparseable() -> None:
+    """A no-argument tool emitting "" is normal; text that is not a JSON object
+    is a real error, and flattening both to `{}` lost the difference."""
     assert parse_tool_arguments('{"a": 1}') == {"a": 1}
     assert parse_tool_arguments("") == {}
     assert parse_tool_arguments("   ") == {}
-    assert parse_tool_arguments("[1,2]") == {}
-    assert parse_tool_arguments("garbage") == {}
+    assert parse_tool_arguments("[1,2]") is None
+    assert parse_tool_arguments("garbage") is None

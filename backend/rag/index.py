@@ -19,6 +19,7 @@ from typing import Any
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.chunk import Chunk, chunk_blocks
 from backend.rag.extract import extract_blocks
+from backend.vault.links import LinkIndex, build_link_index
 from backend.vault.paths import is_indexable
 
 logger = logging.getLogger("argus.rag")
@@ -98,6 +99,12 @@ class VaultIndex:
         self._chunks_cache_key: tuple[int, int] | None = None
         self._bm25_cache: Any = None
         self._bm25_cache_key: tuple[int, int] | None = None
+        # link_index() cache: build_link_index() rglob()s the whole vault and
+        # parses every note's YAML frontmatter — paid by retrieve() on every
+        # call with expand_links=True unless memoised the same way as the
+        # chunk/BM25 caches above.
+        self._link_cache: LinkIndex | None = None
+        self._link_cache_key: tuple[int, int] | None = None
 
     def _invalidate_cache(self) -> None:
         self._version += 1
@@ -105,6 +112,8 @@ class VaultIndex:
         self._chunks_cache_key = None
         self._bm25_cache = None
         self._bm25_cache_key = None
+        self._link_cache = None
+        self._link_cache_key = None
 
     def _client(self) -> Any:
         import chromadb
@@ -305,6 +314,25 @@ class VaultIndex:
         self._bm25_cache = bm25
         self._bm25_cache_key = key
         return bm25
+
+    def link_index(self, vault_path: Path, *, taxonomy: Taxonomy | None = None) -> LinkIndex:
+        """Cached :class:`LinkIndex` over the vault; same pattern as :meth:`bm25`.
+
+        ``build_link_index`` walks the whole vault with ``rglob("*.md")`` and
+        parses every note's YAML frontmatter — retrieve() used to pay that
+        cost on every single call with ``expand_links=True``, wikilinks or
+        not. Cache key is ``(_version, collection.count())``, same as
+        ``all_chunks``/``bm25``: any mutation this class knows about
+        (upsert/delete/recreate) forces a fresh walk.
+        """
+        count = self.collection.count()
+        key = (self._version, count)
+        if self._link_cache is not None and self._link_cache_key == key:
+            return self._link_cache
+        link_idx = build_link_index(vault_path, taxonomy=taxonomy or self._taxonomy)
+        self._link_cache = link_idx
+        self._link_cache_key = key
+        return link_idx
 
 
 def index_chunks(index: VaultIndex, rel_path: str, chunks: list[Chunk]) -> None:

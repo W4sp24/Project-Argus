@@ -17,12 +17,14 @@ would be a mistake, not a convenience.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
+from collections.abc import Callable
 from typing import Any
 
-from backend.agent.adapters import ToolSpec, json_schema, text_result
+from backend.agent.adapters import ToolSpec, ToolSummary, json_schema, text_result
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.automations import store
@@ -123,15 +125,57 @@ def build_automation_tools(settings: Settings) -> list[ToolSpec]:
             )
         )
 
+        tool_name = tool_name_for(str(row.get("name") or ""), workflow_id)
         specs.append(
             ToolSpec(
-                name=tool_name_for(str(row.get("name") or ""), workflow_id),
+                name=tool_name,
                 description=description,
                 parameters=_parameters(parsed),
                 handler=_make_handler(settings, workflow_id, str(row.get("instance_id") or "")),
+                summarize=_make_summarize(tool_name, str(row.get("name") or workflow_id)),
             )
         )
     return specs
+
+
+def _parse_json(result_text: str) -> Any | None:
+    """Best-effort JSON parse of a flattened tool result, or None.
+
+    The run handler's own failure strings ("The automation could not be run:
+    ...", "The automation did not run: ...") are plain text, not the
+    ``{"status": ...}`` payload a successful run returns — a summarizer must
+    tolerate that instead of raising, since raising just degrades to the
+    generic ``ToolSummary(label=name)`` fallback and loses the workflow name.
+    """
+    try:
+        return json.loads(result_text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _make_summarize(
+    tool_name: str, workflow_name: str
+) -> Callable[[dict[str, Any], str], ToolSummary]:
+    """Bind a summarizer to one workflow's display name.
+
+    The run result (``RunResponse``, see the router) carries an execution id,
+    not the workflow's own name, so the name a chip should show is closed
+    over here the same way the handler closes over ``workflow_id``.
+    """
+
+    def summarize(_args: dict[str, Any], result_text: str) -> ToolSummary:
+        payload = _parse_json(result_text)
+        if not isinstance(payload, dict):
+            # Not RunResponse JSON at all — one of the handler's own plain-text
+            # failure strings, which carry no "error:" prefix for the generic
+            # fallback to key off.
+            return ToolSummary(label=tool_name, detail=workflow_name, ok=False)
+        status = str(payload.get("status") or "")
+        ok = status not in ("failed", "timeout")
+        detail = f"{workflow_name} ({status})" if status else workflow_name
+        return ToolSummary(label=tool_name, detail=detail, paths=(), ok=ok)
+
+    return summarize
 
 
 def _make_handler(settings: Settings, workflow_id: str, instance_id: str):

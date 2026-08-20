@@ -29,8 +29,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
-from typing import Any, Protocol
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal, Protocol
 
 # Providers understood by the registry. "anthropic" is the historical value and
 # still means "the Claude Code CLI via claude-agent-sdk" (subscription auth,
@@ -39,12 +39,23 @@ from typing import Any, Protocol
 PROVIDER_CLAUDE_CLI = "anthropic"
 PROVIDER_ANTHROPIC_API = "anthropic-api"
 PROVIDER_OPENAI_COMPAT = "openai-compat"
-KNOWN_PROVIDERS = (PROVIDER_CLAUDE_CLI, PROVIDER_ANTHROPIC_API, PROVIDER_OPENAI_COMPAT)
+# Gemini gets its own provider rather than riding the OpenAI-compatible shim
+# Google also publishes: that shim's streamed tool-call fragments do not
+# reliably carry an `index`, which is the only key `_ToolCallBuffer` can join
+# on, so two calls in one turn would silently become one. See
+# backend/agent/gemini_api.py.
+PROVIDER_GEMINI = "gemini"
+KNOWN_PROVIDERS = (
+    PROVIDER_CLAUDE_CLI,
+    PROVIDER_ANTHROPIC_API,
+    PROVIDER_OPENAI_COMPAT,
+    PROVIDER_GEMINI,
+)
 
 # Providers whose traffic leaves the machine. Local endpoints (Ollama and
 # friends) are the whole point of the "notes never leave your machine" promise,
 # so the UI badges this distinction — see `is_local_endpoint`.
-HOSTED_PROVIDERS = (PROVIDER_CLAUDE_CLI, PROVIDER_ANTHROPIC_API)
+HOSTED_PROVIDERS = (PROVIDER_CLAUDE_CLI, PROVIDER_ANTHROPIC_API, PROVIDER_GEMINI)
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
 
@@ -70,12 +81,20 @@ class ToolSpec:
     ``handler`` returns an MCP-shaped result (``{"content": [{"type": "text",
     "text": ...}]}``); :func:`flatten_tool_result` renders that down to the
     plain string the non-MCP APIs want.
+
+    ``summarize`` is optional and defaulted so every existing construction
+    site keeps working untouched. Its signature is ``(args, result_text) ->
+    ToolSummary``, where ``result_text`` is :func:`flatten_tool_result`'s
+    output rather than the handler's raw MCP-shaped return — that is what lets
+    one summarizer work unchanged across the SDK adapter and both HTTP
+    adapters, which otherwise disagree about tool-result shape.
     """
 
     name: str
     description: str
     parameters: dict[str, Any]
     handler: Callable[[dict[str, Any]], Awaitable[Any]]
+    summarize: Callable[[dict[str, Any], str], ToolSummary] | None = None
 
 
 def text_result(payload: Any) -> dict[str, Any]:
@@ -115,6 +134,63 @@ def json_schema(
     }
 
 
+def describe_arguments(spec: ToolSpec | None) -> str:
+    """One example argument object for a tool, rendered from its schema.
+
+    Feeds the error a model reads when its own arguments would not parse. The
+    alternative — and what used to happen — is that the handler raises
+    ``KeyError('query')`` and the model is handed the string ``error: 'query'``,
+    which names neither the tool nor the shape it should have sent, so the next
+    attempt is another guess.
+    """
+    if spec is None:
+        return "{}"
+    properties = spec.parameters.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return "{}"
+    required = spec.parameters.get("required")
+    names = [name for name in properties if name in required] if required else list(properties)
+    return json.dumps(
+        {
+            name: f"<{(properties.get(name) or {}).get('type', 'value')}>"
+            for name in (names or list(properties))
+        }
+    )
+
+
+# --- conversation -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Message:
+    """One turn of conversation, provider-agnostic.
+
+    This is the wire shape every adapter now takes instead of a bare string —
+    see :func:`require_user_turn` for the contract on the sequence as a whole.
+    """
+
+    role: Literal["user", "assistant"]
+    text: str
+
+
+def require_user_turn(messages: Sequence[Message]) -> Sequence[Message]:
+    """Validate that ``messages`` ends on a user turn the model can answer.
+
+    A run whose last message is not the user's has nothing to respond to —
+    catching that here, with a message that says what was wrong, is far more
+    legible than letting it reach a provider as a mid-stream 400. Every
+    adapter calls this first, before it spends any tokens building a request.
+    """
+    if not messages:
+        raise AgentError("no messages to run — at least one user message is required")
+    if messages[-1].role != "user":
+        raise AgentError(
+            f"the last message must be from the user, not {messages[-1].role!r} — "
+            "a run can only answer a question that was actually asked"
+        )
+    return messages
+
+
 # --- events -----------------------------------------------------------------
 
 
@@ -126,10 +202,63 @@ class TextDelta:
 
 
 @dataclass(frozen=True)
-class ToolUsed:
-    """A tool the model actually invoked. Informational — handlers already ran."""
+class ToolSummary:
+    """What a tool did, in the shape a UI chip needs.
 
+    ``ok`` lives here rather than on :class:`ToolFinished` so there is exactly
+    one source of truth for "did this work" — a caller checking the event
+    would otherwise have to reconcile two possibly-disagreeing booleans.
+    """
+
+    label: str
+    detail: str = ""
+    paths: tuple[str, ...] = ()
+    ok: bool = True
+
+
+@dataclass(frozen=True)
+class ToolStarted:
+    """A tool call the model just made, before its handler has run.
+
+    ``call_id`` is the provider's id for this call (or, for OpenAI-compatible
+    providers that omit one, the synthesized ``call_{index}``) — it is what
+    lets a UI pair this event with the matching :class:`ToolFinished`.
+    """
+
+    call_id: str
     name: str
+    args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolFinished:
+    """The handler for a started tool call has returned (or failed).
+
+    ``summary`` is never None — adapters that have no :attr:`ToolSpec.summarize`
+    (or whose summarizer blew up) fall back to ``ToolSummary(label=name)`` via
+    :func:`summarize_tool_result`, so a UI never has to special-case a missing
+    summary.
+    """
+
+    call_id: str
+    name: str
+    summary: ToolSummary
+
+
+@dataclass(frozen=True)
+class Notice:
+    """Something the user should know about the run itself, not its answer.
+
+    Today there is exactly one: the agent used every tool turn it was allowed.
+    That case was completely silent before — the loop simply fell out, the last
+    tool result was never read by anything, and the reply stopped mid-thought
+    with no explanation anywhere. A model that searches badly and keeps
+    retrying looks, from the outside, exactly like a model that cannot search
+    at all.
+    """
+
+    kind: Literal["turn_limit"]
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -157,7 +286,31 @@ class UsageReported:
         }
 
 
-AgentEvent = TextDelta | ToolUsed | UsageReported
+AgentEvent = TextDelta | ToolStarted | ToolFinished | Notice | UsageReported
+
+
+def summarize_tool_result(
+    spec: ToolSpec | None, name: str, args: dict[str, Any], result_text: str
+) -> ToolSummary:
+    """The one choke point every adapter calls to build a :class:`ToolFinished`.
+
+    A broken summarizer must never break a chat turn — it runs after the tool
+    already did its work and the model is waiting on the result — so any
+    exception here is swallowed, not logged-and-reraised, and degrades to the
+    same fallback as having no summarizer at all: ``ToolSummary(label=name)``.
+
+    That fallback also carries ``ok``. The HTTP adapters' ``_dispatch`` never
+    raises — it turns a handler exception or an unknown tool into an
+    ``"error: ..."`` string so the model can recover — so without a summarizer
+    to say otherwise, a result text starting with ``"error:"`` is the only
+    signal available that the call failed.
+    """
+    if spec is not None and spec.summarize is not None:
+        try:
+            return spec.summarize(args, result_text)
+        except Exception:  # noqa: BLE001 - degrade to the fallback, never break the turn
+            pass
+    return ToolSummary(label=name, ok=not result_text.startswith("error:"))
 
 
 # --- adapter interface ------------------------------------------------------
@@ -179,7 +332,7 @@ class AgentAdapter(Protocol):
         self,
         *,
         system_prompt: str,
-        user_message: str,
+        messages: Sequence[Message],
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
@@ -220,23 +373,43 @@ class ClaudeSDKAdapter:
             built.append(sdk_tool(spec.name, spec.description, spec.parameters)(spec.handler))
         return built
 
+    def _local_name(self, raw: str) -> str:
+        """Strip the ``mcp__{namespace}__`` prefix the SDK puts on tool names.
+
+        Without this, ``ToolStarted``/``ToolFinished`` would carry a name that
+        matches nothing in ``by_name`` on the frontend and nothing in the tool
+        belt's own ``ToolSpec.name`` — the whole point of routing tool events
+        through the same ``AgentEvent`` union as the HTTP adapters is that a
+        consumer never has to know which adapter produced one.
+        """
+        prefix = f"mcp__{self.tool_namespace}__"
+        return raw[len(prefix) :] if raw.startswith(prefix) else raw
+
     async def run(
         self,
         *,
         system_prompt: str,
-        user_message: str,
+        messages: Sequence[Message],
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
+        require_user_turn(messages)
+        # The SDK takes one prompt string, not a message list, so history is
+        # serialized once here and both paths below share a plain prompt —
+        # neither needs to know Message exists. serialize_history's one-message
+        # branch is what keeps this byte-identical to the pre-history prompt.
+        from backend.agent.history import serialize_history
+
+        prompt = serialize_history(messages)
         if not tools:
-            async for event in self._run_toolless(system_prompt, user_message, max_turns):
+            async for event in self._run_toolless(system_prompt, prompt, max_turns):
                 yield event
             return
-        async for event in self._run_with_tools(system_prompt, user_message, tools, max_turns):
+        async for event in self._run_with_tools(system_prompt, prompt, tools, max_turns):
             yield event
 
     async def _run_toolless(
-        self, system_prompt: str, user_message: str, max_turns: int
+        self, system_prompt: str, prompt: str, max_turns: int
     ) -> AsyncIterator[AgentEvent]:
         """The one-shot `query()` path generate.py has always used."""
         from claude_agent_sdk import (
@@ -253,7 +426,7 @@ class ClaudeSDKAdapter:
             disallowed_tools=list(self.disallowed_tools),
             **({"system_prompt": system_prompt} if system_prompt else {}),
         )
-        async for message in query(prompt=user_message, options=options):
+        async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock) and block.text:
@@ -264,7 +437,7 @@ class ClaudeSDKAdapter:
     async def _run_with_tools(
         self,
         system_prompt: str,
-        user_message: str,
+        prompt: str,
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
@@ -275,6 +448,9 @@ class ClaudeSDKAdapter:
             ResultMessage,
             StreamEvent,
             TextBlock,
+            ToolResultBlock,
+            ToolUseBlock,
+            UserMessage,
             create_sdk_mcp_server,
         )
 
@@ -288,26 +464,72 @@ class ClaudeSDKAdapter:
             include_partial_messages=True,
             max_turns=max_turns,
         )
+        by_name = {spec.name: spec for spec in tools}
+        # ToolResultBlock only carries tool_use_id, so the name and args a
+        # ToolFinished needs are stashed here when its ToolStarted goes out.
+        pending: dict[str, tuple[str, dict[str, Any]]] = {}
 
         async with ClaudeSDKClient(options=options) as client:
-            await client.query(user_message)
+            await client.query(prompt)
             streamed_any = False
             async for event in client.receive_response():
                 if isinstance(event, StreamEvent):
+                    # Tool use also appears here under include_partial_messages,
+                    # but only the assembled AssistantMessage is read for it
+                    # below — reading both would double-emit ToolStarted.
                     raw = event.event
                     if raw.get("type") == "content_block_delta":
                         delta = raw.get("delta", {})
                         if delta.get("type") == "text_delta" and delta.get("text"):
                             streamed_any = True
                             yield TextDelta(delta["text"])
-                elif isinstance(event, AssistantMessage) and not streamed_any:
-                    # Partial-message streaming is best-effort; fall back to the
-                    # assembled blocks so a run never yields nothing.
+                elif isinstance(event, AssistantMessage):
                     for block in event.content:
-                        if isinstance(block, TextBlock) and block.text:
+                        if isinstance(block, TextBlock) and block.text and not streamed_any:
+                            # Partial-message streaming is best-effort; fall back
+                            # to the assembled blocks so a run never yields nothing.
                             yield TextDelta(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            local_name = self._local_name(block.name)
+                            args = block.input or {}
+                            pending[block.id] = (local_name, args)
+                            yield ToolStarted(call_id=block.id, name=local_name, args=args)
+                elif isinstance(event, UserMessage):
+                    content = event.content
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, ToolResultBlock):
+                                local_name, args = pending.pop(
+                                    block.tool_use_id, (block.tool_use_id, {})
+                                )
+                                result_text = _flatten_sdk_tool_result(block.content)
+                                summary = summarize_tool_result(
+                                    by_name.get(local_name), local_name, args, result_text
+                                )
+                                if block.is_error:
+                                    summary = replace(summary, ok=False)
+                                yield ToolFinished(
+                                    call_id=block.tool_use_id, name=local_name, summary=summary
+                                )
                 elif isinstance(event, ResultMessage):
                     yield _usage_from_sdk(event)
+
+
+def _flatten_sdk_tool_result(content: str | list[dict[str, Any]] | None) -> str:
+    """Normalize a ``ToolResultBlock.content`` into what `flatten_tool_result` wants.
+
+    The SDK's result shape is *not* the ``{"content": [...]}`` MCP envelope
+    handlers return on the HTTP adapters — it is the block's content directly,
+    already unwrapped by the SDK. A string passes straight through; a list of
+    content-part dicts is re-wrapped in that envelope so the same
+    `flatten_tool_result` still applies; ``None`` (a tool that returned
+    nothing) becomes ``""``.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return flatten_tool_result({"content": content})
 
 
 def _usage_from_sdk(message: Any) -> UsageReported:
@@ -403,6 +625,20 @@ def adapter_for_entry(
             endpoint=str(entry.get("endpoint") or DEFAULT_ENDPOINT),
         )
 
+    if provider == PROVIDER_GEMINI:
+        from backend.agent.gemini_api import DEFAULT_ENDPOINT as GEMINI_ENDPOINT
+        from backend.agent.gemini_api import GeminiAdapter
+
+        if not resolved_key:
+            raise AgentError(
+                f"no API key stored for {name!r} — re-add it under /system to store one"
+            )
+        return GeminiAdapter(
+            model=model_id,
+            api_key=resolved_key,
+            endpoint=str(entry.get("endpoint") or GEMINI_ENDPOINT),
+        )
+
     if provider == PROVIDER_OPENAI_COMPAT:
         from backend.agent.openai_compat import OpenAICompatAdapter
 
@@ -474,6 +710,42 @@ def resolve_adapter(
     )
 
 
+def resolve_run_target(
+    settings: Any,
+    model: str | None = None,
+    *,
+    tool_namespace: str = "argus",
+    disallowed_tools: Sequence[str] = ("Bash", "Write", "Edit"),
+    fallback_model: str | None = None,
+) -> tuple[AgentAdapter, str]:
+    """The adapter that will run, paired with the model id its rows belong to.
+
+    Callers need both, and deriving them separately is how they drift. Chat and
+    the planner each grew a private ``_resolve_model`` that answered the
+    hardcoded Claude Code model whenever ``model`` was falsy, while
+    :func:`resolve_adapter` — given the same falsy ``model`` — resolved through
+    ``settings.default_model``. On a machine whose default is Ollama or
+    DeepSeek the adapter ran that model and every usage and audit row was
+    stamped ``claude-opus-4-8``, so the usage dashboard attributed a local
+    model's tokens to Anthropic and the audit trail named the wrong reader.
+
+    The label is the adapter's own ``model`` attribute, which the
+    :class:`AgentAdapter` protocol requires. That is the provider-side id for
+    the HTTP adapters (a ``groq-llama`` entry serving
+    ``llama-3.3-70b-versatile`` labels rows with the latter) and the registry
+    name on the Claude Code path, which is what those rows have always said.
+    One resolution, one answer, no second opinion to disagree with.
+    """
+    adapter = resolve_adapter(
+        settings,
+        model,
+        tool_namespace=tool_namespace,
+        disallowed_tools=disallowed_tools,
+        fallback_model=fallback_model,
+    )
+    return adapter, str(getattr(adapter, "model", "") or fallback_model or "")
+
+
 # --- capability probe -------------------------------------------------------
 
 PROBE_TOOL_NAME = "argus_probe"
@@ -522,7 +794,10 @@ async def probe_tool_calling(adapter: AgentAdapter) -> ProbeResult:
     started = time.monotonic()
     try:
         async for _event in adapter.run(
-            system_prompt=PROBE_SYSTEM, user_message=PROBE_PROMPT, tools=[spec], max_turns=2
+            system_prompt=PROBE_SYSTEM,
+            messages=[Message("user", PROBE_PROMPT)],
+            tools=[spec],
+            max_turns=2,
         ):
             pass
     except Exception as exc:  # noqa: BLE001 - every failure becomes a readable verdict

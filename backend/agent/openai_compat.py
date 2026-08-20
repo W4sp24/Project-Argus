@@ -33,14 +33,25 @@ from backend.agent.adapters import (
     PROVIDER_OPENAI_COMPAT,
     AgentError,
     AgentEvent,
+    Message,
+    Notice,
     TextDelta,
+    ToolFinished,
     ToolSpec,
-    ToolUsed,
+    ToolStarted,
     UsageReported,
+    describe_arguments,
     flatten_tool_result,
+    is_local_endpoint,
+    require_user_turn,
+    summarize_tool_result,
 )
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
+
+
+class _StreamOptionsError(AgentError):
+    """The server refused ``stream_options``; retry the same turn without it."""
 
 
 def normalize_base_url(endpoint: str) -> str:
@@ -127,12 +138,16 @@ class _ToolCallBuffer:
         return any(call.get("name") for call in self._calls.values())
 
 
-def parse_tool_arguments(raw: str) -> dict[str, Any]:
-    """Parse a tool call's argument JSON, tolerating the empty-string case.
+def parse_tool_arguments(raw: str) -> dict[str, Any] | None:
+    """Parse a tool call's argument JSON. ``None`` means it would not parse.
 
-    Small models sometimes emit ``""`` or malformed JSON for a no-argument
-    tool. An empty dict lets the handler apply its own validation and return a
-    readable error the model can recover from, which beats aborting the turn.
+    Small models emit ``""`` for a no-argument tool, and that is not an error —
+    it becomes an empty dict, and the handler applies its own validation. Text
+    that is present but not a JSON object *is* an error, and the two used to be
+    flattened together into ``{}``: the handler then raised ``KeyError`` on a
+    missing key and the model read ``error: 'query'``, which says nothing about
+    what went wrong. Telling them apart is what lets the dispatcher answer with
+    the shape the tool actually wanted.
     """
     text = (raw or "").strip()
     if not text:
@@ -140,8 +155,8 @@ def parse_tool_arguments(raw: str) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 @dataclass
@@ -157,14 +172,43 @@ class OpenAICompatAdapter:
     # See AnthropicAPIAdapter.partial_usage: a consumer that walks away
     # mid-stream never sees the final UsageReported, but the tokens were spent.
     _live_usage: dict[str, int] | None = field(default=None, init=False, repr=False)
+    _live_turn: dict[str, int] | None = field(default=None, init=False, repr=False)
+    # Whether to ask for token counts via `stream_options`. See __post_init__.
+    _ask_for_usage: bool = field(default=False, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Decide once whether this endpoint gets asked for token counts.
+
+        Several OpenAI-compatible servers reject unknown request fields
+        outright, which is why this payload stayed minimal for a long time. The
+        cost of that caution was that hosted providers which only report usage
+        when asked — DeepSeek among them — recorded **zero tokens** for every
+        turn, so the usage dashboard quietly under-reported the models that
+        actually cost money.
+
+        Local endpoints keep the old payload byte-for-byte: Ollama and whatever
+        else someone points at 127.0.0.1 are the servers most likely to be
+        strict, and their tokens are free anyway. Anything off-machine is a
+        commercial API whose whole business is counting tokens, so it is asked.
+        A server that still says no is handled in ``run``.
+        """
+        self._ask_for_usage = not is_local_endpoint(self.endpoint)
 
     def partial_usage(self) -> UsageReported | None:
-        """Whatever has been counted so far, for a stream that ended early."""
-        if not self._live_usage:
+        """Whatever has been counted so far, for a stream that ended early.
+
+        Reads the banked turns *and* the turn still in flight. `_stream_turn`
+        folds its own counters in a `finally`, but when the outer generator is
+        closed the inner one is only finalized whenever the GC gets to it — so
+        relying on that alone loses exactly the turn the user walked away from.
+        Same reasoning, same fix, as AnthropicAPIAdapter.partial_usage.
+        """
+        if self._live_usage is None:
             return None
+        live = self._live_turn or {}
         return UsageReported(
-            input_tokens=self._live_usage["input_tokens"],
-            output_tokens=self._live_usage["output_tokens"],
+            input_tokens=self._live_usage["input_tokens"] + live.get("input_tokens", 0),
+            output_tokens=self._live_usage["output_tokens"] + live.get("output_tokens", 0),
         )
 
     def _headers(self) -> dict[str, str]:
@@ -182,43 +226,70 @@ class OpenAICompatAdapter:
         self,
         *,
         system_prompt: str,
-        user_message: str,
+        messages: Sequence[Message],
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
-        messages: list[dict[str, Any]] = []
+        require_user_turn(messages)
+        conversation: list[dict[str, Any]] = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_message})
+            conversation.append({"role": "system", "content": system_prompt})
+        conversation.extend({"role": m.role, "content": m.text} for m in messages)
 
         by_name = {spec.name: spec for spec in tools}
         totals = {"input_tokens": 0, "output_tokens": 0}
         self._live_usage = totals
         url = chat_completions_url(self.endpoint)
 
+        total_turns = max(1, max_turns)
+        hit_limit = False
+
         async with self._client() as client:
-            for _turn in range(max(1, max_turns)):
+            for turn in range(total_turns):
+                # Reaching the last turn means every earlier one was spent on
+                # tool calls, so the model is out of room to look anything else
+                # up. Left on "auto" it would spend this turn on another call
+                # whose result the loop exits before reading — the user gets a
+                # tool trace and then nothing. Forcing text spends the last turn
+                # answering from what was already gathered.
+                final = turn == total_turns - 1
+                hit_limit = hit_limit or (final and turn > 0 and bool(tools))
                 payload: dict[str, Any] = {
                     "model": self.model,
-                    "messages": messages,
+                    "messages": conversation,
                     "stream": True,
                 }
                 if tools:
                     payload["tools"] = to_openai_tools(tools)
-                    payload["tool_choice"] = "auto"
+                    payload["tool_choice"] = "none" if final else "auto"
+                if self._ask_for_usage:
+                    payload["stream_options"] = {"include_usage": True}
 
                 text_parts: list[str] = []
                 buffer = _ToolCallBuffer()
-                async for event in self._stream_turn(
-                    client, url, payload, text_parts, buffer, totals
-                ):
-                    yield event
+                try:
+                    async for event in self._stream_turn(
+                        client, url, payload, text_parts, buffer, totals
+                    ):
+                        yield event
+                except _StreamOptionsError:
+                    # A strict server we guessed wrong about. Nothing has been
+                    # read yet (the status check precedes the body), so the
+                    # turn can simply be re-sent without the field — and every
+                    # later turn skips it too rather than paying the round trip
+                    # again.
+                    self._ask_for_usage = False
+                    payload.pop("stream_options", None)
+                    async for event in self._stream_turn(
+                        client, url, payload, text_parts, buffer, totals
+                    ):
+                        yield event
 
                 calls = buffer.finish()
                 if not calls:
                     break
 
-                messages.append(
+                conversation.append(
                     {
                         "role": "assistant",
                         "content": "".join(text_parts) or None,
@@ -237,16 +308,33 @@ class OpenAICompatAdapter:
                 )
 
                 for call in calls:
-                    yield ToolUsed(call["name"])
-                    messages.append(
+                    args = parse_tool_arguments(call["arguments"]) or {}
+                    yield ToolStarted(call_id=call["id"], name=call["name"], args=args)
+                    result_text = await _dispatch(by_name, call)
+                    yield ToolFinished(
+                        call_id=call["id"],
+                        name=call["name"],
+                        summary=summarize_tool_result(
+                            by_name.get(call["name"]), call["name"], args, result_text
+                        ),
+                    )
+                    conversation.append(
                         {
                             "role": "tool",
                             "tool_call_id": call["id"],
                             "name": call["name"],
-                            "content": await _dispatch(by_name, call),
+                            "content": result_text,
                         }
                     )
 
+        if hit_limit:
+            yield Notice(
+                kind="turn_limit",
+                detail=(
+                    f"reached the {total_turns}-step limit for this turn — "
+                    "the answer may be incomplete"
+                ),
+            )
         yield UsageReported(
             input_tokens=totals["input_tokens"], output_tokens=totals["output_tokens"]
         )
@@ -261,32 +349,47 @@ class OpenAICompatAdapter:
         totals: dict[str, int],
     ) -> AsyncIterator[AgentEvent]:
         """Stream one completion, filling ``text_parts``/``buffer``/``totals``."""
-        async with client.stream("POST", url, json=payload) as response:
-            if response.status_code >= 400:
-                raise AgentError(await _error_detail(response, self.model))
-            async for line in response.aiter_lines():
-                chunk = _sse_payload(line)
-                if chunk is None:
-                    continue
+        # This completion's own counters, folded into ``totals`` when it ends.
+        # Usage arrives cumulative within one completion, so it is assigned
+        # here and summed only across turns — the same split
+        # AnthropicAPIAdapter makes, and the reason its accounting has never
+        # multiplied on a server that repeats the totals per chunk.
+        turn_usage = {"input_tokens": 0, "output_tokens": 0}
+        self._live_turn = turn_usage
+        try:
+            async with client.stream("POST", url, json=payload) as response:
+                if response.status_code >= 400:
+                    detail = await _error_detail(response, self.model)
+                    if response.status_code == 400 and "stream_options" in detail:
+                        raise _StreamOptionsError(detail)
+                    raise AgentError(detail)
+                async for line in response.aiter_lines():
+                    chunk = _sse_payload(line)
+                    if chunk is None:
+                        continue
 
-                # Usage is read opportunistically rather than requested via
-                # `stream_options`: several OpenAI-compatible servers reject
-                # unknown request fields outright, and token logging is
-                # best-effort by design (see backend/usage.py) while broad
-                # provider compatibility is not.
-                usage = chunk.get("usage")
-                if isinstance(usage, dict):
-                    totals["input_tokens"] += int(usage.get("prompt_tokens") or 0)
-                    totals["output_tokens"] += int(usage.get("completion_tokens") or 0)
+                    # Read from whatever chunk carries it: asked-for or not, a
+                    # server may volunteer usage, and token logging is
+                    # best-effort by design (see backend/usage.py).
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        turn_usage["input_tokens"] = int(usage.get("prompt_tokens") or 0)
+                        turn_usage["output_tokens"] = int(usage.get("completion_tokens") or 0)
 
-                for choice in chunk.get("choices") or []:
-                    delta = choice.get("delta") or {}
-                    content = delta.get("content")
-                    if content:
-                        text_parts.append(str(content))
-                        yield TextDelta(str(content))
-                    for fragment in delta.get("tool_calls") or []:
-                        buffer.add(fragment)
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        content = delta.get("content")
+                        if content:
+                            text_parts.append(str(content))
+                            yield TextDelta(str(content))
+                        for fragment in delta.get("tool_calls") or []:
+                            buffer.add(fragment)
+        finally:
+            # Even a cancelled or failed turn already cost the user tokens, so
+            # bank whatever the server reported before we stopped reading.
+            for key in totals:
+                totals[key] += turn_usage[key]
+                turn_usage[key] = 0
 
 
 def _sse_payload(line: str) -> dict[str, Any] | None:
@@ -313,9 +416,16 @@ async def _dispatch(by_name: dict[str, ToolSpec], call: dict[str, str]) -> str:
     """
     spec = by_name.get(call["name"])
     if spec is None:
-        return f"error: unknown tool {call['name']!r}"
+        known = ", ".join(sorted(by_name)) or "none"
+        return f"error: unknown tool {call['name']!r} — available tools are {known}"
+    args = parse_tool_arguments(call["arguments"])
+    if args is None:
+        return (
+            f"error: the arguments for {call['name']} were not a JSON object — "
+            f"send something like {describe_arguments(spec)}"
+        )
     try:
-        result = await spec.handler(parse_tool_arguments(call["arguments"]))
+        result = await spec.handler(args)
     except Exception as exc:  # noqa: BLE001 - surfaced to the model, not swallowed
         return f"error: {exc}"
     return flatten_tool_result(result)

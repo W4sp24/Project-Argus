@@ -1,19 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import useSWR from "swr";
+import { useState } from "react";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
+import ChatPanel from "@/components/chat/ChatPanel";
 import {
-  fetcher,
   generateFlashcardDeck,
   mutateJSON,
   useCourseSources,
   useFlashcardDecks,
   useStudyExams,
-  wsBase,
 } from "@/lib/api";
-import { renderWithCitations } from "@/lib/citations";
+import { ChatProvider } from "@/lib/chat";
 import { selectedModel, useSelectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
@@ -23,164 +21,39 @@ const SUGGESTIONS = [
   "Explain the hardest concept so far",
 ];
 
-interface ChatMessage {
-  role: "user" | "assistant";
-  text: string;
-  pending?: boolean;
-}
-
 /**
- * Course Hub center pane — real RAG chat scoped to one course (§4 Course
- * Hub). Mirrors `lib/chat.tsx`'s `ChatProvider` (one `/ws/chat` socket per
- * message, same frame protocol) but stays entirely local state, per the
- * original spec: "Conversation state is per-course, separate from the
- * global chat." The one addition to the frame is `course`, which
- * `backend/features/chat/router.py` forwards to `ChatAgent.stream_chat` ->
- * `build_vault_tools` (backend/agent/runtime.py), where it FORCES
- * `search_vault`'s course filter rather than leaving it to the model's
- * discretion — the whole point of asking from inside a course's hub. This
- * used to be `cannedAnswer()`: a hardcoded "[PREVIEW] ... isn't wired to the
- * RAG pipeline yet" string with two fake citations, typed out with
- * `useTypewriter` to look live. No `fetch(` call existed anywhere in it.
+ * Course Hub center pane — the shared chat surface, scoped to one course.
+ *
+ * This used to be a second, near-complete copy of `lib/chat.tsx`'s WebSocket
+ * client: its own frame handling, its own `ChatMessage` type saying
+ * "assistant" where the original said "argus", its own error path popping two
+ * pending bubbles where the original popped one. Every protocol change needed
+ * two edits, and the two had already drifted apart.
+ *
+ * A nested `ChatProvider` shadows the app-wide one from the dashboard layout,
+ * so the course still keeps its own thread — "separate from the global chat",
+ * as the original spec asked — while there is now one implementation of the
+ * protocol instead of two, and every later chat fix lands on both surfaces at
+ * once.
+ *
+ * `course` rides on every outbound frame, where `build_vault_tools`
+ * (backend/agent/runtime.py) turns it into a *forced* `search_vault` filter
+ * rather than leaving the scope to the model's discretion — the whole point
+ * of asking from inside a course's hub.
  */
 export function CourseChat({ code }: { code: string }) {
-  const { data: vault } = useSWR<{ name: string }>("/api/vault", fetcher);
   const model = useSelectedModel();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [offline, setOffline] = useState(false);
-  const socketRef = useRef<WebSocket | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => () => socketRef.current?.close(), []);
-  useEffect(() => {
-    const container = scrollRef.current;
-    if (container) container.scrollTop = container.scrollHeight;
-  }, [messages]);
-
-  function send(text: string) {
-    const question = text.trim();
-    if (!question || busy) return;
-    setBusy(true);
-    setOffline(false);
-    setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", text: question },
-      { role: "assistant", text: "", pending: true },
-    ]);
-
-    const ws = new WebSocket(`${wsBase()}/ws/chat`);
-    socketRef.current = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ message: question, model: selectedModel(), course: code }));
-    ws.onmessage = (event) => {
-      const frame = JSON.parse(event.data);
-      if (frame.type === "delta") {
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          next[next.length - 1] = { ...last, text: last.text + frame.text, pending: false };
-          return next;
-        });
-      } else if (frame.type === "done") {
-        setBusy(false);
-        ws.close();
-      } else if (frame.type === "error") {
-        setMessages((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = {
-            role: "assistant",
-            text: `Something went wrong: ${frame.detail}`,
-            pending: false,
-          };
-          return next;
-        });
-        setBusy(false);
-        ws.close();
-      }
-    };
-    ws.onerror = () => {
-      setOffline(true);
-      setBusy(false);
-      setMessages((prev) => prev.slice(0, -2));
-    };
-  }
-
-  const vaultName = vault?.name ?? "vault";
-
   return (
-    <Panel label={`ARGUS.CHAT · ${code}`} className="flex h-full flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-        {messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 py-10 text-center">
-            <p className="font-mono text-sm text-ink-muted">{`ask ${code}`}</p>
-            <div className="flex flex-col gap-2">
-              {SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  onClick={() => send(suggestion)}
-                  className="border border-line px-3 py-1.5 text-label text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
-                >
-                  {suggestion}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {messages.map((message, i) => (
-              <div key={i} className={message.role === "user" ? "self-end text-right" : "self-start"}>
-                <div
-                  className={`inline-block max-w-[85%] border px-3 py-2 text-body ${
-                    message.role === "user"
-                      ? "border-lineHi bg-[var(--ac-bg)] text-ink"
-                      : "border-line bg-void text-ink"
-                  }`}
-                >
-                  {message.pending && !message.text ? (
-                    <span className="font-mono text-label text-ink-muted" aria-label="Argus is thinking">
-                      processing_query
-                      <span className="animate-blink text-[var(--ac)]">▊</span>
-                    </span>
-                  ) : (
-                    <span className="whitespace-pre-wrap">{renderWithCitations(message.text, vaultName)}</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        {offline && (
-          <p className="mt-2 text-center text-xs text-danger">
-            Can’t reach Argus — is the backend running on :8000?
-          </p>
-        )}
-      </div>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          send(input);
-        }}
-        className="mt-3 flex gap-2 border-t border-line pt-3"
-      >
-        <input
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          placeholder={busy ? "Argus is answering…" : `ask ${code} · grounded in its materials & notes`}
-          disabled={busy}
-          className="min-w-0 flex-1 border border-line bg-sunken px-3 py-2 text-body placeholder:text-ink-faint focus:border-lineHi focus:outline-none disabled:opacity-50"
+    <ChatProvider course={code}>
+      <Panel label={`ARGUS.CHAT · ${code}`} className="flex h-full flex-col">
+        <ChatPanel
+          variant="dock"
+          suggestions={SUGGESTIONS}
+          placeholder={`ask ${code} · grounded in its materials & notes`}
         />
-        <button
-          type="submit"
-          disabled={busy || !input.trim()}
-          className="shrink-0 border border-line px-3 py-2 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
-        >
-          SEND
-        </button>
-      </form>
-      <p className="mt-2 font-mono text-meta text-ink-faint">model :: {model}</p>
-    </Panel>
+        <p className="mt-2 font-mono text-meta text-ink-faint">model :: {model}</p>
+      </Panel>
+    </ChatProvider>
   );
 }
 

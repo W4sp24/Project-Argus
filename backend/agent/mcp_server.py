@@ -35,7 +35,7 @@ SERVER_NAME = "argus"
 # The subset an external agent may use. Kept as an explicit allow-list rather
 # than "everything except propose_*", so a tool added to chat later is not
 # silently exposed to every coding agent on the machine.
-READ_ONLY_TOOLS = ("search_vault", "read_note", "list_tasks")
+READ_ONLY_TOOLS = ("search_vault", "read_note", "list_notes", "list_tasks")
 
 
 def read_only_tools(settings: Settings) -> list[ToolSpec]:

@@ -27,11 +27,17 @@ from backend.agent.adapters import (
     PROVIDER_ANTHROPIC_API,
     AgentError,
     AgentEvent,
+    Message,
+    Notice,
     TextDelta,
+    ToolFinished,
     ToolSpec,
-    ToolUsed,
+    ToolStarted,
     UsageReported,
+    describe_arguments,
     flatten_tool_result,
+    require_user_turn,
+    summarize_tool_result,
 )
 
 DEFAULT_ENDPOINT = "https://api.anthropic.com/v1"
@@ -86,16 +92,22 @@ class _BlockBuffer:
         return calls
 
 
-def _parse(raw: str) -> dict[str, Any]:
-    """Parse accumulated input JSON; an empty dict lets the handler complain."""
+def _parse(raw: str) -> dict[str, Any] | None:
+    """Parse accumulated input JSON. ``None`` means it would not parse.
+
+    See :func:`backend.agent.openai_compat.parse_tool_arguments`: an absent
+    input is an empty dict for the handler to validate, but text that is not a
+    JSON object is a real error, and the dispatcher answers it with the shape
+    the tool wanted instead of letting a KeyError become ``error: 'query'``.
+    """
     text = (raw or "").strip()
     if not text:
         return {}
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 @dataclass
@@ -145,11 +157,14 @@ class AnthropicAPIAdapter:
         self,
         *,
         system_prompt: str,
-        user_message: str,
+        messages: Sequence[Message],
         tools: Sequence[ToolSpec],
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
-        messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+        require_user_turn(messages)
+        conversation: list[dict[str, Any]] = [
+            {"role": m.role, "content": m.text} for m in messages
+        ]
         by_name = {spec.name: spec for spec in tools}
         totals = {
             "input_tokens": 0,
@@ -160,18 +175,30 @@ class AnthropicAPIAdapter:
         url = f"{self.endpoint.rstrip('/')}/messages"
         self._live_usage = totals
 
+        total_turns = max(1, max_turns)
+        hit_limit = False
+
         async with self._client() as client:
-            for _turn in range(max(1, max_turns)):
+            for turn in range(total_turns):
+                # See OpenAICompatAdapter.run: on the last turn a tool call
+                # produces a result the loop exits before reading, so the turn
+                # is forced to text instead. `tools` stays on the request even
+                # then — the Messages API rejects a conversation containing
+                # tool_use blocks if the request declares no tools.
+                final = turn == total_turns - 1
+                hit_limit = hit_limit or (final and turn > 0 and bool(tools))
                 payload: dict[str, Any] = {
                     "model": self.model,
                     "max_tokens": self.max_tokens,
-                    "messages": messages,
+                    "messages": conversation,
                     "stream": True,
                 }
                 if system_prompt:
                     payload["system"] = system_prompt
                 if tools:
                     payload["tools"] = to_anthropic_tools(tools)
+                    if final:
+                        payload["tool_choice"] = {"type": "none"}
 
                 text_parts: list[str] = []
                 buffer = _BlockBuffer()
@@ -188,25 +215,53 @@ class AnthropicAPIAdapter:
                 if "".join(text_parts):
                     assistant.append({"type": "text", "text": "".join(text_parts)})
                 assistant.extend(
-                    {"type": "tool_use", "id": c["id"], "name": c["name"], "input": c["input"]}
+                    # `or {}` because input is None when the fragments did not
+                    # parse, and a null input is not a valid tool_use block —
+                    # the conversation this echoes back has to stay legal even
+                    # when what the model sent was not.
+                    {
+                        "type": "tool_use",
+                        "id": c["id"],
+                        "name": c["name"],
+                        "input": c["input"] or {},
+                    }
                     for c in calls
                 )
-                messages.append({"role": "assistant", "content": assistant})
+                conversation.append({"role": "assistant", "content": assistant})
 
                 # Results go back as a *user* message of tool_result blocks —
                 # the Messages API has no dedicated tool role.
                 results = []
                 for call in calls:
-                    yield ToolUsed(call["name"])
+                    args = call["input"] or {}
+                    # `input` is None only when the fragments did not parse;
+                    # the trace shows the empty call and _dispatch explains it.
+                    yield ToolStarted(call_id=call["id"], name=call["name"], args=args)
+                    result_text = await _dispatch(by_name, call)
+                    yield ToolFinished(
+                        call_id=call["id"],
+                        name=call["name"],
+                        summary=summarize_tool_result(
+                            by_name.get(call["name"]), call["name"], args, result_text
+                        ),
+                    )
                     results.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": call["id"],
-                            "content": await _dispatch(by_name, call),
+                            "content": result_text,
                         }
                     )
-                messages.append({"role": "user", "content": results})
+                conversation.append({"role": "user", "content": results})
 
+        if hit_limit:
+            yield Notice(
+                kind="turn_limit",
+                detail=(
+                    f"reached the {total_turns}-step limit for this turn — "
+                    "the answer may be incomplete"
+                ),
+            )
         yield UsageReported(**totals)
 
     async def _stream_turn(
@@ -306,7 +361,13 @@ async def _dispatch(by_name: dict[str, ToolSpec], call: dict[str, Any]) -> str:
     """Run one tool call; failures come back as text the model can recover from."""
     spec = by_name.get(call["name"])
     if spec is None:
-        return f"error: unknown tool {call['name']!r}"
+        known = ", ".join(sorted(by_name)) or "none"
+        return f"error: unknown tool {call['name']!r} — available tools are {known}"
+    if call["input"] is None:
+        return (
+            f"error: the arguments for {call['name']} were not a JSON object — "
+            f"send something like {describe_arguments(spec)}"
+        )
     try:
         result = await spec.handler(call["input"])
     except Exception as exc:  # noqa: BLE001 - surfaced to the model, not swallowed

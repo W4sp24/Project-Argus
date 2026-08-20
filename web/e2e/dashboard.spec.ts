@@ -146,14 +146,20 @@ test("task delete removes the line, snapshot first", async ({ page }) => {
 
 test("chat thread persists between drawer and chat tab", async ({ page }) => {
   await page.goto("/dashboard");
-  // No live agent in e2e: the ws will error, but the user message must survive
-  // in shared state across surfaces (provider-level persistence).
+  // No live agent in e2e, so the turn never completes — but the user message
+  // must survive in shared state across surfaces (the drawer and /chat share
+  // one ChatProvider from the dashboard layout).
   await page.getByRole("button", { name: "Chat", exact: true }).click(); // TopBar toggle opens the drawer
   await page.getByPlaceholder("Ask your vault").fill("hello from the dock");
   await page.getByRole("button", { name: "Send" }).click();
   await page.getByRole("link", { name: "Open fullscreen chat" }).click(); // drawer ⛶ → /chat
   await expect(page).toHaveURL(/\/chat/);
-  await expect(page.getByText("hello from the dock")).toBeVisible();
+  // Scoped to the transcript: since threads landed, the first message also
+  // becomes the thread's derived title, so these words now appear in the
+  // session rail and the page header too.
+  await expect(
+    page.getByRole("log", { name: "Conversation" }).getByText("hello from the dock"),
+  ).toBeVisible();
 });
 
 test("command palette opens on ctrl+K and closes on Escape", async ({ page }) => {

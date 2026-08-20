@@ -219,6 +219,44 @@ def test_api_key_goes_to_the_keyring_never_to_models_json(client: TestClient, va
         delete_key(key_ref_for("groq-llama"))
 
 
+def test_a_gemini_model_stores_only_its_key_reference(vault: Path, client: TestClient) -> None:
+    """Gemini is a hosted provider like any other under I4: the key goes to the
+    OS keyring and `models.json` holds nothing but the reference to it."""
+    from backend.agent.credentials import delete_key, get_key, key_ref_for
+
+    created = client.post(
+        "/api/models",
+        json={
+            "name": "gemini-flash",
+            "provider": "gemini",
+            "api_key": "goog-super-secret",
+            "model_id": "gemini-2.5-flash",
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["has_key"] is True
+    assert body["local"] is False, "Google is not this machine"
+    assert "goog-super-secret" not in json.dumps(body)
+
+    try:
+        on_disk = (vault / ".argus" / "models.json").read_text(encoding="utf-8")
+        assert "goog-super-secret" not in on_disk, "the key must never reach disk (I4)"
+        assert key_ref_for("gemini-flash") in on_disk
+        assert get_key(key_ref_for("gemini-flash")) == "goog-super-secret"
+
+        client.delete("/api/models/gemini-flash")
+        assert get_key(key_ref_for("gemini-flash")) is None
+    finally:
+        delete_key(key_ref_for("gemini-flash"))
+
+
+def test_a_gemini_model_requires_a_key(client: TestClient) -> None:
+    response = client.post("/api/models", json={"name": "gem", "provider": "gemini"})
+    assert response.status_code == 422
+    assert "API key" in response.json()["detail"]
+
+
 def test_anthropic_api_model_requires_a_key(client: TestClient) -> None:
     response = client.post("/api/models", json={"name": "claude-key", "provider": "anthropic-api"})
     assert response.status_code == 422
@@ -416,16 +454,25 @@ def test_chat_agent_model_resolution(vault: Path) -> None:
     Replaces the previous assertion that a non-anthropic provider raised
     "localModels is preview" — that rejection is exactly what this branch
     removes, so the test now pins the routing that took its place.
+
+    Omitting the model no longer answers the hardcoded Claude Code id: it
+    resolves through ``settings.default_model``, the same way the adapter
+    always did. The two used to disagree, and the usage dashboard believed the
+    wrong one.
     """
-    from backend.agent.runtime import MODEL, ChatAgent
+    from backend.agent.adapters import resolve_run_target
+    from backend.agent.runtime import MODEL
     from backend.core.model_registry import save_user_models
 
     settings = Settings(_vault_path=vault)
-    agent = ChatAgent(settings)
-    assert agent._resolve_model(None) == MODEL, "omitting model keeps today's behavior"
-    assert agent._resolve_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5-20251001"
+
+    def label(model: str | None) -> str:
+        return resolve_run_target(settings, model, fallback_model=MODEL)[1]
+
+    assert label(None) == settings.default_model, "a model-less turn follows the default"
+    assert label("claude-haiku-4-5-20251001") == "claude-haiku-4-5-20251001"
     with pytest.raises(RuntimeError, match="unknown model"):
-        agent._resolve_model("ghost")
+        label("ghost")
 
     save_user_models(
         settings.models_file,
@@ -443,8 +490,8 @@ def test_chat_agent_model_resolution(vault: Path) -> None:
             },
         ],
     )
-    assert agent._resolve_model("llama3") == "llama3", "local endpoints route for real now"
-    assert agent._resolve_model("groq-llama") == "llama-3.3-70b-versatile", (
+    assert label("llama3") == "llama3", "local endpoints route for real now"
+    assert label("groq-llama") == "llama-3.3-70b-versatile", (
         "a display name may differ from the id the provider expects"
     )
 
@@ -454,6 +501,8 @@ def test_chat_agent_builds_the_right_adapter_per_provider(vault: Path) -> None:
     from backend.agent.adapters import ClaudeSDKAdapter, resolve_adapter
     from backend.agent.anthropic_api import AnthropicAPIAdapter
     from backend.agent.credentials import KEYRING_SERVICE
+    from backend.agent.gemini_api import DEFAULT_ENDPOINT as GEMINI_ENDPOINT
+    from backend.agent.gemini_api import GeminiAdapter
     from backend.agent.openai_compat import OpenAICompatAdapter
     from backend.core.model_registry import save_user_models
 
@@ -467,6 +516,12 @@ def test_chat_agent_builds_the_right_adapter_per_provider(vault: Path) -> None:
                 "endpoint": "http://localhost:11434/v1",
             },
             {"name": "claude-key", "provider": "anthropic-api", "key_ref": "model:claude-key"},
+            {
+                "name": "gem",
+                "provider": "gemini",
+                "key_ref": "model:gem",
+                "model_id": "gemini-2.5-flash",
+            },
         ],
     )
 
@@ -484,12 +539,22 @@ def test_chat_agent_builds_the_right_adapter_per_provider(vault: Path) -> None:
     import keyring
 
     keyring.set_password(KEYRING_SERVICE, "model:claude-key", "sk-test")
+    keyring.set_password(KEYRING_SERVICE, "model:gem", "goog-test")
     try:
         hosted = resolve_adapter(settings, "claude-key")
         assert isinstance(hosted, AnthropicAPIAdapter)
         assert hosted.api_key == "sk-test", "the key comes from the keyring, never models.json"
+
+        # Gemini is its own provider, not an openai-compat entry pointed at
+        # Google's shim — see backend/agent/gemini_api.py for why.
+        gemini = resolve_adapter(settings, "gem")
+        assert isinstance(gemini, GeminiAdapter)
+        assert gemini.model == "gemini-2.5-flash"
+        assert gemini.api_key == "goog-test"
+        assert gemini.endpoint == GEMINI_ENDPOINT, "no endpoint means Google's own"
     finally:
         keyring.delete_password(KEYRING_SERVICE, "model:claude-key")
+        keyring.delete_password(KEYRING_SERVICE, "model:gem")
 
 
 def test_anthropic_api_model_without_a_stored_key_fails_readably(vault: Path) -> None:

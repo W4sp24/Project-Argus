@@ -1,20 +1,65 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { apiFetch, wsBase } from "@/lib/api";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { mutate } from "swr";
+import { apiFetch, getChatThread, wsBase } from "@/lib/api";
 import { selectedModel } from "@/lib/models";
 
+/** One dispatch of one tool, assembled from the `tool` start and end frames. */
+export interface ToolStep {
+  callId: string;
+  name: string;
+  args?: Record<string, unknown>;
+  /** Present once the matching `phase:"end"` frame lands. */
+  label?: string;
+  detail?: string;
+  paths?: string[];
+  ok?: boolean;
+  startedAt: number;
+  endedAt?: number;
+}
+
+export type MessageStatus = "streaming" | "done" | "error" | "stopped";
+
 export interface ChatMessage {
-  role: "user" | "argus";
+  /** Stable React key. Client-side only — see `serverId` for the DB row. */
+  key: string;
+  /** `chat_messages.id`, from the `done` frame. Absent until the turn ends. */
+  serverId?: number;
+  role: "user" | "assistant";
   text: string;
-  pending?: boolean;
+  steps: ToolStep[];
+  status: MessageStatus;
+  error?: string;
+  /** Run-level warnings from the `notice` frame — the agent hitting its step
+   *  limit, today. Ephemeral: not persisted with the message, because it
+   *  describes the run rather than the answer. */
+  notices?: string[];
+  startedAt?: number;
+  endedAt?: number;
+  /** `/plan` output: real, but never written to `chat_messages` (see runPlanner). */
+  local?: boolean;
 }
 
 interface ChatState {
   messages: ChatMessage[];
+  threadId: number | null;
+  threadTitle: string;
   busy: boolean;
   offline: boolean;
   send: (text: string) => void;
+  stop: () => void;
+  newThread: () => void;
+  openThread: (id: number) => Promise<void>;
 }
 
 const ChatContext = createContext<ChatState | null>(null);
@@ -25,104 +70,392 @@ export function useChat(): ChatState {
   return state;
 }
 
-export function ChatProvider({ children }: { children: React.ReactNode }) {
+let keySeq = 0;
+const nextKey = () => `m${++keySeq}`;
+
+/** Replace the last message in place. Every frame handler edits only the
+ *  in-flight assistant turn, which is always the tail. */
+function patchLast(
+  list: ChatMessage[],
+  patch: (message: ChatMessage) => ChatMessage,
+): ChatMessage[] {
+  if (list.length === 0) return list;
+  const next = [...list];
+  next[next.length - 1] = patch(next[next.length - 1]);
+  return next;
+}
+
+/**
+ * Fold one `tool` frame into a step list, upserting by `call_id`.
+ *
+ * The frames streamed over the socket and the `tools_json` rows a thread
+ * restores from are the same objects — `_tool_frame()` produces both, and the
+ * router appends every frame it sends — so they must fold through one
+ * function or a reloaded trace would quietly differ from the one you watched
+ * being built.
+ */
+function applyToolFrame(steps: ToolStep[], frame: Record<string, unknown>): ToolStep[] {
+  const callId = String(frame.call_id ?? "");
+  const name = String(frame.name ?? "");
+  const next = [...steps];
+  const at = next.findIndex((step) => step.callId === callId);
+  if (frame.phase === "start") {
+    const started: ToolStep = {
+      callId,
+      name,
+      args: (frame.args as Record<string, unknown>) ?? undefined,
+      startedAt: Date.now(),
+    };
+    if (at === -1) next.push(started);
+    else next[at] = { ...next[at], ...started };
+    return next;
+  }
+  const finished = {
+    label: String(frame.label ?? name),
+    detail: String(frame.detail ?? ""),
+    paths: Array.isArray(frame.paths) ? (frame.paths as string[]) : [],
+    ok: frame.ok !== false,
+    endedAt: Date.now(),
+  };
+  // An end frame with no matching start can only come from a truncated
+  // persisted trace; keep the summary rather than dropping the step.
+  if (at === -1) next.push({ callId, name, startedAt: Date.now(), ...finished });
+  else next[at] = { ...next[at], ...finished };
+  return next;
+}
+
+/**
+ * The chat client.
+ *
+ * One long-lived socket for the whole conversation, not one per message. The
+ * old client opened a `WebSocket` per send and never sent `thread_id` back, so
+ * the backend minted a fresh thread every time and history was never replayed
+ * — the transcript on screen was decoration.
+ *
+ * `course` scopes the provider to one Course Hub: it rides on every outbound
+ * frame, where `build_vault_tools` (backend/agent/runtime.py) turns it into a
+ * forced `search_vault` filter rather than leaving the scope to the model.
+ */
+export function ChatProvider({ children, course }: { children: ReactNode; course?: string }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [threadId, setThreadId] = useState<number | null>(null);
+  const [threadTitle, setThreadTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [offline, setOffline] = useState(false);
+
   const socketRef = useRef<WebSocket | null>(null);
+  // Read inside send() and the frame handlers, which the socket captures once
+  // at connect time — refs keep them from going stale without forcing a
+  // reconnect on every render.
+  const threadIdRef = useRef<number | null>(null);
+  const busyRef = useRef(false);
+  const stoppingRef = useRef(false);
 
-  useEffect(() => () => socketRef.current?.close(), []);
+  // Delta batching. The backend streams token by token, and one setState per
+  // token means one full markdown re-parse per token over a growing string.
+  // Deltas accumulate here and reach state once per animation frame.
+  const bufferRef = useRef("");
+  const frameRef = useRef<number | null>(null);
 
-  async function runPlanner(instruction: string) {
+  const flush = useCallback(() => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    const chunk = bufferRef.current;
+    if (!chunk) return;
+    bufferRef.current = "";
+    setMessages((prev) => patchLast(prev, (m) => ({ ...m, text: m.text + chunk })));
+  }, []);
+
+  const scheduleFlush = useCallback(() => {
+    if (frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      flush();
+    });
+  }, [flush]);
+
+  const settle = useCallback(
+    (status: MessageStatus, patch: Partial<ChatMessage> = {}) => {
+      flush();
+      setMessages((prev) =>
+        patchLast(prev, (m) =>
+          m.role === "assistant" && m.status === "streaming"
+            ? { ...m, status, endedAt: Date.now(), ...patch }
+            : m,
+        ),
+      );
+      setBusy(false);
+      busyRef.current = false;
+    },
+    [flush],
+  );
+
+  const handleFrame = useCallback(
+    (event: MessageEvent) => {
+      let frame: Record<string, unknown>;
+      try {
+        frame = JSON.parse(event.data as string);
+      } catch {
+        return;
+      }
+      switch (frame.type) {
+        case "thread": {
+          const id = Number(frame.thread_id);
+          if (Number.isFinite(id)) {
+            threadIdRef.current = id;
+            setThreadId(id);
+          }
+          setThreadTitle(String(frame.title ?? ""));
+          // The backend mints the row and derives its title inside `_open_turn`,
+          // before the model is called — so the rail has a thread to show from
+          // the first message on, but only if its SWR list is told to look
+          // again. Without this a brand-new conversation is invisible until
+          // something else happens to revalidate.
+          void mutate(
+            (key) => typeof key === "string" && key.startsWith("/api/chat/threads"),
+            undefined,
+            { revalidate: true },
+          );
+          break;
+        }
+        case "delta": {
+          bufferRef.current += String(frame.text ?? "");
+          scheduleFlush();
+          break;
+        }
+        case "tool": {
+          // Flush first, so the trace and the prose it interleaves with stay
+          // in the order they were streamed.
+          flush();
+          setMessages((prev) =>
+            patchLast(prev, (m) => ({ ...m, steps: applyToolFrame(m.steps, frame) })),
+          );
+          break;
+        }
+        case "notice": {
+          // Flushed first for the same reason a tool frame is: the warning
+          // belongs where it happened in the stream, not after whatever text
+          // was still buffered.
+          flush();
+          const detail = String(frame.detail ?? "");
+          if (detail) {
+            setMessages((prev) =>
+              patchLast(prev, (m) => ({ ...m, notices: [...(m.notices ?? []), detail] })),
+            );
+          }
+          break;
+        }
+        case "done": {
+          const id = Number(frame.message_id);
+          settle("done", Number.isFinite(id) ? { serverId: id } : {});
+          break;
+        }
+        case "error": {
+          // Deliberately does NOT close the socket. ws_chat's `while True`
+          // loop survives an application error — its own comment reads "agent
+          // errors must reach the UI, not kill the socket" — so closing here
+          // would throw away a working connection and force a pointless
+          // reconnect. Only a transport-level close is a real disconnection.
+          settle("error", { error: String(frame.detail ?? "unknown error") });
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [flush, scheduleFlush, settle],
+  );
+
+  const connect = useCallback((): WebSocket => {
+    const ws = new WebSocket(`${wsBase()}/ws/chat`);
+    ws.onmessage = handleFrame;
+    ws.onclose = () => {
+      if (socketRef.current === ws) socketRef.current = null;
+      if (stoppingRef.current) {
+        stoppingRef.current = false;
+        return;
+      }
+      // Closed with a turn still in flight and nobody asked for it: the
+      // transport went away. The backend has already banked whatever partial
+      // answer it had, so keep the text on screen and say what happened.
+      if (busyRef.current) {
+        setOffline(true);
+        settle("error", { error: "connection lost" });
+      }
+    };
+    return ws;
+  }, [handleFrame, settle]);
+
+  // The socket is opened lazily by send(), never by an effect — an
+  // effect-owned socket double-opens under StrictMode's mount/cleanup/mount.
+  // This cleanup therefore has nothing to close unless a turn actually ran.
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      stoppingRef.current = true;
+      socketRef.current?.close();
+      socketRef.current = null;
+    },
+    [],
+  );
+
+  /**
+   * `/plan` is a REST action, not a chat turn: it POSTs /api/plan and queues
+   * suggestions on the Review page. No REST route appends a message to a
+   * thread, so these two bubbles are `local` — they live in the transcript for
+   * the session and are never written to `chat_messages`.
+   */
+  const runPlanner = useCallback(async (instruction: string) => {
     setBusy(true);
+    busyRef.current = true;
     setMessages((prev) => [
       ...prev,
-      { role: "user", text: `/plan ${instruction}` },
-      { role: "argus", text: "", pending: true },
+      {
+        key: nextKey(),
+        role: "user",
+        text: `/plan ${instruction}`,
+        steps: [],
+        status: "done",
+        local: true,
+      },
+      {
+        key: nextKey(),
+        role: "assistant",
+        text: "",
+        steps: [],
+        status: "streaming",
+        startedAt: Date.now(),
+        local: true,
+      },
     ]);
+    let text: string;
     try {
       const response = await apiFetch("/api/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // `/plan` runs on the same model the chat header shows (§7) — the
         // selector would be misleading if planning quietly ignored it.
-        body: JSON.stringify({
-          instruction: instruction || "Plan my day",
-          model: selectedModel(),
-        }),
+        body: JSON.stringify({ instruction: instruction || "Plan my day", model: selectedModel() }),
       });
       const payload = await response.json();
-      const text = response.ok
+      text = response.ok
         ? `Planned! ${payload.created} suggestion${payload.created === 1 ? "" : "s"} waiting on the Review page.`
         : `Planning failed: ${payload.detail}`;
-      setMessages((prev) => [...prev.slice(0, -1), { role: "argus", text }]);
     } catch {
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "argus", text: "Planning failed — is the backend running?" },
-      ]);
+      text = "Planning failed — is the backend running?";
     }
+    setMessages((prev) =>
+      patchLast(prev, (m) => ({ ...m, text, status: "done", endedAt: Date.now() })),
+    );
     setBusy(false);
-  }
+    busyRef.current = false;
+  }, []);
 
-  function send(text: string) {
-    const message = text.trim();
-    if (!message || busy) return;
-    if (message.startsWith("/plan")) {
-      runPlanner(message.replace(/^\/plan\s*/, ""));
-      return;
-    }
-    setBusy(true);
-    setOffline(false);
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", text: message },
-      { role: "argus", text: "", pending: true },
-    ]);
-
-    const ws = new WebSocket(`${wsBase()}/ws/chat`);
-    socketRef.current = ws;
-    // §7 model selection: send the chosen model with the frame. The backend
-    // ws handler reads payload fields with .get() (backend/main.py ws_chat)
-    // and ignores unknown keys, so this is forward-compatible — routing the
-    // model is the backend branch's concern (flags.localModels: preview).
-    ws.onopen = () => ws.send(JSON.stringify({ message, model: selectedModel() }));
-    ws.onmessage = (event) => {
-      const frame = JSON.parse(event.data);
-      if (frame.type === "delta") {
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          next[next.length - 1] = { ...last, text: last.text + frame.text, pending: false };
-          return next;
-        });
-      } else if (frame.type === "done") {
-        setBusy(false);
-        ws.close();
-      } else if (frame.type === "error") {
-        setMessages((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = {
-            role: "argus",
-            text: `Something went wrong: ${frame.detail}`,
-            pending: false,
-          };
-          return next;
-        });
-        setBusy(false);
-        ws.close();
+  const send = useCallback(
+    (raw: string) => {
+      const message = raw.trim();
+      // Guarding on the ref rather than on `busy` also closes the double-click
+      // window before the first `thread` frame lands, which would otherwise
+      // mint two threads for one conversation.
+      if (!message || busyRef.current) return;
+      if (message.startsWith("/plan")) {
+        void runPlanner(message.replace(/^\/plan\s*/, ""));
+        return;
       }
-    };
-    ws.onerror = () => {
-      setOffline(true);
-      setBusy(false);
-      setMessages((prev) => prev.slice(0, -1));
-    };
-  }
 
-  return (
-    <ChatContext.Provider value={{ messages, busy, offline, send }}>
-      {children}
-    </ChatContext.Provider>
+      setOffline(false);
+      setBusy(true);
+      busyRef.current = true;
+      setMessages((prev) => [
+        ...prev,
+        { key: nextKey(), role: "user", text: message, steps: [], status: "done" },
+        {
+          key: nextKey(),
+          role: "assistant",
+          text: "",
+          steps: [],
+          status: "streaming",
+          startedAt: Date.now(),
+        },
+      ]);
+
+      const payload = JSON.stringify({
+        message,
+        model: selectedModel(),
+        ...(course ? { course } : {}),
+        ...(threadIdRef.current !== null ? { thread_id: threadIdRef.current } : {}),
+      });
+
+      let ws = socketRef.current;
+      // readyState 0 = CONNECTING, 1 = OPEN; anything above is closing or gone.
+      if (!ws || ws.readyState > WebSocket.OPEN) {
+        ws = connect();
+        socketRef.current = ws;
+      }
+      if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+      else {
+        const socket = ws;
+        socket.addEventListener("open", () => socket.send(payload), { once: true });
+      }
+    },
+    [connect, course, runPlanner],
   );
+
+  /** Halt the turn by dropping the socket. The backend's `finally` banks the
+   *  partial answer on disconnect, so nothing already said is lost. */
+  const stop = useCallback(() => {
+    if (!busyRef.current) return;
+    stoppingRef.current = true;
+    settle("stopped");
+    socketRef.current?.close();
+    socketRef.current = null;
+  }, [settle]);
+
+  const newThread = useCallback(() => {
+    if (busyRef.current) stop();
+    setMessages([]);
+    setThreadTitle("");
+    setThreadId(null);
+    threadIdRef.current = null;
+  }, [stop]);
+
+  /**
+   * Load a thread from the database and make it the live one.
+   *
+   * `startedAt`/`endedAt` are deliberately left unset on restored turns: the
+   * wall-clock of a conversation from last week is not something the trace
+   * should claim to know, so it shows the step list without a duration.
+   */
+  const openThread = useCallback(
+    async (id: number) => {
+      if (busyRef.current) stop();
+      const detail = await getChatThread(id);
+      threadIdRef.current = detail.thread.id;
+      setThreadId(detail.thread.id);
+      setThreadTitle(detail.thread.title);
+      setMessages(
+        detail.messages.map((row) => ({
+          key: `s${row.id}`,
+          serverId: row.id,
+          role: row.role,
+          text: row.text,
+          steps: (Array.isArray(row.tools) ? row.tools : []).reduce<ToolStep[]>(
+            (steps, frame) => applyToolFrame(steps, frame),
+            [],
+          ),
+          status: "done" as const,
+        })),
+      );
+    },
+    [stop],
+  );
+
+  const value = useMemo(
+    () => ({ messages, threadId, threadTitle, busy, offline, send, stop, newThread, openThread }),
+    [messages, threadId, threadTitle, busy, offline, send, stop, newThread, openThread],
+  );
+
+  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 }

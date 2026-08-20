@@ -54,6 +54,13 @@ function toEngine(model: ModelInfo): Engine {
       privacy: "note excerpts are sent to Anthropic",
     };
   }
+  if (model.provider === "gemini") {
+    return {
+      ...base,
+      source: `google · ${describeKey(model.key_state)}`,
+      privacy: "note excerpts are sent to Google",
+    };
+  }
   if (model.local) {
     return {
       ...base,
