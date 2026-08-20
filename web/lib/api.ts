@@ -658,9 +658,12 @@ export function useDoctor() {
  * - `anthropic` — Claude through the Claude Code CLI, on your subscription.
  * - `anthropic-api` — Claude through an API key. No Claude Code needed.
  * - `openai-compat` — anything speaking the OpenAI chat API: Ollama on this
- *   PC, or a hosted provider like Groq/Together/Fireworks/OpenRouter.
+ *   PC, or a hosted provider like Groq/DeepSeek/Together/OpenRouter.
+ * - `gemini` — Google's Generative Language API, which is not OpenAI-shaped.
+ *   It has its own adapter rather than riding Google's compatibility shim; see
+ *   backend/agent/gemini_api.py for why.
  */
-export type ModelProvider = "anthropic" | "anthropic-api" | "openai-compat";
+export type ModelProvider = "anthropic" | "anthropic-api" | "openai-compat" | "gemini";
 
 export interface ModelInfo {
   name: string;

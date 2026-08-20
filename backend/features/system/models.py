@@ -339,8 +339,13 @@ def build_models_router(
         elif endpoint and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=422, detail="endpoint must be an http(s) URL")
 
+        # Both key-only providers, checked here rather than left to
+        # `adapter_for_entry`: a registration that succeeds and then fails on
+        # first use is far harder to act on than a 422 at the point of typing.
         if provider == PROVIDER_ANTHROPIC_API and not request.api_key:
             raise HTTPException(status_code=422, detail="an Anthropic API model needs an API key")
+        if provider == PROVIDER_GEMINI and not request.api_key:
+            raise HTTPException(status_code=422, detail="a Gemini model needs an API key")
 
         if any(model.name == name for model in _registry()):
             raise HTTPException(status_code=409, detail=f"model {name} already exists")

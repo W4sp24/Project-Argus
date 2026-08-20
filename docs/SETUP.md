@@ -77,20 +77,28 @@ three,** and you can change your mind later.
 1. Make an account with any of these and create an API key. **Groq** has a
    generous free tier and is a good place to start.
    - Groq — <https://console.groq.com/keys>
+   - DeepSeek — <https://platform.deepseek.com/api_keys>
    - Together — <https://api.together.xyz/settings/api-keys>
    - OpenRouter — <https://openrouter.ai/keys>
    - Fireworks — <https://fireworks.ai/account/api-keys>
+   - Google (for Gemini) — <https://aistudio.google.com/apikey>
    - Anthropic (for Claude) — <https://console.anthropic.com/settings/keys>
 2. Copy the key. It usually starts with `gsk_`, `sk-`, or similar.
    **Treat it like a password.**
 3. In Argus, go to **System → MODELS** and click **+ ADD MODEL**.
-4. Choose **Hosted API** (or **Anthropic API key** if you picked Anthropic).
+4. Choose **Hosted API** — or **Google Gemini** / **Anthropic API key** if you
+   picked one of those, which need no address, only the key.
 5. Click your provider's name to fill in the address automatically, then paste
    your key into the **api key** box.
 6. Click **TEST CONNECTION**. Argus checks it can reach them and lists the
    models they offer.
 7. Pick a model from the dropdown, click **TEST CONNECTION** once more so it
    goes green, give it a short name like `groq-llama`, and click **SAVE MODEL**.
+
+On DeepSeek, pick `deepseek-chat`. `deepseek-reasoner` cannot call tools, and
+Argus refuses a model that cannot — every answer about your vault is grounded in
+a tool call, so a model without them would look like it was working while making
+things up.
 
 Your key is stored in Windows' own password manager, not in any file Argus
 writes.
