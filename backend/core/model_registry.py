@@ -24,10 +24,28 @@ DEFAULT_MODELS: tuple[dict, ...] = (
 
 # Static USD per **million** tokens, for the usage dashboard's cost estimate
 # (redesign §14). Estimates only — real billing is the provider's business.
+# Keyed on what actually lands in ``token_usage.model``, which is the
+# *provider-side* id an adapter ran (``resolve_run_target``), not the display
+# name someone gave the registry entry. A "my-deepseek" entry serving
+# ``deepseek-chat`` is priced by the latter.
+#
+# Rates below are point-in-time estimates (checked 2026-08); providers change
+# them, and a stale number here shows up as a wrong figure on the dashboard
+# rather than a wrong bill. Anything absent prices at ``ZERO_RATE`` and is named
+# as unpriced instead of guessed at — so leaving a model out is always safe.
 MODEL_RATES: dict[str, dict[str, float]] = {
     "claude-opus-4-8": {"input": 15.0, "output": 75.0},  # planner/generate (agent/*.py)
     "claude-sonnet-5": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
+    # Google, via backend/agent/gemini_api.py.
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.0},
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+    "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
+    # DeepSeek and Groq, via the OpenAI-compatible adapter. Only the
+    # tool-calling models are listed: deepseek-reasoner cannot call tools and
+    # registration refuses it, so it can never appear in a usage row.
+    "deepseek-chat": {"input": 0.28, "output": 0.42},
+    "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
 }
 FALLBACK_RATE = MODEL_RATES["claude-opus-4-8"]  # today's agent model (runtime.py)
 
