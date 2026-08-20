@@ -1,7 +1,10 @@
 """Optional cross-encoder reranking of the fused retrieval pool.
 
 Off by default — ``Settings.rerank_enabled`` (``ARGUS_RAG_RERANK`` in
-``.env``) gates whether ``retrieve_result`` ever calls into this module.
+``.env``) gates whether ``retrieve_result`` ever calls into this module. Both
+call sites pass it through the ``retrieve`` shim, which for a while dropped the
+flag: the claim in this sentence was true of ``retrieve_result``'s signature and
+false of anything that actually ran.
 ``sentence-transformers`` (already an ``[rag]`` dependency for the embedding
 model) ships ``CrossEncoder``, so this needs no new package.
 

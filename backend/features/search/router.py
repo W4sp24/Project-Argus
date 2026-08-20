@@ -64,7 +64,14 @@ def build_search_router(settings: Settings, index_factory: Any) -> APIRouter:
             from backend.rag.retrieve import retrieve
 
             index = index_factory()
-            hits = retrieve(index, query, settings.vault_path, k=8, taxonomy=settings.taxonomy)
+            hits = retrieve(
+                index,
+                query,
+                settings.vault_path,
+                k=8,
+                taxonomy=settings.taxonomy,
+                rerank=settings.rerank_enabled,
+            )
         except ImportError as exc:
             logger.warning("search unavailable — [rag] extras not installed: %s", exc)
             return []

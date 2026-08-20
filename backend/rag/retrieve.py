@@ -362,6 +362,7 @@ def retrieve(
     today: date | None = None,
     *,
     taxonomy: Taxonomy | None = None,
+    rerank: bool = False,
 ) -> list[dict]:
     """Thin shim over :func:`retrieve_result` for existing callers.
 
@@ -370,6 +371,11 @@ def retrieve(
     hits from link expansions, so this keeps returning ``results + related``
     exactly as before — a caller that wants the k-bounded/related split
     should move to :func:`retrieve_result` (planned for a follow-up commit).
+
+    ``rerank`` is forwarded rather than dropped. It was not, and since both
+    callers use this shim, ``Settings.rerank_enabled`` reached nothing:
+    ``ARGUS_RAG_RERANK=1`` did exactly nothing while ``rerank.py``'s docstring
+    said the setting gated it.
     """
     result = retrieve_result(
         index,
@@ -381,5 +387,6 @@ def retrieve(
         expand_links=expand_links,
         today=today,
         taxonomy=taxonomy,
+        rerank=rerank,
     )
     return result.results + result.related

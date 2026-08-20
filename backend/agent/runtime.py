@@ -240,6 +240,7 @@ def build_vault_tools(
             k=8,
             course=effective_course,
             taxonomy=settings.taxonomy,
+            rerank=settings.rerank_enabled,
         )
         if not hits:
             return _tool_text({"results": [], "note": "no matches in the vault"})

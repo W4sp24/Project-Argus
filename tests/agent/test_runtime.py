@@ -7,6 +7,7 @@ background thread.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import time
@@ -323,6 +324,30 @@ async def test_a_completed_stream_records_usage_exactly_once(
     assert [chunk async for chunk in agent.stream_chat("hi")] == ["a long ", "expensive answer"]
 
     assert _usage_rows(settings) == [("chat", 400, 800)]
+
+
+@pytest.mark.anyio
+async def test_the_rerank_setting_reaches_retrieval(settings: Settings, monkeypatch) -> None:
+    """`ARGUS_RAG_RERANK=1` used to do nothing at all.
+
+    `retrieve_result` takes a `rerank` flag, but both callers go through the
+    `retrieve` shim and the shim dropped it — so the setting was unreachable
+    while rerank.py's docstring claimed it gated the module.
+    """
+    seen: list[dict] = []
+
+    def fake_retrieve(*_args, **kwargs):
+        seen.append(kwargs)
+        return []
+
+    monkeypatch.setattr("backend.rag.retrieve.retrieve", fake_retrieve)
+    # Settings is frozen, so this is a replacement rather than a mutation.
+    reranking = dataclasses.replace(settings, rerank_enabled=True)
+
+    tools = build_vault_tools(reranking, FakeIndex())
+    await tool(tools, "search_vault").handler({"query": "dijkstra"})
+
+    assert seen[0]["rerank"] is True
 
 
 @pytest.mark.anyio
