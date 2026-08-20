@@ -167,6 +167,7 @@ class OpenAICompatAdapter:
     # See AnthropicAPIAdapter.partial_usage: a consumer that walks away
     # mid-stream never sees the final UsageReported, but the tokens were spent.
     _live_usage: dict[str, int] | None = field(default=None, init=False, repr=False)
+    _live_turn: dict[str, int] | None = field(default=None, init=False, repr=False)
     # Whether to ask for token counts via `stream_options`. See __post_init__.
     _ask_for_usage: bool = field(default=False, init=False, repr=False)
 
@@ -189,12 +190,20 @@ class OpenAICompatAdapter:
         self._ask_for_usage = not is_local_endpoint(self.endpoint)
 
     def partial_usage(self) -> UsageReported | None:
-        """Whatever has been counted so far, for a stream that ended early."""
-        if not self._live_usage:
+        """Whatever has been counted so far, for a stream that ended early.
+
+        Reads the banked turns *and* the turn still in flight. `_stream_turn`
+        folds its own counters in a `finally`, but when the outer generator is
+        closed the inner one is only finalized whenever the GC gets to it — so
+        relying on that alone loses exactly the turn the user walked away from.
+        Same reasoning, same fix, as AnthropicAPIAdapter.partial_usage.
+        """
+        if self._live_usage is None:
             return None
+        live = self._live_turn or {}
         return UsageReported(
-            input_tokens=self._live_usage["input_tokens"],
-            output_tokens=self._live_usage["output_tokens"],
+            input_tokens=self._live_usage["input_tokens"] + live.get("input_tokens", 0),
+            output_tokens=self._live_usage["output_tokens"] + live.get("output_tokens", 0),
         )
 
     def _headers(self) -> dict[str, str]:
@@ -253,15 +262,9 @@ class OpenAICompatAdapter:
 
                 text_parts: list[str] = []
                 buffer = _ToolCallBuffer()
-                # Usage is reported per completion, cumulatively within one —
-                # so it is assigned inside a turn and summed across turns, the
-                # same split AnthropicAPIAdapter makes. Accumulating inside a
-                # turn would multiply-count on any server that repeats the
-                # totals on more than one chunk.
-                turn_usage = {"input_tokens": 0, "output_tokens": 0}
                 try:
                     async for event in self._stream_turn(
-                        client, url, payload, text_parts, buffer, turn_usage
+                        client, url, payload, text_parts, buffer, totals
                     ):
                         yield event
                 except _StreamOptionsError:
@@ -273,11 +276,9 @@ class OpenAICompatAdapter:
                     self._ask_for_usage = False
                     payload.pop("stream_options", None)
                     async for event in self._stream_turn(
-                        client, url, payload, text_parts, buffer, turn_usage
+                        client, url, payload, text_parts, buffer, totals
                     ):
                         yield event
-                totals["input_tokens"] += turn_usage["input_tokens"]
-                totals["output_tokens"] += turn_usage["output_tokens"]
 
                 calls = buffer.finish()
                 if not calls:
@@ -340,37 +341,50 @@ class OpenAICompatAdapter:
         payload: dict[str, Any],
         text_parts: list[str],
         buffer: _ToolCallBuffer,
-        turn_usage: dict[str, int],
+        totals: dict[str, int],
     ) -> AsyncIterator[AgentEvent]:
-        """Stream one completion, filling ``text_parts``/``buffer``/``turn_usage``."""
-        async with client.stream("POST", url, json=payload) as response:
-            if response.status_code >= 400:
-                detail = await _error_detail(response, self.model)
-                if response.status_code == 400 and "stream_options" in detail:
-                    raise _StreamOptionsError(detail)
-                raise AgentError(detail)
-            async for line in response.aiter_lines():
-                chunk = _sse_payload(line)
-                if chunk is None:
-                    continue
+        """Stream one completion, filling ``text_parts``/``buffer``/``totals``."""
+        # This completion's own counters, folded into ``totals`` when it ends.
+        # Usage arrives cumulative within one completion, so it is assigned
+        # here and summed only across turns — the same split
+        # AnthropicAPIAdapter makes, and the reason its accounting has never
+        # multiplied on a server that repeats the totals per chunk.
+        turn_usage = {"input_tokens": 0, "output_tokens": 0}
+        self._live_turn = turn_usage
+        try:
+            async with client.stream("POST", url, json=payload) as response:
+                if response.status_code >= 400:
+                    detail = await _error_detail(response, self.model)
+                    if response.status_code == 400 and "stream_options" in detail:
+                        raise _StreamOptionsError(detail)
+                    raise AgentError(detail)
+                async for line in response.aiter_lines():
+                    chunk = _sse_payload(line)
+                    if chunk is None:
+                        continue
 
-                # Read from whatever chunk carries it: asked-for or not, a
-                # server may volunteer usage, and token logging is best-effort
-                # by design (see backend/usage.py). Assignment, not addition —
-                # these totals are for one completion and arrive cumulative.
-                usage = chunk.get("usage")
-                if isinstance(usage, dict):
-                    turn_usage["input_tokens"] = int(usage.get("prompt_tokens") or 0)
-                    turn_usage["output_tokens"] = int(usage.get("completion_tokens") or 0)
+                    # Read from whatever chunk carries it: asked-for or not, a
+                    # server may volunteer usage, and token logging is
+                    # best-effort by design (see backend/usage.py).
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        turn_usage["input_tokens"] = int(usage.get("prompt_tokens") or 0)
+                        turn_usage["output_tokens"] = int(usage.get("completion_tokens") or 0)
 
-                for choice in chunk.get("choices") or []:
-                    delta = choice.get("delta") or {}
-                    content = delta.get("content")
-                    if content:
-                        text_parts.append(str(content))
-                        yield TextDelta(str(content))
-                    for fragment in delta.get("tool_calls") or []:
-                        buffer.add(fragment)
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        content = delta.get("content")
+                        if content:
+                            text_parts.append(str(content))
+                            yield TextDelta(str(content))
+                        for fragment in delta.get("tool_calls") or []:
+                            buffer.add(fragment)
+        finally:
+            # Even a cancelled or failed turn already cost the user tokens, so
+            # bank whatever the server reported before we stopped reading.
+            for key in totals:
+                totals[key] += turn_usage[key]
+                turn_usage[key] = 0
 
 
 def _sse_payload(line: str) -> dict[str, Any] | None:

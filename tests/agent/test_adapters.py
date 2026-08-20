@@ -526,6 +526,28 @@ async def test_api_key_rides_along_as_a_bearer_token() -> None:
     assert seen == ["Bearer secret-key"]
 
 
+@pytest.mark.anyio
+async def test_abandoning_the_stream_still_reports_what_was_counted() -> None:
+    """Closing the tab mid-answer must not lose the turn it happened in.
+
+    Usage is banked per turn, and the fold runs in `_stream_turn`'s `finally` —
+    but closing the outer generator leaves the inner one for the GC, so
+    `partial_usage` reads the in-flight turn itself rather than waiting.
+    """
+    adapter = adapter_for([sse(text_chunk("long "), usage_chunk(70, 5), text_chunk("answer"))])
+
+    stream = adapter.run(
+        system_prompt="", messages=[Message("user", "hi")], tools=[], max_turns=4
+    )
+    assert isinstance(await stream.__anext__(), TextDelta)
+    assert isinstance(await stream.__anext__(), TextDelta)  # past the usage chunk
+    await stream.aclose()
+
+    partial = adapter.partial_usage()
+    assert partial is not None
+    assert (partial.usage["input_tokens"], partial.usage["output_tokens"]) == (70, 5)
+
+
 # --- the turn limit ---------------------------------------------------------
 
 
