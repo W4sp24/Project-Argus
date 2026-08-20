@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
-from backend.agent.adapters import Message, ToolFinished, ToolStarted
+from backend.agent.adapters import Message, Notice, ToolFinished, ToolStarted
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.chat import store
@@ -265,7 +265,8 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
         one course rather than leaving it to the model) are both optional and
         flow through to runners that accept them; runners with the legacy
         single-argument signature keep working.
-        Frames out: {type: "delta", text} ... {type: "done"} | {type: "error", detail}.
+        Frames out: {type: "delta", text} | {type: "tool", ...} |
+        {type: "notice", kind, detail} ... {type: "done"} | {type: "error", detail}.
         """
         await websocket.accept()
         runner = chat_runner or default_chat_runner(settings)
@@ -302,6 +303,15 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
                             if isinstance(item, str):
                                 text_parts.append(item)
                                 await websocket.send_json({"type": "delta", "text": item})
+                            elif isinstance(item, Notice):
+                                # Not a tool step, so deliberately not in
+                                # `steps`: it describes this run, not anything
+                                # the vault did, and persisting it would put a
+                                # non-tool row in `tools_json` for every reader
+                                # of that column to special-case.
+                                await websocket.send_json(
+                                    {"type": "notice", "kind": item.kind, "detail": item.detail}
+                                )
                             else:
                                 frame = _tool_frame(item)
                                 steps.append(frame)

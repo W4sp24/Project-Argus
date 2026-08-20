@@ -60,6 +60,31 @@ function CopyAnswer({ text }: { text: string }) {
  *  answer with "Something went wrong: …", which also threw away whatever the
  *  agent had already said; the partial text now stays and this sits under it. */
 function StatusLine({ message }: { message: ChatMessage }) {
+  // Run-level warnings sit above the ending, and show even on a turn that
+  // ended cleanly — the whole point is that a truncated answer used to look
+  // like a complete one.
+  const notices = (message.notices ?? []).map((detail, i) => (
+    <p
+      key={i}
+      className="flex items-start gap-1.5 border border-ink-faint bg-void px-3 py-1.5 font-mono text-meta text-ink-faint"
+    >
+      <span aria-hidden="true">!</span>
+      <span className="min-w-0 flex-1">{detail}</span>
+    </p>
+  ));
+
+  if (notices.length > 0) {
+    return (
+      <>
+        {notices}
+        <StatusEnding message={message} />
+      </>
+    );
+  }
+  return <StatusEnding message={message} />;
+}
+
+function StatusEnding({ message }: { message: ChatMessage }) {
   if (message.status === "error") {
     return (
       <p className="flex items-start gap-1.5 border border-danger bg-void px-3 py-1.5 font-mono text-meta text-danger">

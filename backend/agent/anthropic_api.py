@@ -28,6 +28,7 @@ from backend.agent.adapters import (
     AgentError,
     AgentEvent,
     Message,
+    Notice,
     TextDelta,
     ToolFinished,
     ToolSpec,
@@ -167,8 +168,18 @@ class AnthropicAPIAdapter:
         url = f"{self.endpoint.rstrip('/')}/messages"
         self._live_usage = totals
 
+        total_turns = max(1, max_turns)
+        hit_limit = False
+
         async with self._client() as client:
-            for _turn in range(max(1, max_turns)):
+            for turn in range(total_turns):
+                # See OpenAICompatAdapter.run: on the last turn a tool call
+                # produces a result the loop exits before reading, so the turn
+                # is forced to text instead. `tools` stays on the request even
+                # then — the Messages API rejects a conversation containing
+                # tool_use blocks if the request declares no tools.
+                final = turn == total_turns - 1
+                hit_limit = hit_limit or (final and turn > 0 and bool(tools))
                 payload: dict[str, Any] = {
                     "model": self.model,
                     "max_tokens": self.max_tokens,
@@ -179,6 +190,8 @@ class AnthropicAPIAdapter:
                     payload["system"] = system_prompt
                 if tools:
                     payload["tools"] = to_anthropic_tools(tools)
+                    if final:
+                        payload["tool_choice"] = {"type": "none"}
 
                 text_parts: list[str] = []
                 buffer = _BlockBuffer()
@@ -223,6 +236,14 @@ class AnthropicAPIAdapter:
                     )
                 conversation.append({"role": "user", "content": results})
 
+        if hit_limit:
+            yield Notice(
+                kind="turn_limit",
+                detail=(
+                    f"reached the {total_turns}-step limit for this turn — "
+                    "the answer may be incomplete"
+                ),
+            )
         yield UsageReported(**totals)
 
     async def _stream_turn(

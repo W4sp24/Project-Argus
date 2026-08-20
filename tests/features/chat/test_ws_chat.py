@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.agent.adapters import Notice
 from backend.core.config import Settings
 from backend.main import create_app
 
@@ -393,3 +394,36 @@ async def test_a_partial_answer_survives_a_mid_stream_disconnect(tmp_path: Path)
 
     assert [m["role"] for m in messages] == ["user", "assistant"]
     assert messages[1]["text"] == "Dijkstra finds ", "the delta that got through must persist"
+
+
+async def turn_limit_runner(message: str) -> AsyncIterator[str | Notice]:
+    yield "as far as I got"
+    yield Notice(kind="turn_limit", detail="reached the 12-step limit for this turn")
+
+
+def test_a_turn_limit_reaches_the_browser_without_becoming_a_tool_step(tmp_path: Path) -> None:
+    """Running out of tool turns used to be invisible everywhere.
+
+    The reply simply stopped, with no frame, no log and nothing in the
+    transcript to distinguish a truncated answer from a complete one. It rides
+    its own frame type rather than a tool step: it describes the run, not
+    anything the vault did, and `tools_json` is read as a list of tool steps by
+    both the client and the thread REST route.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    client = TestClient(create_app(Settings(_vault_path=vault), chat_runner=turn_limit_runner))
+
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "what did I write about graphs"})
+        frames = _turn(ws)
+
+    notice = next(f for f in frames if f["type"] == "notice")
+    assert notice["kind"] == "turn_limit"
+    assert "12-step limit" in notice["detail"]
+
+    thread_id = next(f for f in frames if f["type"] == "thread")["thread_id"]
+    stored = client.get(f"/api/chat/threads/{thread_id}").json()["messages"]
+    answer = stored[-1]
+    assert answer["text"] == "as far as I got", "the partial answer is still banked"
+    assert answer["tools"] == [], "a notice is not a tool step"

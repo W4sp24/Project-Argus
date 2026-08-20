@@ -16,6 +16,7 @@ import pytest
 from backend.agent.adapters import (
     AgentError,
     Message,
+    Notice,
     TextDelta,
     ToolFinished,
     ToolSpec,
@@ -523,6 +524,63 @@ async def test_api_key_rides_along_as_a_bearer_token() -> None:
     await collect(adapter, [])
 
     assert seen == ["Bearer secret-key"]
+
+
+# --- the turn limit ---------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_the_last_turn_is_spent_answering_not_calling_another_tool() -> None:
+    """Running out of turns used to end the reply mid-thought, silently.
+
+    The loop exits after dispatching the final turn's tool calls without ever
+    streaming a response to them, so the user saw a tool trace and then
+    nothing. The last turn now forbids tools, which turns a wasted call into an
+    answer built from whatever was already gathered.
+    """
+    spec, seen = spy_tool()
+    record: list[dict] = []
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="call_1", name="search_vault", arguments='{"query": "a"}')),
+            sse(text_chunk("here is what I found")),
+        ],
+        record=record,
+    )
+
+    events = await collect(adapter, [spec], max_turns=2)
+
+    assert [payload["tool_choice"] for payload in record] == ["auto", "none"]
+    assert len(seen) == 1
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "here is what I found"
+
+
+@pytest.mark.anyio
+async def test_hitting_the_turn_limit_says_so() -> None:
+    spec, _seen = spy_tool()
+    adapter = adapter_for(
+        [
+            sse(tool_chunk(0, call_id="call_1", name="search_vault", arguments='{"query": "a"}')),
+            sse(text_chunk("partial")),
+        ]
+    )
+
+    events = await collect(adapter, [spec], max_turns=2)
+
+    notice = next(e for e in events if isinstance(e, Notice))
+    assert notice.kind == "turn_limit"
+    assert "2-step limit" in notice.detail
+
+
+@pytest.mark.anyio
+async def test_a_turn_that_ends_on_its_own_says_nothing() -> None:
+    """The notice must mean something, so it must not fire on every run."""
+    spec, _seen = spy_tool()
+    adapter = adapter_for([sse(text_chunk("answered straight away"))])
+
+    events = await collect(adapter, [spec], max_turns=8)
+
+    assert not [e for e in events if isinstance(e, Notice)]
 
 
 # --- usage on hosted endpoints ----------------------------------------------

@@ -211,6 +211,22 @@ class ToolFinished:
 
 
 @dataclass(frozen=True)
+class Notice:
+    """Something the user should know about the run itself, not its answer.
+
+    Today there is exactly one: the agent used every tool turn it was allowed.
+    That case was completely silent before — the loop simply fell out, the last
+    tool result was never read by anything, and the reply stopped mid-thought
+    with no explanation anywhere. A model that searches badly and keeps
+    retrying looks, from the outside, exactly like a model that cannot search
+    at all.
+    """
+
+    kind: Literal["turn_limit"]
+    detail: str
+
+
+@dataclass(frozen=True)
 class UsageReported:
     """Token accounting for one run.
 
@@ -235,7 +251,7 @@ class UsageReported:
         }
 
 
-AgentEvent = TextDelta | ToolStarted | ToolFinished | UsageReported
+AgentEvent = TextDelta | ToolStarted | ToolFinished | Notice | UsageReported
 
 
 def summarize_tool_result(

@@ -40,6 +40,10 @@ export interface ChatMessage {
   steps: ToolStep[];
   status: MessageStatus;
   error?: string;
+  /** Run-level warnings from the `notice` frame — the agent hitting its step
+   *  limit, today. Ephemeral: not persisted with the message, because it
+   *  describes the run rather than the answer. */
+  notices?: string[];
   startedAt?: number;
   endedAt?: number;
   /** `/plan` output: real, but never written to `chat_messages` (see runPlanner). */
@@ -228,6 +232,19 @@ export function ChatProvider({ children, course }: { children: ReactNode; course
           setMessages((prev) =>
             patchLast(prev, (m) => ({ ...m, steps: applyToolFrame(m.steps, frame) })),
           );
+          break;
+        }
+        case "notice": {
+          // Flushed first for the same reason a tool frame is: the warning
+          // belongs where it happened in the stream, not after whatever text
+          // was still buffered.
+          flush();
+          const detail = String(frame.detail ?? "");
+          if (detail) {
+            setMessages((prev) =>
+              patchLast(prev, (m) => ({ ...m, notices: [...(m.notices ?? []), detail] })),
+            );
+          }
           break;
         }
         case "done": {

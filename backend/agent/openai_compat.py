@@ -34,6 +34,7 @@ from backend.agent.adapters import (
     AgentError,
     AgentEvent,
     Message,
+    Notice,
     TextDelta,
     ToolFinished,
     ToolSpec,
@@ -226,8 +227,19 @@ class OpenAICompatAdapter:
         self._live_usage = totals
         url = chat_completions_url(self.endpoint)
 
+        total_turns = max(1, max_turns)
+        hit_limit = False
+
         async with self._client() as client:
-            for _turn in range(max(1, max_turns)):
+            for turn in range(total_turns):
+                # Reaching the last turn means every earlier one was spent on
+                # tool calls, so the model is out of room to look anything else
+                # up. Left on "auto" it would spend this turn on another call
+                # whose result the loop exits before reading — the user gets a
+                # tool trace and then nothing. Forcing text spends the last turn
+                # answering from what was already gathered.
+                final = turn == total_turns - 1
+                hit_limit = hit_limit or (final and turn > 0 and bool(tools))
                 payload: dict[str, Any] = {
                     "model": self.model,
                     "messages": conversation,
@@ -235,7 +247,7 @@ class OpenAICompatAdapter:
                 }
                 if tools:
                     payload["tools"] = to_openai_tools(tools)
-                    payload["tool_choice"] = "auto"
+                    payload["tool_choice"] = "none" if final else "auto"
                 if self._ask_for_usage:
                     payload["stream_options"] = {"include_usage": True}
 
@@ -309,6 +321,14 @@ class OpenAICompatAdapter:
                         }
                     )
 
+        if hit_limit:
+            yield Notice(
+                kind="turn_limit",
+                detail=(
+                    f"reached the {total_turns}-step limit for this turn — "
+                    "the answer may be incomplete"
+                ),
+            )
         yield UsageReported(
             input_tokens=totals["input_tokens"], output_tokens=totals["output_tokens"]
         )

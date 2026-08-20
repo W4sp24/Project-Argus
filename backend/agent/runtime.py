@@ -21,6 +21,7 @@ from typing import Any
 
 from backend.agent.adapters import (
     Message,
+    Notice,
     TextDelta,
     ToolFinished,
     ToolSpec,
@@ -43,7 +44,12 @@ logger = logging.getLogger("argus.rag")
 MODEL = "claude-opus-4-8"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "chat.md"
 MAX_NOTE_CHARS = 20_000
-MAX_TURNS = 8
+# A search -> read -> re-search cycle costs three turns before the model has
+# said anything, and a weaker model spends more of them recovering from a thin
+# first search. Eight left too little room to escalate; the last turn is now
+# forced to text (see OpenAICompatAdapter.run), so a higher bound buys real
+# looking rather than a longer silence.
+MAX_TURNS = 12
 DISALLOWED_TOOLS = ("Bash", "Write", "Edit")  # read-only agent (P1)
 # Upper bound on waiting for the background index warm before searching anyway.
 # Generous: a cold embedding-model load is ~20s, and proceeding early means a
@@ -332,7 +338,7 @@ class ChatAgent:
         course: str | None = None,
         history: Sequence[Message] | None = None,
         thread_id: int | None = None,
-    ) -> AsyncIterator[str | ToolStarted | ToolFinished]:
+    ) -> AsyncIterator[str | ToolStarted | ToolFinished | Notice]:
         """Yield the turn's events, on whichever backend is chosen.
 
         Text arrives as plain ``str`` deltas — the shape every caller has
@@ -390,6 +396,12 @@ class ChatAgent:
                 if isinstance(event, TextDelta):
                     yield event.text
                 elif isinstance(event, ToolStarted | ToolFinished):
+                    yield event
+                elif isinstance(event, Notice):
+                    # Worth a log line as well as a frame: a model that keeps
+                    # hitting the step limit is a retrieval problem to look
+                    # into, and it used to leave no trace anywhere at all.
+                    logger.warning("chat turn limit reached (%s): %s", resolved_model, event.detail)
                     yield event
                 elif isinstance(event, UsageReported):
                     # Fire-and-forget usage logging (§14) — never breaks chat.
