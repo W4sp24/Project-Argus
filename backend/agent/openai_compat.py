@@ -40,6 +40,7 @@ from backend.agent.adapters import (
     ToolSpec,
     ToolStarted,
     UsageReported,
+    describe_arguments,
     flatten_tool_result,
     is_local_endpoint,
     require_user_turn,
@@ -137,12 +138,16 @@ class _ToolCallBuffer:
         return any(call.get("name") for call in self._calls.values())
 
 
-def parse_tool_arguments(raw: str) -> dict[str, Any]:
-    """Parse a tool call's argument JSON, tolerating the empty-string case.
+def parse_tool_arguments(raw: str) -> dict[str, Any] | None:
+    """Parse a tool call's argument JSON. ``None`` means it would not parse.
 
-    Small models sometimes emit ``""`` or malformed JSON for a no-argument
-    tool. An empty dict lets the handler apply its own validation and return a
-    readable error the model can recover from, which beats aborting the turn.
+    Small models emit ``""`` for a no-argument tool, and that is not an error —
+    it becomes an empty dict, and the handler applies its own validation. Text
+    that is present but not a JSON object *is* an error, and the two used to be
+    flattened together into ``{}``: the handler then raised ``KeyError`` on a
+    missing key and the model read ``error: 'query'``, which says nothing about
+    what went wrong. Telling them apart is what lets the dispatcher answer with
+    the shape the tool actually wanted.
     """
     text = (raw or "").strip()
     if not text:
@@ -150,8 +155,8 @@ def parse_tool_arguments(raw: str) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 @dataclass
@@ -303,7 +308,7 @@ class OpenAICompatAdapter:
                 )
 
                 for call in calls:
-                    args = parse_tool_arguments(call["arguments"])
+                    args = parse_tool_arguments(call["arguments"]) or {}
                     yield ToolStarted(call_id=call["id"], name=call["name"], args=args)
                     result_text = await _dispatch(by_name, call)
                     yield ToolFinished(
@@ -411,9 +416,16 @@ async def _dispatch(by_name: dict[str, ToolSpec], call: dict[str, str]) -> str:
     """
     spec = by_name.get(call["name"])
     if spec is None:
-        return f"error: unknown tool {call['name']!r}"
+        known = ", ".join(sorted(by_name)) or "none"
+        return f"error: unknown tool {call['name']!r} — available tools are {known}"
+    args = parse_tool_arguments(call["arguments"])
+    if args is None:
+        return (
+            f"error: the arguments for {call['name']} were not a JSON object — "
+            f"send something like {describe_arguments(spec)}"
+        )
     try:
-        result = await spec.handler(parse_tool_arguments(call["arguments"]))
+        result = await spec.handler(args)
     except Exception as exc:  # noqa: BLE001 - surfaced to the model, not swallowed
         return f"error: {exc}"
     return flatten_tool_result(result)

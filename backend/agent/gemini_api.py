@@ -332,7 +332,8 @@ async def _dispatch(by_name: dict[str, ToolSpec], call: dict[str, Any]) -> str:
     """Run one tool call; failures come back as text the model can recover from."""
     spec = by_name.get(call["name"])
     if spec is None:
-        return f"error: unknown tool {call['name']!r}"
+        known = ", ".join(sorted(by_name)) or "none"
+        return f"error: unknown tool {call['name']!r} — available tools are {known}"
     try:
         result = await spec.handler(call["args"])
     except Exception as exc:  # noqa: BLE001 - surfaced to the model, not swallowed

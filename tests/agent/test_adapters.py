@@ -271,19 +271,27 @@ async def test_max_turns_exhaustion_stops_the_loop() -> None:
 
 
 @pytest.mark.anyio
-async def test_malformed_tool_arguments_reach_the_handler_as_empty_dict() -> None:
+async def test_malformed_tool_arguments_come_back_with_the_shape_that_was_wanted() -> None:
+    """The handler used to be called with `{}` and raise `KeyError('query')`,
+    which reached the model as `error: 'query'` — naming neither the tool nor
+    what it should have sent, so the next attempt was another guess."""
+    sent: list[dict] = []
     adapter = adapter_for(
         [
             sse(tool_chunk(0, call_id="c1", name="search_vault", arguments="{not json")),
             sse(text_chunk("recovered")),
-        ]
+        ],
+        record=sent,
     )
     spec, seen = spy_tool()
 
     events = await collect(adapter, [spec])
 
-    assert seen == [{}], "the handler validates and replies; the turn is not aborted"
-    assert texts(events) == "recovered"
+    assert seen == [], "a call that did not parse never reaches the handler"
+    reply = next(m for m in sent[1]["messages"] if m.get("role") == "tool")
+    assert "not a JSON object" in reply["content"]
+    assert '{"query": "<string>"}' in reply["content"]
+    assert texts(events) == "recovered", "the turn is not aborted"
 
 
 @pytest.mark.anyio
@@ -706,9 +714,11 @@ async def test_list_models_returns_sorted_ids() -> None:
     ]
 
 
-def test_parse_tool_arguments_tolerates_empty_and_non_object_json() -> None:
+def test_parse_tool_arguments_separates_absent_from_unparseable() -> None:
+    """A no-argument tool emitting "" is normal; text that is not a JSON object
+    is a real error, and flattening both to `{}` lost the difference."""
     assert parse_tool_arguments('{"a": 1}') == {"a": 1}
     assert parse_tool_arguments("") == {}
     assert parse_tool_arguments("   ") == {}
-    assert parse_tool_arguments("[1,2]") == {}
-    assert parse_tool_arguments("garbage") == {}
+    assert parse_tool_arguments("[1,2]") is None
+    assert parse_tool_arguments("garbage") is None

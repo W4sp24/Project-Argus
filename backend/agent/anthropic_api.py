@@ -34,6 +34,7 @@ from backend.agent.adapters import (
     ToolSpec,
     ToolStarted,
     UsageReported,
+    describe_arguments,
     flatten_tool_result,
     require_user_turn,
     summarize_tool_result,
@@ -91,16 +92,22 @@ class _BlockBuffer:
         return calls
 
 
-def _parse(raw: str) -> dict[str, Any]:
-    """Parse accumulated input JSON; an empty dict lets the handler complain."""
+def _parse(raw: str) -> dict[str, Any] | None:
+    """Parse accumulated input JSON. ``None`` means it would not parse.
+
+    See :func:`backend.agent.openai_compat.parse_tool_arguments`: an absent
+    input is an empty dict for the handler to validate, but text that is not a
+    JSON object is a real error, and the dispatcher answers it with the shape
+    the tool wanted instead of letting a KeyError become ``error: 'query'``.
+    """
     text = (raw or "").strip()
     if not text:
         return {}
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 @dataclass
@@ -208,7 +215,16 @@ class AnthropicAPIAdapter:
                 if "".join(text_parts):
                     assistant.append({"type": "text", "text": "".join(text_parts)})
                 assistant.extend(
-                    {"type": "tool_use", "id": c["id"], "name": c["name"], "input": c["input"]}
+                    # `or {}` because input is None when the fragments did not
+                    # parse, and a null input is not a valid tool_use block —
+                    # the conversation this echoes back has to stay legal even
+                    # when what the model sent was not.
+                    {
+                        "type": "tool_use",
+                        "id": c["id"],
+                        "name": c["name"],
+                        "input": c["input"] or {},
+                    }
                     for c in calls
                 )
                 conversation.append({"role": "assistant", "content": assistant})
@@ -218,6 +234,8 @@ class AnthropicAPIAdapter:
                 results = []
                 for call in calls:
                     args = call["input"] or {}
+                    # `input` is None only when the fragments did not parse;
+                    # the trace shows the empty call and _dispatch explains it.
                     yield ToolStarted(call_id=call["id"], name=call["name"], args=args)
                     result_text = await _dispatch(by_name, call)
                     yield ToolFinished(
@@ -343,7 +361,13 @@ async def _dispatch(by_name: dict[str, ToolSpec], call: dict[str, Any]) -> str:
     """Run one tool call; failures come back as text the model can recover from."""
     spec = by_name.get(call["name"])
     if spec is None:
-        return f"error: unknown tool {call['name']!r}"
+        known = ", ".join(sorted(by_name)) or "none"
+        return f"error: unknown tool {call['name']!r} — available tools are {known}"
+    if call["input"] is None:
+        return (
+            f"error: the arguments for {call['name']} were not a JSON object — "
+            f"send something like {describe_arguments(spec)}"
+        )
     try:
         result = await spec.handler(call["input"])
     except Exception as exc:  # noqa: BLE001 - surfaced to the model, not swallowed

@@ -223,11 +223,19 @@ def build_vault_tools(
         # A fixed course (Course Hub) always wins over whatever the model
         # itself passed — the user already scoped this whole conversation to
         # one course by opening it from there.
+        query = str(args.get("query") or "").strip()
+        if not query:
+            # Named, with an example: a handler that raises KeyError here hands
+            # the model `error: 'query'`, which is not enough to correct from.
+            return _tool_text(
+                'error: search_vault needs a non-empty "query" string, '
+                'e.g. {"query": "dijkstra shortest path"}'
+            )
         effective_course = course or (str(args["course"]) if args.get("course") else None)
         hits = await asyncio.to_thread(
             retrieve,
             index,
-            str(args["query"]),
+            query,
             settings.vault_path,
             k=8,
             course=effective_course,
@@ -258,6 +266,12 @@ def build_vault_tools(
         )
 
     async def read_note(args: dict[str, Any]) -> dict[str, Any]:
+        if not str(args.get("path") or "").strip():
+            return _tool_text(
+                'error: read_note needs a "path" string — a vault-relative path as '
+                "returned by search_vault or list_notes, "
+                'e.g. {"path": "15-Courses/CS201/Lecture-03.md"}'
+            )
         rel_path = str(args["path"]).replace("\\", "/")
         if not is_indexable(rel_path, taxonomy=settings.taxonomy):
             return _tool_text("error: that path is not readable")

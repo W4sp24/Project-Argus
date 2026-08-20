@@ -134,6 +134,30 @@ def json_schema(
     }
 
 
+def describe_arguments(spec: ToolSpec | None) -> str:
+    """One example argument object for a tool, rendered from its schema.
+
+    Feeds the error a model reads when its own arguments would not parse. The
+    alternative — and what used to happen — is that the handler raises
+    ``KeyError('query')`` and the model is handed the string ``error: 'query'``,
+    which names neither the tool nor the shape it should have sent, so the next
+    attempt is another guess.
+    """
+    if spec is None:
+        return "{}"
+    properties = spec.parameters.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return "{}"
+    required = spec.parameters.get("required")
+    names = [name for name in properties if name in required] if required else list(properties)
+    return json.dumps(
+        {
+            name: f"<{(properties.get(name) or {}).get('type', 'value')}>"
+            for name in (names or list(properties))
+        }
+    )
+
+
 # --- conversation -------------------------------------------------------
 
 

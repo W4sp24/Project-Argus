@@ -326,6 +326,20 @@ async def test_a_completed_stream_records_usage_exactly_once(
 
 
 @pytest.mark.anyio
+async def test_a_missing_argument_is_explained_not_raised(settings: Settings) -> None:
+    """`str(args["query"])` used to raise KeyError, and the model read the whole
+    of `error: 'query'` — which names neither the tool nor the shape it wanted,
+    so the next attempt was another guess and the turn budget drained."""
+    tools = build_vault_tools(settings, FakeIndex())
+
+    searched = json.dumps(await tool(tools, "search_vault").handler({}))
+    read = json.dumps(await tool(tools, "read_note").handler({"path": "  "}))
+
+    assert "search_vault needs" in searched and "dijkstra" in searched
+    assert "read_note needs" in read and "vault-relative" in read
+
+
+@pytest.mark.anyio
 async def test_list_notes_browses_a_folder(settings: Settings) -> None:
     """The escape hatch for a search that came back thin.
 
