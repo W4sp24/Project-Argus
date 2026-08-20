@@ -21,6 +21,13 @@ from backend.core.config import Settings
 from backend.core.model_registry import save_model_prefs, save_user_models
 from backend.core.taxonomy import Taxonomy
 
+NO_AI_NOTE = """---
+tags: [no-ai]
+---
+
+private thoughts
+"""
+
 
 class FakeIndex:
     """Stands in for VaultIndex, recording when it was queried."""
@@ -302,6 +309,43 @@ async def test_a_completed_stream_records_usage_exactly_once(
     assert [chunk async for chunk in agent.stream_chat("hi")] == ["a long ", "expensive answer"]
 
     assert _usage_rows(settings) == [("chat", 400, 800)]
+
+
+@pytest.mark.anyio
+async def test_read_note_refuses_a_no_ai_note_outside_the_private_folder(
+    settings: Settings,
+) -> None:
+    """I3's tag half, which `is_indexable` never checked.
+
+    Indexing excludes a `#no-ai` note, so `search_vault` can never surface its
+    path — but `read_note` gated on the directory-and-suffix check alone, so a
+    model that guessed the path, or was handed it, read the file anyway. The
+    chat prompt's assurance that "the tools already exclude them" was true of
+    search and false here.
+    """
+    note = settings.vault_path / "50-Reference" / "diary.md"
+    note.write_text(NO_AI_NOTE, encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    result = await tool(tools, "read_note").handler({"path": "50-Reference/diary.md"})
+
+    assert "not readable" in json.dumps(result)
+    assert "private thoughts" not in json.dumps(result)
+
+
+@pytest.mark.anyio
+async def test_read_note_cannot_walk_out_of_the_vault(settings: Settings, tmp_path) -> None:
+    """`is_indexable` filters directory names and suffixes and has no opinion
+    on `..`, so a relative path was resolved against the vault raw. The model
+    picks this argument, so containment is checked where it is used."""
+    outside = tmp_path / "outside.md"
+    outside.write_text("not yours", encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    result = await tool(tools, "read_note").handler({"path": "../outside.md"})
+
+    assert "not readable" in json.dumps(result)
+    assert "not yours" not in json.dumps(result)
 
 
 def test_a_model_less_turn_is_labelled_with_the_model_that_actually_ran(

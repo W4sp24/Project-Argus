@@ -19,6 +19,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import frontmatter
+
 from backend.agent.adapters import (
     Message,
     Notice,
@@ -38,6 +40,7 @@ from backend.core.taxonomy import Taxonomy
 from backend.rag.index import VaultIndex
 from backend.telemetry.audit import log_prompt
 from backend.vault.paths import is_indexable
+from backend.vault.privacy import is_visible
 
 logger = logging.getLogger("argus.rag")
 
@@ -238,11 +241,28 @@ def build_vault_tools(
         rel_path = str(args["path"]).replace("\\", "/")
         if not is_indexable(rel_path, taxonomy=settings.taxonomy):
             return _tool_text("error: that path is not readable")
-        file_path = settings.vault_path / rel_path
+        # `is_indexable` filters directory names and suffixes; it has no
+        # opinion on `..`, so "../../elsewhere.md" walks straight out of the
+        # vault. The model chooses this argument, so the containment check
+        # belongs here rather than in a caller that might forget it.
+        vault_root = settings.vault_path.resolve()
+        file_path = (settings.vault_path / rel_path).resolve()
+        if not file_path.is_relative_to(vault_root):
+            return _tool_text("error: that path is not readable")
         if not file_path.is_file():
             return _tool_text(f"error: no note at {rel_path}")
+        text = file_path.read_text(encoding="utf-8", errors="ignore")
+        # The other half of I3. `is_indexable` is the directory half only, so a
+        # `#no-ai` note living outside the private folder passed it: indexing
+        # excludes such a note, meaning search can never surface the path — but
+        # a model that guessed the path, or was told it, could read the file.
+        # The prompt's claim that "the tools already exclude them" was true of
+        # search and not of this. `is_visible` is the full check, and its own
+        # docstring says an outward-facing read must use it.
+        if not is_visible(rel_path, frontmatter.loads(text), taxonomy=settings.taxonomy):
+            return _tool_text("error: that path is not readable")
         log_prompt(settings.db_path, "chat", model_label, [rel_path])
-        return _tool_text(file_path.read_text(encoding="utf-8", errors="ignore")[:MAX_NOTE_CHARS])
+        return _tool_text(text[:MAX_NOTE_CHARS])
 
     async def list_tasks(_args: dict[str, Any]) -> dict[str, Any]:
         from backend.core.db import connect, init_schema
