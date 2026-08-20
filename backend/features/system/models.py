@@ -28,6 +28,7 @@ from backend.agent.adapters import (
     KNOWN_PROVIDERS,
     PROVIDER_ANTHROPIC_API,
     PROVIDER_CLAUDE_CLI,
+    PROVIDER_GEMINI,
     PROVIDER_OPENAI_COMPAT,
     AgentError,
     ProbeResult,
@@ -550,6 +551,15 @@ async def _list_available(
 
             return await asyncio.wait_for(
                 list_models(api_key, endpoint or DEFAULT_ENDPOINT), timeout=15
+            )
+        if provider == PROVIDER_GEMINI:
+            if not api_key:
+                return None
+            from backend.agent.gemini_api import DEFAULT_ENDPOINT as GEMINI_ENDPOINT
+            from backend.agent.gemini_api import list_models as gemini_list_models
+
+            return await asyncio.wait_for(
+                gemini_list_models(api_key, endpoint or GEMINI_ENDPOINT), timeout=15
             )
     except Exception:  # noqa: BLE001 - unreachable is a normal answer here
         return None

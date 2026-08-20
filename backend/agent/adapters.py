@@ -39,12 +39,23 @@ from typing import Any, Literal, Protocol
 PROVIDER_CLAUDE_CLI = "anthropic"
 PROVIDER_ANTHROPIC_API = "anthropic-api"
 PROVIDER_OPENAI_COMPAT = "openai-compat"
-KNOWN_PROVIDERS = (PROVIDER_CLAUDE_CLI, PROVIDER_ANTHROPIC_API, PROVIDER_OPENAI_COMPAT)
+# Gemini gets its own provider rather than riding the OpenAI-compatible shim
+# Google also publishes: that shim's streamed tool-call fragments do not
+# reliably carry an `index`, which is the only key `_ToolCallBuffer` can join
+# on, so two calls in one turn would silently become one. See
+# backend/agent/gemini_api.py.
+PROVIDER_GEMINI = "gemini"
+KNOWN_PROVIDERS = (
+    PROVIDER_CLAUDE_CLI,
+    PROVIDER_ANTHROPIC_API,
+    PROVIDER_OPENAI_COMPAT,
+    PROVIDER_GEMINI,
+)
 
 # Providers whose traffic leaves the machine. Local endpoints (Ollama and
 # friends) are the whole point of the "notes never leave your machine" promise,
 # so the UI badges this distinction — see `is_local_endpoint`.
-HOSTED_PROVIDERS = (PROVIDER_CLAUDE_CLI, PROVIDER_ANTHROPIC_API)
+HOSTED_PROVIDERS = (PROVIDER_CLAUDE_CLI, PROVIDER_ANTHROPIC_API, PROVIDER_GEMINI)
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
 
@@ -588,6 +599,20 @@ def adapter_for_entry(
             model=model_id,
             api_key=resolved_key,
             endpoint=str(entry.get("endpoint") or DEFAULT_ENDPOINT),
+        )
+
+    if provider == PROVIDER_GEMINI:
+        from backend.agent.gemini_api import DEFAULT_ENDPOINT as GEMINI_ENDPOINT
+        from backend.agent.gemini_api import GeminiAdapter
+
+        if not resolved_key:
+            raise AgentError(
+                f"no API key stored for {name!r} — re-add it under /system to store one"
+            )
+        return GeminiAdapter(
+            model=model_id,
+            api_key=resolved_key,
+            endpoint=str(entry.get("endpoint") or GEMINI_ENDPOINT),
         )
 
     if provider == PROVIDER_OPENAI_COMPAT:
