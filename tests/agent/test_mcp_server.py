@@ -42,9 +42,18 @@ def fake_tools() -> list[ToolSpec]:
     async def tasks(_args: dict) -> dict:
         return text_result({"today": [], "overdue": []})
 
+    async def notes(_args: dict) -> dict:
+        return text_result({"paths": ["50-Reference/algorithms.md"]})
+
     return [
         ToolSpec("search_vault", "search", json_schema({"query": {"type": "string"}}), search),
         ToolSpec("read_note", "read", json_schema({"path": {"type": "string"}}), read),
+        ToolSpec(
+            "list_notes",
+            "browse",
+            json_schema({"folder": {"type": "string"}}, required=[]),
+            notes,
+        ),
         ToolSpec("list_tasks", "tasks", json_schema({}), tasks),
     ]
 

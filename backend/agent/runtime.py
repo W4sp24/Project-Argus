@@ -40,13 +40,18 @@ from backend.core.taxonomy import Taxonomy
 from backend.rag.index import VaultIndex
 from backend.telemetry.audit import log_prompt
 from backend.vault.paths import is_indexable
-from backend.vault.privacy import is_visible
+from backend.vault.privacy import is_no_ai_text, is_private_path, is_visible
 
 logger = logging.getLogger("argus.rag")
 
 MODEL = "claude-opus-4-8"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "chat.md"
 MAX_NOTE_CHARS = 20_000
+# How many paths one `list_notes` call may return. A vault is thousands of
+# notes; handing all of them to a model burns the context the answer needs
+# and buys nothing, since anything past the first screenful is noise. The
+# reply says when it truncated, so the model narrows rather than guesses.
+MAX_LIST_PATHS = 50
 # A search -> read -> re-search cycle costs three turns before the model has
 # said anything, and a weaker model spends more of them recovering from a thin
 # first search. Eight left too little room to escalate; the last turn is now
@@ -143,6 +148,21 @@ def _summarize_read_note(args: dict[str, Any], result_text: str) -> ToolSummary:
         paths=(path,) if path else (),
         ok=not result_text.startswith("error:"),
     )
+
+
+def _summarize_list_notes(args: dict[str, Any], result_text: str) -> ToolSummary:
+    """Deliberately carries no ``paths``.
+
+    Citation chips are derived from the trace (the plan's correction #1), which
+    makes I6 structural rather than prompt-enforced. A listed path is not a
+    read one — the model has seen only a filename — so putting them here would
+    manufacture citations for content nothing has looked at.
+    """
+    payload = _parse_json(result_text)
+    paths = payload.get("paths") if isinstance(payload, dict) else None
+    where = str(args.get("folder") or "the vault")
+    count = len(paths) if isinstance(paths, list) else 0
+    return ToolSummary(label="list_notes", detail=f"{count} notes in {where}")
 
 
 def _summarize_list_tasks(_args: dict[str, Any], result_text: str) -> ToolSummary:
@@ -264,6 +284,73 @@ def build_vault_tools(
         log_prompt(settings.db_path, "chat", model_label, [rel_path])
         return _tool_text(text[:MAX_NOTE_CHARS])
 
+    def _note_is_visible(rel_path: str) -> bool:
+        """The full I3 check for one listed path, tolerating a broken header.
+
+        ``backend.vault.notes.list_notes`` treats unparseable frontmatter as
+        "no frontmatter" and lists the note anyway. Failing closed here instead
+        would make a note with a typo in its YAML silently vanish from browse —
+        which is the exact complaint this tool exists to answer. So a parse
+        failure falls back to scanning the raw text for the tag, which is the
+        half of ``is_no_ai_text`` that does not need the header.
+        """
+        file_path = settings.vault_path / rel_path
+        try:
+            post = frontmatter.load(file_path)
+        except Exception:  # noqa: BLE001 - a malformed header is not a privacy verdict
+            try:
+                text = file_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                return False
+            return not is_private_path(rel_path, taxonomy=settings.taxonomy) and not (
+                is_no_ai_text({}, text)
+            )
+        return is_visible(rel_path, post, taxonomy=settings.taxonomy)
+
+    async def list_notes(args: dict[str, Any]) -> dict[str, Any]:
+        from backend.vault.notes import list_notes as walk_vault
+
+        folder = str(args["folder"]).strip() if args.get("folder") else None
+        needle = (
+            str(args["name_contains"]).strip().lower() if args.get("name_contains") else None
+        )
+
+        def _collect() -> tuple[list[str], bool]:
+            # Filter cheaply first, then pay the privacy check only on what
+            # survives. Checking every note in the vault would re-read the
+            # whole thing; capping before the check would let a `#no-ai` note
+            # consume a slot and, worse, decide which paths get returned.
+            paths: list[str] = []
+            for note in walk_vault(
+                settings.vault_path, taxonomy=settings.taxonomy, folder=folder
+            ):
+                if needle and needle not in note.path.lower():
+                    continue
+                if not _note_is_visible(note.path):
+                    continue
+                if len(paths) >= MAX_LIST_PATHS:
+                    return paths, True
+                paths.append(note.path)
+            return paths, False
+
+        # to_thread for the same reason search_vault uses it: rglob over a real
+        # vault is seconds of blocking I/O, and the deltas are already
+        # streaming to the browser.
+        paths, truncated = await asyncio.to_thread(_collect)
+        if not paths:
+            where = f" under {folder}" if folder else ""
+            match = f" matching {needle!r}" if needle else ""
+            return _tool_text(
+                {"paths": [], "note": f"no notes{where}{match} — try a broader folder or name"}
+            )
+        payload: dict[str, Any] = {"paths": paths}
+        if truncated:
+            payload["note"] = (
+                f"only the {MAX_LIST_PATHS} most recently edited are shown — "
+                "narrow it with folder or name_contains"
+            )
+        return _tool_text(payload)
+
     async def list_tasks(_args: dict[str, Any]) -> dict[str, Any]:
         from backend.core.db import connect, init_schema
         from backend.vault.tasks import bucketed_tasks, refresh_cache
@@ -306,6 +393,34 @@ def build_vault_tools(
             parameters=json_schema({"path": {"type": "string"}}),
             handler=read_note,
             summarize=_summarize_read_note,
+        ),
+        ToolSpec(
+            name="list_notes",
+            description=(
+                "List note paths in the vault, newest first, optionally under one folder "
+                "and/or matching a fragment of the path. Use this when search_vault comes "
+                "back thin or empty and you need to see what actually exists — for example "
+                "when the user names a note, a course or a topic by a word that may be in "
+                "the filename rather than the text. Returns paths only; follow up with "
+                "read_note to see what one says."
+            ),
+            parameters=json_schema(
+                {
+                    "folder": {
+                        "type": "string",
+                        "description": (
+                            "optional vault-relative folder, e.g. '15-Courses/CS201'"
+                        ),
+                    },
+                    "name_contains": {
+                        "type": "string",
+                        "description": "optional case-insensitive fragment of the path",
+                    },
+                },
+                required=[],
+            ),
+            handler=list_notes,
+            summarize=_summarize_list_notes,
         ),
         ToolSpec(
             name="list_tasks",

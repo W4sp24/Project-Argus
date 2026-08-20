@@ -16,10 +16,24 @@ from pathlib import Path
 import pytest
 
 from backend.agent.adapters import resolve_run_target
-from backend.agent.runtime import MODEL, ChatAgent, _load_system_prompt, build_vault_tools
+from backend.agent.runtime import (
+    MODEL,
+    ChatAgent,
+    _load_system_prompt,
+    _summarize_list_notes,
+    build_vault_tools,
+)
 from backend.core.config import Settings
 from backend.core.model_registry import save_model_prefs, save_user_models
 from backend.core.taxonomy import Taxonomy
+
+BROKEN_HEADER_NOTE = """---
+tags: [unclosed
+---
+
+still mine
+"""
+
 
 NO_AI_NOTE = """---
 tags: [no-ai]
@@ -155,7 +169,7 @@ async def test_list_tasks_returns_real_vault_buckets(settings: Settings) -> None
 
 def test_build_vault_tools_exposes_only_read_only_tools(settings: Settings) -> None:
     names = {spec.name for spec in build_vault_tools(settings, FakeIndex())}
-    assert names == {"search_vault", "read_note", "list_tasks"}
+    assert names == {"search_vault", "read_note", "list_notes", "list_tasks"}
     assert not any(name.startswith("propose_") for name in names)
 
 
@@ -309,6 +323,96 @@ async def test_a_completed_stream_records_usage_exactly_once(
     assert [chunk async for chunk in agent.stream_chat("hi")] == ["a long ", "expensive answer"]
 
     assert _usage_rows(settings) == [("chat", 400, 800)]
+
+
+@pytest.mark.anyio
+async def test_list_notes_browses_a_folder(settings: Settings) -> None:
+    """The escape hatch for a search that came back thin.
+
+    Before this the read surface was search / read-one / list-tasks, so a model
+    that could not phrase a query the embeddings liked had no way to discover
+    that a note existed at all.
+    """
+    course = settings.vault_path / "15-Courses" / "CS201"
+    course.mkdir(parents=True)
+    (course / "Lecture-03-Graphs.md").write_text("dijkstra", encoding="utf-8")
+    (course / "Exam-1-review.md").write_text("revision", encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({"folder": "15-Courses/CS201"})
+    paths = json.loads(json.loads(json.dumps(listed))["content"][0]["text"])["paths"]
+
+    assert sorted(paths) == [
+        "15-Courses/CS201/Exam-1-review.md",
+        "15-Courses/CS201/Lecture-03-Graphs.md",
+    ]
+    assert "50-Reference/algorithms.md" not in paths, "the folder filter is not advisory"
+
+
+@pytest.mark.anyio
+async def test_list_notes_matches_on_the_filename(settings: Settings) -> None:
+    """The case semantic search is worst at: the word is in the name, not the
+    body."""
+    (settings.vault_path / "50-Reference" / "Kruskal-notes.md").write_text("x", encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({"name_contains": "kruskal"})
+    paths = json.loads(listed["content"][0]["text"])["paths"]
+
+    assert paths == ["50-Reference/Kruskal-notes.md"]
+
+
+@pytest.mark.anyio
+async def test_list_notes_never_lists_a_no_ai_note(settings: Settings) -> None:
+    """I3 applies to a listing as much as to a read: a path is content."""
+    (settings.vault_path / "50-Reference" / "diary.md").write_text(NO_AI_NOTE, encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({})
+    paths = json.loads(listed["content"][0]["text"])["paths"]
+
+    assert "50-Reference/diary.md" not in paths
+    assert "50-Reference/algorithms.md" in paths, "only the tagged note is withheld"
+
+
+@pytest.mark.anyio
+async def test_a_broken_frontmatter_header_does_not_hide_a_note(settings: Settings) -> None:
+    """Failing closed on a parse error would make a note with a typo in its
+    YAML silently vanish from browse — the very complaint this tool answers."""
+    (settings.vault_path / "50-Reference" / "wonky.md").write_text(
+        BROKEN_HEADER_NOTE, encoding="utf-8"
+    )
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({})
+    paths = json.loads(listed["content"][0]["text"])["paths"]
+
+    assert "50-Reference/wonky.md" in paths
+
+
+@pytest.mark.anyio
+async def test_list_notes_caps_and_says_that_it_did(settings: Settings, monkeypatch) -> None:
+    monkeypatch.setattr("backend.agent.runtime.MAX_LIST_PATHS", 2)
+    for i in range(5):
+        (settings.vault_path / "50-Reference" / f"note-{i}.md").write_text("x", encoding="utf-8")
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_notes").handler({})
+    payload = json.loads(listed["content"][0]["text"])
+
+    assert len(payload["paths"]) == 2
+    assert "narrow it" in payload["note"], "a silent truncation reads as a complete listing"
+
+
+def test_a_listed_path_is_not_a_citation() -> None:
+    """Citations come from the trace, so a summary carrying paths manufactures
+    them. The model has seen a filename here, not any content."""
+    summary = _summarize_list_notes(
+        {"folder": "15-Courses"}, json.dumps({"paths": ["15-Courses/a.md", "15-Courses/b.md"]})
+    )
+
+    assert summary.paths == ()
+    assert summary.detail == "2 notes in 15-Courses"
 
 
 @pytest.mark.anyio

@@ -21,6 +21,7 @@ function verbFor(name: string | undefined): string {
   if (!name) return "Thinking…";
   if (name === "search_vault") return "Searching your vault…";
   if (name === "read_note") return "Reading a note…";
+  if (name === "list_notes") return "Browsing your vault…";
   if (name === "list_tasks") return "Checking your tasks…";
   if (name.startsWith("run_automation_")) return "Running an automation…";
   // An unrecognised name (a tool added after this was written) would

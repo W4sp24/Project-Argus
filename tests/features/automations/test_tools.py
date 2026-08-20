@@ -148,7 +148,7 @@ def test_automation_tools_are_not_on_the_mcp_surface() -> None:
     from backend.agent.mcp_server import READ_ONLY_TOOLS
 
     assert not any(name.startswith(tools.TOOL_PREFIX) for name in READ_ONLY_TOOLS)
-    assert set(READ_ONLY_TOOLS) == {"search_vault", "read_note", "list_tasks"}
+    assert set(READ_ONLY_TOOLS) == {"search_vault", "read_note", "list_notes", "list_tasks"}
 
 
 # --- the agent runs on the right instance ------------------------------------
