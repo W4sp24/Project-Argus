@@ -523,6 +523,17 @@ async def test_stream_chat_forwards_course_to_the_tool_belt(
     assert captured.get("course") == "CS201"
 
 
+def test_the_system_prompt_names_every_tool_the_belt_actually_has() -> None:
+    """A tool the prompt never mentions is one a weaker model will not reach
+    for. `list_notes` in particular exists to be the escalation step after a
+    thin search, which only works if the prompt says so."""
+    prompt = _load_system_prompt(Taxonomy())
+    names = {spec.name for spec in build_vault_tools(Settings(_vault_path=Path(".")), FakeIndex())}
+
+    for name in names:
+        assert f"`{name}(" in prompt or f"`{name}`" in prompt, f"{name} is undocumented"
+
+
 def test_the_system_prompt_names_the_configured_private_dir() -> None:
     """I3 depends on it: a prompt naming the wrong folder tells the model the
     protected zone is somewhere it isn't."""
