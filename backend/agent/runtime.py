@@ -215,23 +215,25 @@ def build_vault_tools(
     async def search_vault(args: dict[str, Any]) -> dict[str, Any]:
         from backend.rag.retrieve import retrieve
 
-        await _await_index()
-        # to_thread, not a direct call: retrieve() is synchronous and can take
-        # seconds against a cold index. On the MCP stdio server that would stall
-        # the whole event loop; in chat it would stall the deltas already
-        # streaming to the browser.
-        # A fixed course (Course Hub) always wins over whatever the model
-        # itself passed — the user already scoped this whole conversation to
-        # one course by opening it from there.
         query = str(args.get("query") or "").strip()
         if not query:
-            # Named, with an example: a handler that raises KeyError here hands
-            # the model `error: 'query'`, which is not enough to correct from.
+            # Named, with an example. Indexing this key blind raises KeyError,
+            # which reaches the model as `error: 'query'` — not enough to
+            # correct from, so it guesses again and the step budget drains.
             return _tool_text(
                 'error: search_vault needs a non-empty "query" string, '
                 'e.g. {"query": "dijkstra shortest path"}'
             )
+
+        await _await_index()
+        # A fixed course (Course Hub) always wins over whatever the model
+        # itself passed — the user already scoped this whole conversation to
+        # one course by opening it from there.
         effective_course = course or (str(args["course"]) if args.get("course") else None)
+        # to_thread, not a direct call: retrieve() is synchronous and can take
+        # seconds against a cold index. On the MCP stdio server that would stall
+        # the whole event loop; in chat it would stall the deltas already
+        # streaming to the browser.
         hits = await asyncio.to_thread(
             retrieve,
             index,
