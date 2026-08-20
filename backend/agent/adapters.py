@@ -645,6 +645,42 @@ def resolve_adapter(
     )
 
 
+def resolve_run_target(
+    settings: Any,
+    model: str | None = None,
+    *,
+    tool_namespace: str = "argus",
+    disallowed_tools: Sequence[str] = ("Bash", "Write", "Edit"),
+    fallback_model: str | None = None,
+) -> tuple[AgentAdapter, str]:
+    """The adapter that will run, paired with the model id its rows belong to.
+
+    Callers need both, and deriving them separately is how they drift. Chat and
+    the planner each grew a private ``_resolve_model`` that answered the
+    hardcoded Claude Code model whenever ``model`` was falsy, while
+    :func:`resolve_adapter` — given the same falsy ``model`` — resolved through
+    ``settings.default_model``. On a machine whose default is Ollama or
+    DeepSeek the adapter ran that model and every usage and audit row was
+    stamped ``claude-opus-4-8``, so the usage dashboard attributed a local
+    model's tokens to Anthropic and the audit trail named the wrong reader.
+
+    The label is the adapter's own ``model`` attribute, which the
+    :class:`AgentAdapter` protocol requires. That is the provider-side id for
+    the HTTP adapters (a ``groq-llama`` entry serving
+    ``llama-3.3-70b-versatile`` labels rows with the latter) and the registry
+    name on the Claude Code path, which is what those rows have always said.
+    One resolution, one answer, no second opinion to disagree with.
+    """
+    adapter = resolve_adapter(
+        settings,
+        model,
+        tool_namespace=tool_namespace,
+        disallowed_tools=disallowed_tools,
+        fallback_model=fallback_model,
+    )
+    return adapter, str(getattr(adapter, "model", "") or fallback_model or "")
+
+
 # --- capability probe -------------------------------------------------------
 
 PROBE_TOOL_NAME = "argus_probe"

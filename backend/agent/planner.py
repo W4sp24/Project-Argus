@@ -17,7 +17,7 @@ from backend.agent.adapters import (
     ToolSpec,
     UsageReported,
     json_schema,
-    resolve_adapter,
+    resolve_run_target,
     text_result,
 )
 from backend.core.config import Settings
@@ -184,16 +184,6 @@ def _planner_context(
     )
 
 
-def _resolve_model(settings: Settings, model: str | None) -> str:
-    """The provider-side id for a registry name; ``MODEL`` when unset."""
-    if not model:
-        return MODEL
-    entry = next((m for m in settings.models if m["name"] == model), None)
-    if entry is None:
-        raise RuntimeError(f"unknown model {model!r} — register it under /system first")
-    return str(entry.get("model_id") or entry["name"])
-
-
 async def run_planner(settings: Settings, instruction: str, model: str | None = None) -> int:
     """Run one planning session; returns the number of suggestions created.
 
@@ -206,8 +196,7 @@ async def run_planner(settings: Settings, instruction: str, model: str | None = 
     init_schema(conn)
     try:
         before = len(queue.pending(conn))
-        resolved_model = _resolve_model(settings, model)
-        adapter = resolve_adapter(
+        adapter, resolved_model = resolve_run_target(
             settings,
             model,
             tool_namespace="planner",

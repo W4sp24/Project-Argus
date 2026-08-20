@@ -28,7 +28,7 @@ from backend.agent.adapters import (
     ToolSummary,
     UsageReported,
     json_schema,
-    resolve_adapter,
+    resolve_run_target,
     text_result,
 )
 from backend.agent.history import budget_history
@@ -325,20 +325,6 @@ class ChatAgent:
             # that then fails on its own is far better than one that hangs.
             self._ready.set()
 
-    def _resolve_model(self, model: str | None) -> str:
-        """Map a registry model name (§7) onto the id that will actually run.
-
-        No ``model`` keeps today's behavior (``MODEL`` on the Claude Code
-        path). A named model must exist in the registry; every registered
-        provider now routes for real.
-        """
-        if not model:
-            return MODEL
-        entry = next((m for m in self._settings.models if m["name"] == model), None)
-        if entry is None:
-            raise RuntimeError(f"unknown model {model!r} — register it under /system first")
-        return str(entry.get("model_id") or entry["name"])
-
     async def stream_chat(
         self,
         message: str,
@@ -369,8 +355,7 @@ class ChatAgent:
         """
         from backend.telemetry.usage import record_result_usage
 
-        resolved_model = self._resolve_model(model)
-        adapter = resolve_adapter(
+        adapter, resolved_model = resolve_run_target(
             self._settings,
             model,
             tool_namespace="argus",

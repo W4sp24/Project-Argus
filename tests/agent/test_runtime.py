@@ -15,8 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.agent.runtime import ChatAgent, _load_system_prompt, build_vault_tools
+from backend.agent.adapters import resolve_run_target
+from backend.agent.runtime import MODEL, ChatAgent, _load_system_prompt, build_vault_tools
 from backend.core.config import Settings
+from backend.core.model_registry import save_model_prefs, save_user_models
 from backend.core.taxonomy import Taxonomy
 
 
@@ -268,7 +270,9 @@ async def test_abandoning_the_stream_still_records_the_tokens(
     people actually abandon.
     """
     adapter = _AbandonableAdapter()
-    monkeypatch.setattr("backend.agent.runtime.resolve_adapter", lambda *a, **k: adapter)
+    monkeypatch.setattr(
+        "backend.agent.runtime.resolve_run_target", lambda *a, **k: (adapter, "test-model")
+    )
     monkeypatch.setattr("backend.agent.runtime.build_vault_tools", lambda *a, **k: [])
 
     agent = ChatAgent(settings)
@@ -288,7 +292,9 @@ async def test_a_completed_stream_records_usage_exactly_once(
 ) -> None:
     """The drain must not double-bill a turn that finished normally."""
     adapter = _AbandonableAdapter()
-    monkeypatch.setattr("backend.agent.runtime.resolve_adapter", lambda *a, **k: adapter)
+    monkeypatch.setattr(
+        "backend.agent.runtime.resolve_run_target", lambda *a, **k: (adapter, "test-model")
+    )
     monkeypatch.setattr("backend.agent.runtime.build_vault_tools", lambda *a, **k: [])
 
     agent = ChatAgent(settings)
@@ -298,11 +304,35 @@ async def test_a_completed_stream_records_usage_exactly_once(
     assert _usage_rows(settings) == [("chat", 400, 800)]
 
 
-def test_resolve_model_keeps_the_default_path(settings: Settings) -> None:
-    from backend.agent.runtime import MODEL
+def test_a_model_less_turn_is_labelled_with_the_model_that_actually_ran(
+    settings: Settings,
+) -> None:
+    """Chat used to answer `claude-opus-4-8` for every model-less turn.
 
-    assert ChatAgent(settings)._resolve_model(None) == MODEL
+    `resolve_adapter` resolves a falsy model through `settings.default_model`,
+    but chat's own `_resolve_model` returned the hardcoded Claude Code id — so
+    on a machine defaulting to Ollama or DeepSeek the adapter ran that model
+    while every usage and audit row named Anthropic's. One resolution now
+    answers both questions, and the label is whatever adapter came back.
+    """
+    settings.models_file.parent.mkdir(parents=True, exist_ok=True)
+    save_user_models(
+        settings.models_file,
+        [
+            {
+                "name": "local-llama",
+                "provider": "openai-compat",
+                "endpoint": "http://127.0.0.1:11434/v1",
+                "model_id": "llama3.1:8b",
+            }
+        ],
+    )
+    save_model_prefs(settings.model_prefs_file, {"default": "local-llama"})
 
+    adapter, label = resolve_run_target(settings, None, fallback_model=MODEL)
+
+    assert adapter.model == "llama3.1:8b"
+    assert label == "llama3.1:8b", "the label followed the fallback, not the running model"
 
 @pytest.mark.anyio
 async def test_stream_chat_forwards_course_to_the_tool_belt(
@@ -319,7 +349,8 @@ async def test_stream_chat_forwards_course_to_the_tool_belt(
 
     monkeypatch.setattr("backend.agent.runtime.build_vault_tools", fake_build_vault_tools)
     monkeypatch.setattr(
-        "backend.agent.runtime.resolve_adapter", lambda *a, **k: _AbandonableAdapter()
+        "backend.agent.runtime.resolve_run_target",
+        lambda *a, **k: (_AbandonableAdapter(), "test-model"),
     )
 
     agent = ChatAgent(settings)

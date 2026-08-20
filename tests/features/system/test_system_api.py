@@ -416,16 +416,25 @@ def test_chat_agent_model_resolution(vault: Path) -> None:
     Replaces the previous assertion that a non-anthropic provider raised
     "localModels is preview" — that rejection is exactly what this branch
     removes, so the test now pins the routing that took its place.
+
+    Omitting the model no longer answers the hardcoded Claude Code id: it
+    resolves through ``settings.default_model``, the same way the adapter
+    always did. The two used to disagree, and the usage dashboard believed the
+    wrong one.
     """
-    from backend.agent.runtime import MODEL, ChatAgent
+    from backend.agent.adapters import resolve_run_target
+    from backend.agent.runtime import MODEL
     from backend.core.model_registry import save_user_models
 
     settings = Settings(_vault_path=vault)
-    agent = ChatAgent(settings)
-    assert agent._resolve_model(None) == MODEL, "omitting model keeps today's behavior"
-    assert agent._resolve_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5-20251001"
+
+    def label(model: str | None) -> str:
+        return resolve_run_target(settings, model, fallback_model=MODEL)[1]
+
+    assert label(None) == settings.default_model, "a model-less turn follows the default"
+    assert label("claude-haiku-4-5-20251001") == "claude-haiku-4-5-20251001"
     with pytest.raises(RuntimeError, match="unknown model"):
-        agent._resolve_model("ghost")
+        label("ghost")
 
     save_user_models(
         settings.models_file,
@@ -443,8 +452,8 @@ def test_chat_agent_model_resolution(vault: Path) -> None:
             },
         ],
     )
-    assert agent._resolve_model("llama3") == "llama3", "local endpoints route for real now"
-    assert agent._resolve_model("groq-llama") == "llama-3.3-70b-versatile", (
+    assert label("llama3") == "llama3", "local endpoints route for real now"
+    assert label("groq-llama") == "llama-3.3-70b-versatile", (
         "a display name may differ from the id the provider expects"
     )
 
