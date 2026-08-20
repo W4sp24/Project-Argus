@@ -525,6 +525,92 @@ async def test_api_key_rides_along_as_a_bearer_token() -> None:
     assert seen == ["Bearer secret-key"]
 
 
+# --- usage on hosted endpoints ----------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_local_endpoint_is_not_asked_for_usage() -> None:
+    """Ollama and friends keep the minimal payload they have always had.
+
+    A local server is the one most likely to reject an unknown request field,
+    and its tokens are free anyway, so there is nothing to buy by asking.
+    """
+    record: list[dict] = []
+    adapter = adapter_for([sse(text_chunk("hi"))], record=record)
+
+    await collect(adapter, [])
+
+    assert "stream_options" not in record[0]
+
+
+@pytest.mark.anyio
+async def test_a_hosted_endpoint_asks_for_the_token_counts() -> None:
+    """DeepSeek and friends only report usage when asked, so every hosted turn
+    used to be recorded as zero tokens."""
+    record: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        record.append(json.loads(request.content))
+        return httpx.Response(200, content=sse(text_chunk("hi"), usage_chunk(90, 12)))
+
+    adapter = OpenAICompatAdapter(
+        model="deepseek-chat",
+        endpoint="https://api.deepseek.com/v1",
+        api_key="sk-test",
+        transport=httpx.MockTransport(handle),
+    )
+
+    events = await collect(adapter, [])
+
+    assert record[0]["stream_options"] == {"include_usage": True}
+    usage = next(e for e in events if isinstance(e, UsageReported))
+    assert (usage.usage["input_tokens"], usage.usage["output_tokens"]) == (90, 12)
+
+
+@pytest.mark.anyio
+async def test_a_server_that_rejects_stream_options_gets_the_turn_again_without_it() -> None:
+    """Guessing wrong about a hosted server must not cost the whole answer.
+
+    The status check runs before the body is read, so nothing has been streamed
+    when the 400 arrives and the turn can simply be re-sent. Every later turn
+    skips the field too, rather than paying the failed round trip again.
+    """
+    record: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        record.append(payload)
+        if "stream_options" in payload:
+            return httpx.Response(
+                400, json={"error": {"message": "unknown field: stream_options"}}
+            )
+        return httpx.Response(200, content=sse(text_chunk("recovered")))
+
+    adapter = OpenAICompatAdapter(
+        model="strict-model",
+        endpoint="https://strict.example.com/v1",
+        api_key="sk-test",
+        transport=httpx.MockTransport(handle),
+    )
+
+    events = await collect(adapter, [])
+
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "recovered"
+    assert [("stream_options" in payload) for payload in record] == [True, False]
+
+
+@pytest.mark.anyio
+async def test_usage_repeated_on_several_chunks_is_not_counted_twice() -> None:
+    """Usage arrives cumulative within one completion, so it is assigned there
+    and summed only across turns — the same split the Anthropic adapter makes."""
+    adapter = adapter_for([sse(text_chunk("hi"), usage_chunk(50, 5), usage_chunk(50, 9))])
+
+    events = await collect(adapter, [])
+
+    usage = next(e for e in events if isinstance(e, UsageReported))
+    assert (usage.usage["input_tokens"], usage.usage["output_tokens"]) == (50, 9)
+
+
 # --- model listing ----------------------------------------------------------
 
 

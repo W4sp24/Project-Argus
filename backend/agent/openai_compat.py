@@ -40,11 +40,16 @@ from backend.agent.adapters import (
     ToolStarted,
     UsageReported,
     flatten_tool_result,
+    is_local_endpoint,
     require_user_turn,
     summarize_tool_result,
 )
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
+
+
+class _StreamOptionsError(AgentError):
+    """The server refused ``stream_options``; retry the same turn without it."""
 
 
 def normalize_base_url(endpoint: str) -> str:
@@ -161,6 +166,26 @@ class OpenAICompatAdapter:
     # See AnthropicAPIAdapter.partial_usage: a consumer that walks away
     # mid-stream never sees the final UsageReported, but the tokens were spent.
     _live_usage: dict[str, int] | None = field(default=None, init=False, repr=False)
+    # Whether to ask for token counts via `stream_options`. See __post_init__.
+    _ask_for_usage: bool = field(default=False, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Decide once whether this endpoint gets asked for token counts.
+
+        Several OpenAI-compatible servers reject unknown request fields
+        outright, which is why this payload stayed minimal for a long time. The
+        cost of that caution was that hosted providers which only report usage
+        when asked — DeepSeek among them — recorded **zero tokens** for every
+        turn, so the usage dashboard quietly under-reported the models that
+        actually cost money.
+
+        Local endpoints keep the old payload byte-for-byte: Ollama and whatever
+        else someone points at 127.0.0.1 are the servers most likely to be
+        strict, and their tokens are free anyway. Anything off-machine is a
+        commercial API whose whole business is counting tokens, so it is asked.
+        A server that still says no is handled in ``run``.
+        """
+        self._ask_for_usage = not is_local_endpoint(self.endpoint)
 
     def partial_usage(self) -> UsageReported | None:
         """Whatever has been counted so far, for a stream that ended early."""
@@ -211,13 +236,36 @@ class OpenAICompatAdapter:
                 if tools:
                     payload["tools"] = to_openai_tools(tools)
                     payload["tool_choice"] = "auto"
+                if self._ask_for_usage:
+                    payload["stream_options"] = {"include_usage": True}
 
                 text_parts: list[str] = []
                 buffer = _ToolCallBuffer()
-                async for event in self._stream_turn(
-                    client, url, payload, text_parts, buffer, totals
-                ):
-                    yield event
+                # Usage is reported per completion, cumulatively within one —
+                # so it is assigned inside a turn and summed across turns, the
+                # same split AnthropicAPIAdapter makes. Accumulating inside a
+                # turn would multiply-count on any server that repeats the
+                # totals on more than one chunk.
+                turn_usage = {"input_tokens": 0, "output_tokens": 0}
+                try:
+                    async for event in self._stream_turn(
+                        client, url, payload, text_parts, buffer, turn_usage
+                    ):
+                        yield event
+                except _StreamOptionsError:
+                    # A strict server we guessed wrong about. Nothing has been
+                    # read yet (the status check precedes the body), so the
+                    # turn can simply be re-sent without the field — and every
+                    # later turn skips it too rather than paying the round trip
+                    # again.
+                    self._ask_for_usage = False
+                    payload.pop("stream_options", None)
+                    async for event in self._stream_turn(
+                        client, url, payload, text_parts, buffer, turn_usage
+                    ):
+                        yield event
+                totals["input_tokens"] += turn_usage["input_tokens"]
+                totals["output_tokens"] += turn_usage["output_tokens"]
 
                 calls = buffer.finish()
                 if not calls:
@@ -272,26 +320,28 @@ class OpenAICompatAdapter:
         payload: dict[str, Any],
         text_parts: list[str],
         buffer: _ToolCallBuffer,
-        totals: dict[str, int],
+        turn_usage: dict[str, int],
     ) -> AsyncIterator[AgentEvent]:
-        """Stream one completion, filling ``text_parts``/``buffer``/``totals``."""
+        """Stream one completion, filling ``text_parts``/``buffer``/``turn_usage``."""
         async with client.stream("POST", url, json=payload) as response:
             if response.status_code >= 400:
-                raise AgentError(await _error_detail(response, self.model))
+                detail = await _error_detail(response, self.model)
+                if response.status_code == 400 and "stream_options" in detail:
+                    raise _StreamOptionsError(detail)
+                raise AgentError(detail)
             async for line in response.aiter_lines():
                 chunk = _sse_payload(line)
                 if chunk is None:
                     continue
 
-                # Usage is read opportunistically rather than requested via
-                # `stream_options`: several OpenAI-compatible servers reject
-                # unknown request fields outright, and token logging is
-                # best-effort by design (see backend/usage.py) while broad
-                # provider compatibility is not.
+                # Read from whatever chunk carries it: asked-for or not, a
+                # server may volunteer usage, and token logging is best-effort
+                # by design (see backend/usage.py). Assignment, not addition —
+                # these totals are for one completion and arrive cumulative.
                 usage = chunk.get("usage")
                 if isinstance(usage, dict):
-                    totals["input_tokens"] += int(usage.get("prompt_tokens") or 0)
-                    totals["output_tokens"] += int(usage.get("completion_tokens") or 0)
+                    turn_usage["input_tokens"] = int(usage.get("prompt_tokens") or 0)
+                    turn_usage["output_tokens"] = int(usage.get("completion_tokens") or 0)
 
                 for choice in chunk.get("choices") or []:
                     delta = choice.get("delta") or {}
