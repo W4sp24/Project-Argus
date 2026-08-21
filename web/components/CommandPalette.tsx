@@ -18,6 +18,7 @@ import {
   type SearchResult,
 } from "@/lib/api";
 import { useChat } from "@/lib/chat";
+import { obsidianUri } from "@/lib/citations";
 import AutomationForm from "@/components/automations/AutomationForm";
 import WidgetRenderer from "@/components/automations/WidgetRenderer";
 import { AuthChip, OriginChip } from "@/components/automations/chips";
@@ -455,7 +456,9 @@ export default function CommandPalette() {
   // value itself is unused, only the re-render it triggers matters.
   const [, setTick] = useState(0);
 
-  const vaultName = vault?.name ?? "vault";
+  // No `?? "vault"` fallback: a guessed vault name built a link that was
+  // certain to fail. `openResult` now declines rather than opening one.
+  const vaultPath = vault?.path;
 
   // Elapsed time must be measured, not faked — this is the one clock RUN
   // mode reads from, updated on a short interval only while unsettled. Keyed
@@ -656,8 +659,12 @@ export default function CommandPalette() {
   }
 
   function openResult(result: SearchResult) {
+    // Until /api/vault answers there is no vault root to build a link from.
+    // Navigating anyway would hand Obsidian a URL it cannot resolve; keeping
+    // the palette open lets the user try again a moment later.
+    if (!vaultPath) return;
     setPaletteOpen(false);
-    window.location.href = `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(result.source_path)}`;
+    window.location.href = obsidianUri(vaultPath, result.source_path);
   }
 
   /** Fire an automation and enter RUN mode. Replaces the old behaviour of

@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import time
 import uuid
+from pathlib import Path
 
 from pydantic import BaseModel
 
 from backend.connectors import client_library_importable
 from backend.core.config import Settings
+from backend.vault.obsidian import is_obsidian_vault
 
 REQUIRED_TABLES = {
     "suggestions",
@@ -50,7 +52,33 @@ def _check_vault(settings: Settings) -> list[Check]:
                 detail="vault is not a git repository — run `git init` there (I2)",
             )
         )
+    checks.append(_check_obsidian_link(vault))
     return checks
+
+
+def _check_obsidian_link(vault: Path) -> Check:
+    """Can this vault actually be opened from an ``obsidian://`` link?
+
+    Every deep link in the product -- activity feed rows, citation chips,
+    command-palette results, journal notes -- resolves through Obsidian, and
+    Obsidian can only follow a link into a folder it has been shown at least
+    once. Without this check the first symptom is Obsidian's own "Vault not
+    found" dialog on a click, which says nothing about Argus and gives the user
+    nowhere to go. Reported as exactly that.
+
+    A WARN, not a FAIL: everything else in Argus works fine against a folder
+    Obsidian has never opened.
+    """
+    if is_obsidian_vault(vault):
+        return Check(name="obsidian-links", status="OK", detail="obsidian:// links will resolve")
+    return Check(
+        name="obsidian-links",
+        status="WARN",
+        detail=(
+            f"{vault} has no .obsidian/ folder — open it in Obsidian once, "
+            "or links to your notes will not resolve"
+        ),
+    )
 
 
 def _check_database(settings: Settings) -> Check:

@@ -19,7 +19,13 @@
  * helper that returns React nodes cannot compose with react-markdown, which
  * takes a string and owns the whole tree.
  *
- * `obsidianUri` builds the deep link the chips point at.
+ * `obsidianUri` builds the deep link the chips point at. It addresses the note
+ * by absolute path rather than by vault name: `vault=` is matched against the
+ * vault's *registered* name in Obsidian, which is set when the vault is added
+ * and is independent of what the folder is called afterwards. A mismatch there
+ * is Obsidian's own "Vault not found" dialog, reported against a vault called
+ * Second Brain, and it was unfixable from this side because nothing here knows
+ * the registered name. `path=` cannot mismatch.
  */
 
 /** Matches `[path.md]`, `[deck.pdf p.4]`, `[slides.pptx slide 9]`. */
@@ -38,6 +44,7 @@ export function stripCitationMarkers(text: string): string {
   );
 }
 
-export function obsidianUri(vaultName: string, path: string): string {
-  return `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(path)}`;
+export function obsidianUri(vaultPath: string, path: string): string {
+  const absolute = `${vaultPath.replace(/\/+$/, "")}/${path}`;
+  return `obsidian://open?path=${encodeURIComponent(absolute)}`;
 }

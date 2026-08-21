@@ -143,3 +143,23 @@ def test_cli_doctor_exit_codes(healthy_vault: Path, tmp_path: Path, capsys) -> N
     env_bad = tmp_path / "bad.env"
     env_bad.write_text(f"VAULT_PATH={tmp_path / 'missing'}\n", encoding="utf-8")
     assert main(["doctor", "--env-file", str(env_bad)]) == 1
+
+
+# --- obsidian:// links --------------------------------------------------------
+
+
+def test_a_vault_obsidian_has_never_opened_is_flagged(healthy_vault: Path) -> None:
+    """Otherwise the first symptom is Obsidian's own "Vault not found" dialog
+    on a click, which says nothing about Argus and offers nowhere to go."""
+    checks = {check.name: check for check in run_checks(Settings(_vault_path=healthy_vault))}
+
+    assert checks["obsidian-links"].status == "WARN"
+    assert "open it in Obsidian once" in checks["obsidian-links"].detail
+
+
+def test_a_real_vault_passes_the_link_check(healthy_vault: Path) -> None:
+    (healthy_vault / ".obsidian").mkdir(exist_ok=True)
+
+    checks = {check.name: check for check in run_checks(Settings(_vault_path=healthy_vault))}
+
+    assert checks["obsidian-links"].status == "OK"
