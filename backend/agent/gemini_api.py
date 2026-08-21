@@ -48,6 +48,7 @@ from backend.agent.adapters import (
     require_user_turn,
     summarize_tool_result,
 )
+from backend.agent.text_tool_calls import TextToolCallSieve
 
 DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_TIMEOUT_SECONDS = 120.0
@@ -201,8 +202,13 @@ class GeminiAdapter:
 
                 text_parts: list[str] = []
                 calls: list[dict[str, Any]] = []
+                # Parity with the other two adapters: a model that prints its
+                # call as a text part instead of a functionCall must not have
+                # that JSON shown to the user. See
+                # backend.agent.text_tool_calls.
+                sieve = TextToolCallSieve(by_name, id_prefix=f"text_{turn}")
                 async for event in self._stream_turn(
-                    client, url, payload, text_parts, calls, totals
+                    client, url, payload, text_parts, calls, totals, sieve
                 ):
                     yield event
 
@@ -265,6 +271,7 @@ class GeminiAdapter:
         text_parts: list[str],
         calls: list[dict[str, Any]],
         totals: dict[str, int],
+        sieve: TextToolCallSieve,
     ) -> AsyncIterator[AgentEvent]:
         """Stream one response, filling ``text_parts``/``calls``/``totals``.
 
@@ -291,8 +298,10 @@ class GeminiAdapter:
                         for part in (candidate.get("content") or {}).get("parts") or []:
                             text = part.get("text")
                             if text:
-                                text_parts.append(str(text))
-                                yield TextDelta(str(text))
+                                visible = sieve.feed(str(text))
+                                if visible:
+                                    text_parts.append(visible)
+                                    yield TextDelta(visible)
                             function_call = part.get("functionCall")
                             if isinstance(function_call, dict) and function_call.get("name"):
                                 args = function_call.get("args")
@@ -306,6 +315,16 @@ class GeminiAdapter:
                                         "args": args if isinstance(args, dict) else {},
                                     }
                                 )
+                # An envelope that never closed is text after all. Inside the
+                # `async with` so it never runs on the error path.
+                tail = sieve.finish()
+                if tail:
+                    text_parts.append(tail)
+                    yield TextDelta(tail)
+                # Gemini fills `calls` in place rather than returning them, so
+                # the fallback is appended here rather than composed with `or`.
+                if not calls:
+                    calls.extend(sieve.calls)
         finally:
             # Even a cancelled or failed turn already cost the user tokens.
             for key in totals:

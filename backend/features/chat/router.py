@@ -8,6 +8,7 @@ stream instead of the agent SDK.
 from __future__ import annotations
 
 import inspect
+import logging
 import sqlite3
 from collections.abc import AsyncIterator, Callable
 
@@ -16,10 +17,13 @@ from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
 from backend.agent.adapters import Message, Notice, ToolFinished, ToolStarted
+from backend.agent.text_tool_calls import is_only_a_tool_call
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.chat import store
 from backend.vault.paths import is_indexable
+
+logger = logging.getLogger("argus.chat")
 
 # ``backend.agent.adapters`` is stdlib-only (no chromadb, no SDK), so importing
 # it here is safe -- unlike ``backend.agent.runtime``, which pulls in VaultIndex
@@ -194,6 +198,31 @@ def _open_turn(
         conn.close()
 
 
+#: Shown in place of a tool call that reached the transcript anyway. See
+#: `_persistable_text`.
+LEAKED_CALL_REPLACEMENT = (
+    "I tried to use one of my tools and it did not go through. Ask again and "
+    "I will have another go."
+)
+
+
+def _persistable_text(text_parts: list[str]) -> str:
+    """The assistant's body, with a leaked tool call replaced by an apology.
+
+    `backend.agent.text_tool_calls` sieves printed tool calls out of the stream
+    before the browser ever sees them, which is the actual fix. This is the net
+    underneath it: an envelope shape the sieve has not learned yet would still
+    be *stored*, and a stored one is re-rendered on every reload, forever. The
+    check is narrow on purpose — the whole message, and a tool the agent really
+    has — so an answer that is legitimately nothing but JSON survives.
+    """
+    text = "".join(text_parts)
+    if is_only_a_tool_call(text):
+        logger.warning("a tool call reached the transcript as text; replacing it")
+        return LEAKED_CALL_REPLACEMENT
+    return text
+
+
 def _close_turn(
     db: Callable[[], sqlite3.Connection],
     thread_id: int,
@@ -210,7 +239,7 @@ def _close_turn(
             conn,
             thread_id,
             role="assistant",
-            text="".join(text_parts),
+            text=_persistable_text(text_parts),
             model=model,
             tools=steps,
         )

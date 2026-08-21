@@ -499,3 +499,34 @@ async def test_list_models_returns_sorted_ids() -> None:
         "claude-a",
         "claude-sonnet-5",
     ]
+
+
+# --- tool calls the model printed as text ------------------------------------
+
+
+ENVELOPE = '{"name": "search_vault", "arguments": {"query": "Argus"}}'
+
+
+@pytest.mark.anyio
+async def test_a_tool_call_printed_as_text_is_dispatched_and_never_shown() -> None:
+    """Parity with the OpenAI-compatible adapter. An Anthropic-shaped endpoint
+    can be pointed at any model, so the text channel needs the same sieve."""
+    spec, seen = spy_tool()
+    adapter = adapter_for([sse(text_delta(ENVELOPE)), sse(text_delta("You wrote about it."))])
+
+    events = await collect(adapter, [spec])
+
+    assert seen == [{"query": "Argus"}], "the printed call was not dispatched"
+    assert texts(events) == "You wrote about it."
+
+
+@pytest.mark.anyio
+async def test_an_answer_that_merely_discusses_json_is_left_alone() -> None:
+    answer = "The call looks like this:\n\n```json\n" + ENVELOPE + "\n```\n"
+    spec, seen = spy_tool()
+    adapter = adapter_for([sse(text_delta(answer))])
+
+    events = await collect(adapter, [spec])
+
+    assert seen == []
+    assert texts(events) == answer

@@ -722,3 +722,97 @@ def test_parse_tool_arguments_separates_absent_from_unparseable() -> None:
     assert parse_tool_arguments("   ") == {}
     assert parse_tool_arguments("[1,2]") is None
     assert parse_tool_arguments("garbage") is None
+
+
+# --- tool calls the model printed as text ------------------------------------
+#
+# A product review caught a local model emitting a `search_vault` call as prose,
+# which was streamed to the user as the assistant's reply. Every fixture above
+# uses `tool_chunk`, i.e. the structured `delta.tool_calls` channel, so nothing
+# here was covered. See backend/agent/text_tool_calls.py.
+
+
+ENVELOPE = '{"name": "search_vault", "arguments": {"query": "Argus"}}'
+
+
+@pytest.mark.anyio
+async def test_a_tool_call_printed_as_text_is_dispatched_and_never_shown() -> None:
+    spec, seen = spy_tool()
+    adapter = adapter_for([sse(text_chunk(ENVELOPE)), sse(text_chunk("You wrote about it."))])
+
+    events = await collect(adapter, [spec])
+
+    assert seen == [{"query": "Argus"}], "the printed call was not dispatched"
+    assert texts(events) == "You wrote about it."
+    assert ENVELOPE not in texts(events)
+    assert [type(event) for event in events if isinstance(event, ToolStarted | ToolFinished)] == [
+        ToolStarted,
+        ToolFinished,
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_printed_call_split_across_deltas_is_still_caught() -> None:
+    """Providers split content on token boundaries, not JSON boundaries."""
+    spec, seen = spy_tool()
+    chunks = [text_chunk(ENVELOPE[i : i + 7]) for i in range(0, len(ENVELOPE), 7)]
+    adapter = adapter_for([sse(*chunks), sse(text_chunk("Found it."))])
+
+    events = await collect(adapter, [spec])
+
+    assert seen == [{"query": "Argus"}]
+    assert texts(events) == "Found it."
+
+
+@pytest.mark.anyio
+async def test_a_hermes_style_envelope_is_caught() -> None:
+    spec, seen = spy_tool()
+    adapter = adapter_for(
+        [sse(text_chunk(f"<tool_call>{ENVELOPE}</tool_call>")), sse(text_chunk("Done."))]
+    )
+
+    events = await collect(adapter, [spec])
+
+    assert seen == [{"query": "Argus"}]
+    assert "tool_call" not in texts(events)
+
+
+@pytest.mark.anyio
+async def test_the_structured_channel_still_wins_when_the_model_also_narrates() -> None:
+    """A model that emits a real tool_call *and* talks about it meant the call.
+
+    The narration is ordinary prose and must still reach the user; only one
+    dispatch may happen.
+    """
+    spec, seen = spy_tool()
+    adapter = adapter_for(
+        [
+            sse(
+                text_chunk("Let me look that up. "),
+                tool_chunk(0, call_id="call_1", name="search_vault"),
+                tool_chunk(0, arguments='{"query": "Argus"}'),
+            ),
+            sse(text_chunk("Here it is.")),
+        ]
+    )
+
+    events = await collect(adapter, [spec])
+
+    assert seen == [{"query": "Argus"}], "dispatched twice, or not at all"
+    assert texts(events) == "Let me look that up. Here it is."
+
+
+@pytest.mark.anyio
+async def test_an_answer_that_merely_discusses_json_is_left_alone() -> None:
+    """The sieve must not eat a legitimate answer. This is the regression that
+    would make the fix worse than the bug."""
+    answer = (
+        "The call is shaped like this:\n\n```json\n" + ENVELOPE + "\n```\nThat is all."
+    )
+    spec, seen = spy_tool()
+    adapter = adapter_for([sse(text_chunk(answer))])
+
+    events = await collect(adapter, [spec])
+
+    assert seen == []
+    assert texts(events) == answer

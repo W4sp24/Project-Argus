@@ -427,3 +427,37 @@ async def test_list_models_drops_the_prefix_and_the_models_that_cannot_generate(
         "gemini-2.5-flash",
         "gemini-2.5-pro",
     ]
+
+
+# --- tool calls the model printed as text ------------------------------------
+
+
+ENVELOPE = '{"name": "search_vault", "arguments": {"query": "Argus"}}'
+
+
+def gemini_texts(events: list) -> str:
+    return "".join(event.text for event in events if isinstance(event, TextDelta))
+
+
+@pytest.mark.anyio
+async def test_a_tool_call_printed_as_text_is_dispatched_and_never_shown() -> None:
+    """Parity with the other two adapters — see backend/agent/text_tool_calls.py."""
+    spec, seen = spy_tool()
+    adapter = adapter_for([sse(text_chunk(ENVELOPE)), sse(text_chunk("You wrote about it."))])
+
+    events = await collect(adapter, [spec])
+
+    assert seen == [{"query": "Argus"}], "the printed call was not dispatched"
+    assert gemini_texts(events) == "You wrote about it."
+
+
+@pytest.mark.anyio
+async def test_an_answer_that_merely_discusses_json_is_left_alone() -> None:
+    answer = "The call looks like this:\n\n```json\n" + ENVELOPE + "\n```\n"
+    spec, seen = spy_tool()
+    adapter = adapter_for([sse(text_chunk(answer))])
+
+    events = await collect(adapter, [spec])
+
+    assert seen == []
+    assert gemini_texts(events) == answer
