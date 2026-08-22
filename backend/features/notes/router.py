@@ -22,6 +22,10 @@ class VaultInfo(BaseModel):
     here would reintroduce the bug the configurable-taxonomy refactor fixed)."""
 
     name: str
+    #: Absolute path to the vault root. `name` alone cannot build a working
+    #: `obsidian://` link -- see backend.vault.obsidian for why -- so the
+    #: frontend needs this to deep-link at all. `name` stays for display.
+    path: str
     papers_dir: str
     highlights_path: str
     # Same reasoning as papers_dir/highlights_path: Study mode's course
@@ -52,6 +56,7 @@ def build_notes_router(settings: Settings) -> APIRouter:
     def vault_info() -> VaultInfo:
         return VaultInfo(
             name=settings.vault_path.name,
+            path=settings.vault_path.as_posix(),
             papers_dir=settings.taxonomy.papers_dir,
             highlights_path=settings.taxonomy.paper_highlights_note,
             courses_dir=settings.taxonomy.courses,

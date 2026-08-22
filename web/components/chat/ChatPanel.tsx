@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import useSWR from "swr";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
-import { fetcher } from "@/lib/api";
+import { useVault } from "@/lib/api";
 import { useChat, type ChatMessage } from "@/lib/chat";
 import CitationChips from "@/components/chat/CitationChips";
 import Markdown from "@/components/chat/Markdown";
@@ -116,7 +115,7 @@ export default function ChatPanel({
   suggestions?: string[];
   placeholder?: string;
 }) {
-  const { data: vault } = useSWR<{ name: string }>("/api/vault", fetcher);
+  const { data: vault } = useVault();
   const { messages, busy, offline, send, stop } = useChat();
   const model = useSelectedModel();
   const [input, setInput] = useState("");
@@ -159,7 +158,11 @@ export default function ChatPanel({
   }
 
   const compact = variant === "dock";
-  const vaultName = vault?.name ?? "vault";
+  // No `?? "vault"` fallback. While /api/vault is still loading -- or 503s on
+  // an unconfigured install -- a guessed name produced a link that was certain
+  // to fail, and a chip that quietly stays plain text beats one that opens an
+  // error dialog.
+  const vaultPath = vault?.path;
   const prompts = suggestions ?? (compact ? [] : EXAMPLES);
 
   return (
@@ -220,7 +223,7 @@ export default function ChatPanel({
                 {message.text && (
                   <div className="border border-line bg-void px-3.5 py-2.5 text-body leading-relaxed text-ink-muted">
                     <Markdown text={stripCitationMarkers(message.text)} />
-                    <CitationChips steps={message.steps} vaultName={vaultName} />
+                    <CitationChips steps={message.steps} vaultPath={vaultPath} />
                   </div>
                 )}
                 <StatusLine message={message} />
@@ -246,7 +249,7 @@ export default function ChatPanel({
                       text={stripCitationMarkers(message.text)}
                       className="text-lead leading-[1.7] text-ink"
                     />
-                    <CitationChips steps={message.steps} vaultName={vaultName} />
+                    <CitationChips steps={message.steps} vaultPath={vaultPath} />
                   </>
                 )}
                 <StatusLine message={message} />

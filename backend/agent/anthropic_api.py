@@ -39,6 +39,7 @@ from backend.agent.adapters import (
     require_user_turn,
     summarize_tool_result,
 )
+from backend.agent.text_tool_calls import TextToolCallSieve
 
 DEFAULT_ENDPOINT = "https://api.anthropic.com/v1"
 API_VERSION = "2023-06-01"
@@ -202,12 +203,17 @@ class AnthropicAPIAdapter:
 
                 text_parts: list[str] = []
                 buffer = _BlockBuffer()
+                # Parity with the OpenAI-compatible adapter: a model that
+                # prints its call instead of emitting a tool_use block must not
+                # have that JSON shown to the user. See
+                # backend.agent.text_tool_calls.
+                sieve = TextToolCallSieve(by_name, id_prefix=f"text_{turn}")
                 async for event in self._stream_turn(
-                    client, url, payload, text_parts, buffer, totals
+                    client, url, payload, text_parts, buffer, totals, sieve
                 ):
                     yield event
 
-                calls = buffer.finish()
+                calls = buffer.finish() or sieve.calls
                 if not calls:
                     break
 
@@ -272,6 +278,7 @@ class AnthropicAPIAdapter:
         text_parts: list[str],
         buffer: _BlockBuffer,
         totals: dict[str, int],
+        sieve: TextToolCallSieve,
     ) -> AsyncIterator[AgentEvent]:
         # This message's own counters, folded into ``totals`` when it ends.
         message_totals = dict.fromkeys(totals, 0)
@@ -295,8 +302,10 @@ class AnthropicAPIAdapter:
                     elif kind == "content_block_delta":
                         delta = event.get("delta") or {}
                         if delta.get("type") == "text_delta" and delta.get("text"):
-                            text_parts.append(str(delta["text"]))
-                            yield TextDelta(str(delta["text"]))
+                            visible = sieve.feed(str(delta["text"]))
+                            if visible:
+                                text_parts.append(visible)
+                                yield TextDelta(visible)
                         else:
                             buffer.delta(int(event.get("index") or 0), delta)
                     elif kind == "message_delta":
@@ -304,6 +313,13 @@ class AnthropicAPIAdapter:
                     elif kind == "error":
                         detail = (event.get("error") or {}).get("message") or "stream error"
                         raise AgentError(f"the model endpoint errored mid-stream: {detail}")
+                # An envelope that never closed is text after all. Inside the
+                # `async with` so it never runs on the error path, where
+                # nothing was read.
+                tail = sieve.finish()
+                if tail:
+                    text_parts.append(tail)
+                    yield TextDelta(tail)
         finally:
             # Even a cancelled or failed turn already cost the user tokens, so
             # bank whatever the API reported before we stopped reading.

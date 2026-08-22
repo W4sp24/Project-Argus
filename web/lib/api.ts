@@ -112,6 +112,9 @@ export function useNotesIn(folder: string | null | undefined, fields: string[]) 
 
 export interface VaultInfo {
   name: string;
+  /** Absolute path to the vault root. `name` cannot build a working
+   *  `obsidian://` link on its own — see `obsidianUri` in lib/citations. */
+  path: string;
   /** Where Research mode's one-note-per-paper reading queue lives, derived
    * server-side from the configured taxonomy (never hardcode `30-Areas`). */
   papers_dir: string;

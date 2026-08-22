@@ -10,12 +10,12 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote
 
 import frontmatter
 from pydantic import BaseModel
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.vault.obsidian import note_uri
 from backend.vault.privacy import is_no_ai
 
 # Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
@@ -182,7 +182,7 @@ def read_note(
     if _load_visible(resolved) is None:
         return None
     relative = resolved.relative_to(vault_path).as_posix()
-    uri = f"obsidian://open?vault={quote(vault_path.name)}&file={quote(relative)}"
+    uri = note_uri(vault_path, relative)
     return JournalNote(
         path=relative,
         markdown=resolved.read_text(encoding="utf-8"),

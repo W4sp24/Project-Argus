@@ -41,8 +41,12 @@ test("a seeded thread restores its markdown, tool trace and citations", async ({
   await expect(page.getByText("Read note")).toBeVisible();
 
   // Citations come off the trace's paths, so the chip is a real obsidian link.
+  // It addresses the note by absolute path: `vault=` is matched against the
+  // vault's *registered* name in Obsidian, which drifts from the folder name
+  // and produced the reported "Vault not found" dialog.
   const chip = page.getByRole("link", { name: /course\.md/ }).first();
-  await expect(chip).toHaveAttribute("href", /^obsidian:\/\/open\?vault=/);
+  await expect(chip).toHaveAttribute("href", /^obsidian:\/\/open\?path=/);
+  await expect(chip).toHaveAttribute("href", /15-Courses.*course\.md$/);
 
   // The inline [path.md] marker the prompt asks the model to emit is stripped
   // before rendering, so it does not double up with the chip above.

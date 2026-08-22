@@ -14,10 +14,10 @@ import { obsidianUri } from "@/lib/citations";
  */
 export default function CitationChips({
   steps,
-  vaultName,
+  vaultPath,
 }: {
   steps: ToolStep[];
-  vaultName: string;
+  vaultPath: string | undefined;
 }) {
   // A path can be cited by more than one tool call in a turn — a search that
   // surfaced it and a read that opened it — and should still appear once.
@@ -26,17 +26,32 @@ export default function CitationChips({
 
   return (
     <ul className="mt-2 flex flex-wrap gap-1.5" aria-label="Sources for this answer">
-      {paths.map((path) => (
-        <li key={path}>
-          <a
-            href={obsidianUri(vaultName, path)}
-            title={`Open ${path} in Obsidian`}
-            className="inline-block border border-line bg-[var(--ac-bg)] px-1.5 py-0.5 font-mono text-micro text-[var(--ac)] transition-colors hover:border-lineHi"
-          >
-            ⌗ {path.split("/").pop()}
-          </a>
-        </li>
-      ))}
+      {paths.map((path) => {
+        const chip = `⌗ ${path.split("/").pop()}`;
+        const shared =
+          "inline-block border border-line bg-[var(--ac-bg)] px-1.5 py-0.5 font-mono text-micro text-[var(--ac)]";
+        // Until /api/vault answers there is no vault root, and a link built
+        // without one is a link that is certain to fail. Showing the source as
+        // plain text for that moment is better than an obsidian:// URL that
+        // opens an error dialog.
+        return (
+          <li key={path}>
+            {vaultPath ? (
+              <a
+                href={obsidianUri(vaultPath, path)}
+                title={`Open ${path} in Obsidian`}
+                className={`${shared} transition-colors hover:border-lineHi`}
+              >
+                {chip}
+              </a>
+            ) : (
+              <span title={path} className={shared}>
+                {chip}
+              </span>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }

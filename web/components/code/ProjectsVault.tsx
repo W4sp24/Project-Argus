@@ -3,6 +3,7 @@
 import useSWR from "swr";
 import Panel from "@/components/Panel";
 import { apiFetch, useNotes, useVault, type NoteInfo } from "@/lib/api";
+import { obsidianUri } from "@/lib/citations";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { parseProjectNote } from "@/lib/parseFrontmatter";
 
@@ -48,12 +49,10 @@ function useProjectContents(paths: string[]) {
   });
 }
 
-function ProjectCard({ note, content, vaultName }: { note: NoteInfo; content: string | undefined; vaultName: string | undefined }) {
+function ProjectCard({ note, content, vaultPath }: { note: NoteInfo; content: string | undefined; vaultPath: string | undefined }) {
   const parsed = content ? parseProjectNote(content) : null;
   const status = normalizeStatus(parsed?.status ?? null);
-  const uri = vaultName
-    ? `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(note.path)}`
-    : undefined;
+  const uri = vaultPath ? obsidianUri(vaultPath, note.path) : undefined;
   const pct = parsed && parsed.totalCount > 0 ? Math.round((parsed.doneCount / parsed.totalCount) * 100) : 0;
 
   const Card = (
@@ -138,7 +137,7 @@ export default function ProjectsVault() {
         <>
           <div className="grid gap-3 sm:grid-cols-2">
             {capped.map((note) => (
-              <ProjectCard key={note.path} note={note} content={contents?.[note.path] ?? undefined} vaultName={vault?.name} />
+              <ProjectCard key={note.path} note={note} content={contents?.[note.path] ?? undefined} vaultPath={vault?.path} />
             ))}
           </div>
           {projectNotes.length > MAX_PROJECTS && (

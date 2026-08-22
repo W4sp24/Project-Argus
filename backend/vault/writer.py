@@ -22,6 +22,7 @@ from pathlib import Path, PureWindowsPath
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.vault import suggestions as suggestion_queue
+from backend.vault.obsidian import daily_note_settings
 from backend.vault.suggestions import Suggestion
 
 ARGUS_LOG_HEADING = "## Argus log"
@@ -320,10 +321,8 @@ def write_briefing(vault_path: Path, markdown: str, *, taxonomy: Taxonomy | None
     tax = taxonomy or active_taxonomy()
     _git_snapshot(vault_path, "morning briefing")
 
-    daily = vault_path / tax.daily
-    daily.mkdir(parents=True, exist_ok=True)
+    note, relative = daily_note_path(vault_path, tax)
     today = date.today().isoformat()
-    note = daily / f"{today}.md"
     if not note.exists():
         note.write_text(f"# {today}\n", encoding="utf-8")
 
@@ -341,7 +340,24 @@ def write_briefing(vault_path: Path, markdown: str, *, taxonomy: Taxonomy | None
         lines[insert_at:insert_at] = [""] + section if insert_at else section
 
     note.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
-    return f"{tax.daily}/{today}.md"
+    return relative
+
+
+def daily_note_path(vault_path: Path, tax: Taxonomy) -> tuple[Path, str]:
+    """Today's daily note as ``(absolute, vault-relative)``.
+
+    Obsidian's own Daily Notes settings win over the taxonomy default. Writing
+    ``<taxonomy.daily>/<ISO>.md`` unconditionally meant a vault whose plugin is
+    pointed at ``Journal/`` -- or whose filenames carry a weekday -- grew a
+    second, parallel set of daily notes: Argus wrote one file while the user
+    kept opening the other, so a briefing or an Argus log line looked like it
+    had silently done nothing. See :mod:`backend.vault.obsidian`.
+    """
+    folder, fmt = daily_note_settings(vault_path, tax.daily)
+    stamp = date.today().strftime(fmt)
+    directory = vault_path / folder
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{stamp}.md", f"{folder}/{stamp}.md"
 
 
 # --- Suggestion application (P3): the approval gate's one executor ----------
@@ -350,12 +366,9 @@ def write_briefing(vault_path: Path, markdown: str, *, taxonomy: Taxonomy | None
 def _argus_log(vault_path: Path, line: str, *, taxonomy: Taxonomy | None = None) -> None:
     """Append an audit line under '## Argus log' in today's daily note."""
     tax = taxonomy or active_taxonomy()
-    daily = vault_path / tax.daily
-    daily.mkdir(parents=True, exist_ok=True)
-    today = date.today().isoformat()
-    note = daily / f"{today}.md"
+    note, _relative = daily_note_path(vault_path, tax)
     if not note.exists():
-        note.write_text(f"# {today}\n", encoding="utf-8")
+        note.write_text(f"# {date.today().isoformat()}\n", encoding="utf-8")
     content = note.read_text(encoding="utf-8")
     stamp = datetime.now().strftime("%H:%M")
     entry = f"- {stamp} — {line}"

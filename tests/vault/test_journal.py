@@ -1,6 +1,7 @@
 """Tests for the read-only dev-journal API (invariants D1/D2)."""
 
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -121,11 +122,22 @@ def test_sessions_parse_stub_fields(client: TestClient) -> None:
     assert oldest["has_narrative"] is True
 
 
-def test_note_returns_markdown_and_obsidian_uri(client: TestClient) -> None:
+def test_note_returns_markdown_and_obsidian_uri(client: TestClient, vault: Path) -> None:
+    """The link addresses the note by absolute path, not by vault name.
+
+    `vault=<folder basename>` is matched against the vault's *registered* name
+    in Obsidian, which is set when the vault is added and drifts from the
+    directory name the moment anyone renames either. That mismatch is what
+    produced the reported "Vault not found" dialog. `path=` has no such
+    failure mode.
+    """
     payload = client.get("/api/journal/note", params={"path": "90-Meta/projects/demo.md"}).json()
 
     assert "# Demo Project" in payload["markdown"]
-    assert payload["obsidian_uri"].startswith("obsidian://open?vault=vault&file=90-Meta")
+    uri = payload["obsidian_uri"]
+    assert uri.startswith("obsidian://open?path=")
+    assert "vault=" not in uri
+    assert quote((vault / "90-Meta/projects/demo.md").as_posix(), safe="") in uri
 
 
 def test_note_path_cannot_escape_90_meta(client: TestClient, vault: Path) -> None:

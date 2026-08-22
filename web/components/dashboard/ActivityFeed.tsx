@@ -1,10 +1,10 @@
 "use client";
 
-import useSWR from "swr";
 import Panel from "@/components/Panel";
+import { obsidianUri } from "@/lib/citations";
 import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
-import { fetcher, mutateJSON, useActivity } from "@/lib/api";
+import { mutateJSON, useActivity, useVault } from "@/lib/api";
 
 const KIND_BADGE: Record<string, string> = {
   note: "text-[var(--ac)]",
@@ -23,7 +23,7 @@ function relative(when: string): string {
 /** ACTIVITY.FEED (§4 General, right rail) — restyled, same data + delete flow. */
 export default function ActivityFeed() {
   const { data: events, mutate } = useActivity();
-  const { data: vault } = useSWR<{ name: string }>("/api/vault", fetcher);
+  const { data: vault } = useVault();
   const { confirm, confirmDialog } = useConfirm();
 
   async function removeNote(path: string) {
@@ -54,7 +54,7 @@ export default function ActivityFeed() {
             </span>
             {event.path && vault ? (
               <a
-                href={`obsidian://open?vault=${encodeURIComponent(vault.name)}&file=${encodeURIComponent(event.path)}`}
+                href={obsidianUri(vault.path, event.path)}
                 className="min-w-0 flex-1 truncate text-ink-muted underline-offset-2 hover:text-ink hover:underline"
               >
                 {event.title}

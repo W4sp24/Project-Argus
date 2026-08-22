@@ -260,3 +260,36 @@ def test_agent_tool_targets_the_workflows_own_instance(tmp_path: Path, monkeypat
     assert "/instances/" in called[0], called[0]
     assert called[0].endswith("/workflows/7/run"), called[0]
     assert any(instance in called[0] for instance in ("alpha", "bravo")), called[0]
+
+
+# --- reporting the file an automation wrote ----------------------------------
+
+
+def test_a_workflow_that_reports_a_path_gets_it_into_the_summary() -> None:
+    """Reported failure: an automation created an Obsidian file and the reply
+    never mentioned it. `paths` is what puts the file into the trace, the
+    citation chip, and the acknowledgement message."""
+    summarize = tools._make_summarize("run_automation_plan", "Plan tomorrow")
+
+    summary = summarize({}, json.dumps({"status": "ok", "path": "10-Daily/2026-08-22.md"}))
+
+    assert summary.paths == ("10-Daily/2026-08-22.md",)
+    assert summary.ok is True
+
+
+def test_a_nested_payload_is_read_too() -> None:
+    summarize = tools._make_summarize("run_automation_plan", "Plan tomorrow")
+
+    summary = summarize({}, json.dumps({"status": "ok", "payload": {"paths": ["a.md", "b.md"]}}))
+
+    assert summary.paths == ("a.md", "b.md")
+
+
+def test_a_workflow_that_reports_no_path_claims_none() -> None:
+    """Guessing a path out of an arbitrary payload would hang an obsidian://
+    link on a file nothing has checked exists."""
+    summarize = tools._make_summarize("run_automation_plan", "Plan tomorrow")
+
+    summary = summarize({}, json.dumps({"status": "ok", "payload": {"rows": 3}}))
+
+    assert summary.paths == ()

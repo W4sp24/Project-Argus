@@ -153,6 +153,29 @@ def _parse_json(result_text: str) -> Any | None:
         return None
 
 
+def _reported_paths(payload: dict[str, Any]) -> tuple[str, ...]:
+    """Vault paths the workflow says it wrote, if it says so at all.
+
+    A contract, not guesswork. An automation that wants the file it created to
+    reach the user returns ``path`` (or ``paths``) in its response body, and
+    only that is surfaced. Scanning an arbitrary payload for something that
+    looks path-shaped would hang a citation chip — and an ``obsidian://`` link
+    — on a file nothing has checked exists.
+
+    Without this an automation could write a note and the user would never
+    learn where it went, which is exactly what a product review reported.
+    """
+    body = payload.get("payload")
+    source = body if isinstance(body, dict) else payload
+    raw = source.get("paths")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        single = source.get("path")
+        raw = [single] if isinstance(single, str) else []
+    return tuple(str(item) for item in raw if isinstance(item, str) and item.strip())
+
+
 def _make_summarize(
     tool_name: str, workflow_name: str
 ) -> Callable[[dict[str, Any], str], ToolSummary]:
@@ -173,7 +196,9 @@ def _make_summarize(
         status = str(payload.get("status") or "")
         ok = status not in ("failed", "timeout")
         detail = f"{workflow_name} ({status})" if status else workflow_name
-        return ToolSummary(label=tool_name, detail=detail, paths=(), ok=ok)
+        return ToolSummary(
+            label=tool_name, detail=detail, paths=_reported_paths(payload), ok=ok
+        )
 
     return summarize
 

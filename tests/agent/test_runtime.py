@@ -16,12 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from backend.agent.adapters import resolve_run_target
+from backend.agent.adapters import ToolSummary, resolve_run_target
 from backend.agent.runtime import (
     MODEL,
     ChatAgent,
     _load_system_prompt,
     _summarize_list_notes,
+    acknowledge_tool_steps,
     build_vault_tools,
 )
 from backend.core.config import Settings
@@ -559,6 +560,33 @@ def test_the_system_prompt_names_every_tool_the_belt_actually_has() -> None:
         assert f"`{name}(" in prompt or f"`{name}`" in prompt, f"{name} is undocumented"
 
 
+def test_the_system_prompt_covers_the_automation_tools_too() -> None:
+    """`stream_chat` appends `build_automation_tools` to the belt, and those are
+    the only tools in chat that *change* anything. The test above cannot see
+    them — it builds `build_vault_tools` alone — so the write-capable half of
+    the belt was structurally outside the prompt's coverage, which is part of
+    how an automation could run without the reply ever mentioning it."""
+    prompt = _load_system_prompt(Taxonomy())
+
+    assert "`run_automation_*`" in prompt
+
+
+def test_the_system_prompt_forbids_writing_tool_calls_as_prose() -> None:
+    """A local model that prints its call is sieved out server-side
+    (backend/agent/text_tool_calls.py); telling it not to is the cheaper half of
+    the same fix."""
+    prompt = _load_system_prompt(Taxonomy())
+
+    assert "Never write a tool call yourself" in prompt
+
+
+def test_the_system_prompt_requires_actions_to_be_reported() -> None:
+    """The reported failure: a note was created and the reply never said so."""
+    prompt = _load_system_prompt(Taxonomy())
+
+    assert "Report every action you take" in prompt
+
+
 def test_the_system_prompt_names_the_configured_private_dir() -> None:
     """I3 depends on it: a prompt naming the wrong folder tells the model the
     protected zone is somewhere it isn't."""
@@ -695,3 +723,117 @@ def test_the_system_prompt_no_longer_mandates_a_canned_refusal() -> None:
 
     assert "That's not in your notes." not in prompt
     assert "Answer ONLY from tool results" not in prompt
+
+
+# --- acknowledging what a turn actually did ----------------------------------
+#
+# Reported failure: "a request to plan for tomorrow created an Obsidian file but
+# did not reflect that result in the conversation." A turn that runs a tool and
+# then produces no text renders as a tool chip followed by silence, and the user
+# has no way to learn that anything happened.
+
+
+class _SilentToolAdapter:
+    """Runs a tool and then says nothing — the shape the bug report describes.
+
+    This is not contrived: `openai_compat` forces its last turn to text, but a
+    model that spends that turn on a tool call exits the loop with the result
+    unread, and the assistant turn is banked with steps and an empty body.
+    """
+
+    model = "fake-model"
+
+    def __init__(self, summary: ToolSummary) -> None:
+        self._summary = summary
+
+    async def run(self, **_kwargs):
+        from backend.agent.adapters import ToolFinished, ToolStarted, UsageReported
+
+        yield ToolStarted(call_id="c1", name=self._summary.label, args={})
+        yield ToolFinished(call_id="c1", name=self._summary.label, summary=self._summary)
+        yield UsageReported(input_tokens=1, output_tokens=1)
+
+
+async def _run_silent(settings: Settings, monkeypatch, summary: ToolSummary) -> str:
+    monkeypatch.setattr(
+        "backend.agent.runtime.resolve_run_target",
+        lambda *a, **k: (_SilentToolAdapter(summary), "test-model"),
+    )
+    monkeypatch.setattr("backend.agent.runtime.build_vault_tools", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "backend.features.automations.tools.build_automation_tools", lambda *a, **k: []
+    )
+    agent = ChatAgent(settings)
+    agent._index = FakeIndex()
+    return "".join(
+        [event async for event in agent.stream_chat("plan tomorrow") if isinstance(event, str)]
+    )
+
+
+@pytest.mark.anyio
+async def test_a_turn_that_runs_a_tool_and_says_nothing_still_reports_it(
+    settings: Settings, monkeypatch
+) -> None:
+    written = ToolSummary(
+        label="run_automation_plan",
+        detail="Plan tomorrow (success)",
+        paths=("10-Daily/2026-08-22.md",),
+    )
+
+    text = await _run_silent(settings, monkeypatch, written)
+
+    assert "Plan tomorrow" in text, "the action went unreported"
+    assert "10-Daily/2026-08-22.md" in text, "the file it wrote was never named"
+
+
+@pytest.mark.anyio
+async def test_a_turn_that_answers_is_left_alone(settings: Settings, monkeypatch) -> None:
+    """The acknowledgement must never append itself to a real answer."""
+    monkeypatch.setattr(
+        "backend.agent.runtime.resolve_run_target",
+        lambda *a, **k: (_AbandonableAdapter(), "test-model"),
+    )
+    monkeypatch.setattr("backend.agent.runtime.build_vault_tools", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "backend.features.automations.tools.build_automation_tools", lambda *a, **k: []
+    )
+    agent = ChatAgent(settings)
+    agent._index = FakeIndex()
+
+    text = "".join(
+        [event async for event in agent.stream_chat("hello") if isinstance(event, str)]
+    )
+
+    assert text == "a long expensive answer"
+
+
+def test_a_successful_write_is_not_reported_as_a_failure() -> None:
+    message = acknowledge_tool_steps(
+        [ToolSummary(label="run_automation_x", detail="Meeting prep (success)")]
+    )
+
+    assert "ran the automation Meeting prep" in message
+    assert "could not" not in message
+
+
+def test_a_failed_write_says_so_without_stuttering() -> None:
+    message = acknowledge_tool_steps(
+        [ToolSummary(label="run_automation_x", detail="Sync (failed)", ok=False)]
+    )
+
+    assert "without success" in message
+    # The summarizer already puts the status in `detail`; repeating it reads as
+    # "tried to run Sync (failed), but it failed".
+    assert "(failed)" not in message
+
+
+def test_repeated_identical_steps_read_as_one() -> None:
+    same = ToolSummary(label="search_vault", detail="'Dijkstra'")
+
+    message = acknowledge_tool_steps([same, same, same])
+
+    assert message.count("searched your vault") == 1
+
+
+def test_a_turn_with_no_steps_gets_no_acknowledgement() -> None:
+    assert acknowledge_tool_steps([]) == ""

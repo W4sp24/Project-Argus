@@ -46,6 +46,7 @@ from backend.agent.adapters import (
     require_user_turn,
     summarize_tool_result,
 )
+from backend.agent.text_tool_calls import TextToolCallSieve
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
@@ -267,9 +268,13 @@ class OpenAICompatAdapter:
 
                 text_parts: list[str] = []
                 buffer = _ToolCallBuffer()
+                # One sieve per turn: a model that printed its call as text on
+                # turn 1 is not thereby suspected for the rest of the run, and
+                # the synthesized call ids stay unique across turns.
+                sieve = TextToolCallSieve(by_name, id_prefix=f"text_{turn}")
                 try:
                     async for event in self._stream_turn(
-                        client, url, payload, text_parts, buffer, totals
+                        client, url, payload, text_parts, buffer, totals, sieve
                     ):
                         yield event
                 except _StreamOptionsError:
@@ -281,11 +286,14 @@ class OpenAICompatAdapter:
                     self._ask_for_usage = False
                     payload.pop("stream_options", None)
                     async for event in self._stream_turn(
-                        client, url, payload, text_parts, buffer, totals
+                        client, url, payload, text_parts, buffer, totals, sieve
                     ):
                         yield event
 
-                calls = buffer.finish()
+                # The structured channel wins when both spoke: a model that
+                # emitted real tool_calls *and* narrated one in prose meant the
+                # former, and the sieve only ever claims what it recognises.
+                calls = buffer.finish() or sieve.calls
                 if not calls:
                     break
 
@@ -347,8 +355,16 @@ class OpenAICompatAdapter:
         text_parts: list[str],
         buffer: _ToolCallBuffer,
         totals: dict[str, int],
+        sieve: TextToolCallSieve,
     ) -> AsyncIterator[AgentEvent]:
-        """Stream one completion, filling ``text_parts``/``buffer``/``totals``."""
+        """Stream one completion, filling ``text_parts``/``buffer``/``totals``.
+
+        Content deltas pass through ``sieve`` on the way out. Everything this
+        endpoint sends as ``content`` used to be forwarded to the browser
+        verbatim, which is how a tool call a small model printed as text became
+        the assistant's visible reply — see
+        :mod:`backend.agent.text_tool_calls`.
+        """
         # This completion's own counters, folded into ``totals`` when it ends.
         # Usage arrives cumulative within one completion, so it is assigned
         # here and summed only across turns — the same split
@@ -380,10 +396,19 @@ class OpenAICompatAdapter:
                         delta = choice.get("delta") or {}
                         content = delta.get("content")
                         if content:
-                            text_parts.append(str(content))
-                            yield TextDelta(str(content))
+                            visible = sieve.feed(str(content))
+                            if visible:
+                                text_parts.append(visible)
+                                yield TextDelta(visible)
                         for fragment in delta.get("tool_calls") or []:
                             buffer.add(fragment)
+                # An envelope that never closed is text after all. Flushing
+                # here rather than in the `finally` keeps it off the error and
+                # `_StreamOptionsError` paths, where nothing was read at all.
+                tail = sieve.finish()
+                if tail:
+                    text_parts.append(tail)
+                    yield TextDelta(tail)
         finally:
             # Even a cancelled or failed turn already cost the user tokens, so
             # bank whatever the server reported before we stopped reading.

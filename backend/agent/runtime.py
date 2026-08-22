@@ -35,6 +35,7 @@ from backend.agent.adapters import (
     text_result,
 )
 from backend.agent.history import budget_history
+from backend.agent.text_tool_calls import BUILTIN_CHAT_TOOL_NAMES
 from backend.core.config import Settings
 from backend.core.taxonomy import Taxonomy
 from backend.rag.index import VaultIndex
@@ -452,6 +453,67 @@ def build_vault_tools(
     ]
 
 
+def _describe_step(summary: ToolSummary) -> str:
+    """One clause describing what a single tool call did, in plain language."""
+    label, detail = summary.label, summary.detail
+    if label.startswith("run_automation_"):
+        # The summarizer appends the run status ("Meeting prep (success)"),
+        # which reads as a stutter once the clause says the same thing.
+        what = detail.split(" (")[0] or "an automation"
+        if summary.ok:
+            return f"ran the automation {what}"
+        return f"tried to run the automation {what}, without success"
+    if label == "search_vault":
+        return f"searched your vault for {detail}" if detail else "searched your vault"
+    if label == "read_note":
+        return f"read {detail}" if detail else "read a note"
+    if label == "list_notes":
+        return f"browsed your vault ({detail})" if detail else "browsed your vault"
+    if label == "list_tasks":
+        return "checked your tasks"
+    return label.replace("_", " ")
+
+
+def acknowledge_tool_steps(summaries: Sequence[ToolSummary]) -> str:
+    """A message for a turn that ran tools and then said nothing.
+
+    This exists because of a reported failure: the agent created a note in the
+    vault and its reply never mentioned it, so from the user's side nothing had
+    happened. The loop can genuinely end with no text — a model that spends its
+    last step on a tool call (``openai_compat``'s turn budget) never gets to
+    answer, and an empty assistant turn renders as a tool chip followed by
+    silence.
+
+    Silence is the one thing that must not happen. Reporting what ran, and that
+    no answer came of it, is worse than a good answer and far better than
+    nothing.
+    """
+    if not summaries:
+        return ""
+    clauses = [_describe_step(summary) for summary in summaries]
+    # Deduplicate consecutive identical clauses — three searches for the same
+    # phrase should read as one, not as a stutter.
+    deduped: list[str] = []
+    for clause in clauses:
+        if not deduped or deduped[-1] != clause:
+            deduped.append(clause)
+    did = deduped[0] if len(deduped) == 1 else ", ".join(deduped[:-1]) + f" and {deduped[-1]}"
+    writes = [summary for summary in summaries if summary.label not in BUILTIN_CHAT_TOOL_NAMES]
+    paths = [path for summary in summaries for path in summary.paths]
+    where = f" The file is at {paths[0]}." if writes and paths else ""
+    # A write that worked is a result in itself, and framing it as a failure to
+    # answer would misreport what actually happened — the exact complaint the
+    # review raised, in the opposite direction.
+    if writes and all(summary.ok for summary in writes):
+        tail = "Tell me if you want anything else doing with it."
+    else:
+        tail = (
+            "I could not put an answer together after that — "
+            "ask again and I will pick up from here."
+        )
+    return f"I {did}.{where} {tail}"
+
+
 class ChatAgent:
     """Streams RAG-grounded chat answers. One instance per app process."""
 
@@ -538,6 +600,10 @@ class ChatAgent:
         turns = budget_history([*(history or []), Message("user", message)])
 
         recorded = False
+        # Everything the turn actually did, so a turn that ends without text
+        # can still say so. See acknowledge_tool_steps.
+        steps: list[ToolSummary] = []
+        said_something = False
         try:
             async for event in adapter.run(
                 system_prompt=_load_system_prompt(self._settings.taxonomy),
@@ -546,8 +612,11 @@ class ChatAgent:
                 max_turns=MAX_TURNS,
             ):
                 if isinstance(event, TextDelta):
+                    said_something = said_something or bool(event.text.strip())
                     yield event.text
                 elif isinstance(event, ToolStarted | ToolFinished):
+                    if isinstance(event, ToolFinished):
+                        steps.append(event.summary)
                     yield event
                 elif isinstance(event, Notice):
                     # Worth a log line as well as a frame: a model that keeps
@@ -561,6 +630,11 @@ class ChatAgent:
                         self._settings.db_path, "chat", event, model=resolved_model
                     )
                     recorded = True
+            if steps and not said_something:
+                logger.warning(
+                    "chat turn ran %d tool(s) and produced no text (%s)", len(steps), resolved_model
+                )
+                yield acknowledge_tool_steps(steps)
         finally:
             # Every adapter yields UsageReported *last*, so closing the tab
             # mid-answer used to drop the whole turn — and the abandoned answers
