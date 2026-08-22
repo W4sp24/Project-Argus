@@ -114,16 +114,27 @@ test("a first message creates a thread that can be renamed and deleted", async (
 });
 
 test("a turn in flight can be stopped, and the question survives", async ({ page }) => {
+  // STOP only means something while a turn is genuinely in flight, and against
+  // the real backend that state has no guaranteed duration: with no agent
+  // configured the turn ends by itself, sometimes as an error frame and
+  // sometimes as a dropped socket. Whichever landed first decided which
+  // assertion below broke — :132 saw STOP patched into a disabled SEND (React
+  // reuses the node, so a *missing* button presents as a disabled one), while
+  // :140 saw `stop()` early-return on a cleared `busyRef` and leave the message
+  // in "error" rather than "stopped". Mocking the socket and never answering is
+  // what makes this a test about STOP instead of a race against how fast the
+  // backend gives up. No connectToServer(), so Playwright opens the socket in
+  // the page and nothing ever reaches the real one.
+  await page.routeWebSocket("**/ws/chat", () => {});
+
   await page.goto("/chat");
   await page.getByRole("button", { name: "New thread" }).click();
   await page.getByPlaceholder("Ask your vault").fill("does this survive");
   await page.getByRole("button", { name: "Send" }).click();
 
-  // With no live agent the turn does not fail fast — it simply stays in
-  // flight, which is precisely the state STOP exists for. The composer stays
-  // usable throughout rather than greying the whole surface out.
-  // Scoped to the transcript: the thread title is derived from the message,
-  // so the same words also appear in the rail and the page header.
+  // The composer stays usable throughout rather than greying the whole surface
+  // out. Scoped to the transcript: the thread title is derived from the
+  // message, so the same words also appear in the rail and the page header.
   const transcript = page.getByRole("log", { name: "Conversation" });
   const stop = page.getByRole("button", { name: "Stop generating" });
   await expect(stop).toBeVisible();
