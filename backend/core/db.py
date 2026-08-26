@@ -291,6 +291,57 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread
     ON chat_messages(thread_id, id);
+
+-- One user action ingesting N files. This exists because ingestion had no
+-- record at all: `POST /api/ingest` embedded on the request thread and
+-- returned a chunk count, `/api/study/upload` returned "indexing in
+-- background" and nothing ever said whether it finished, and reindex status
+-- was a single in-process object with three fields. None of them could say
+-- which file was at which stage, so a slow or partial ingest was
+-- indistinguishable from a broken one.
+--
+-- `boot_id` is what makes a restart recoverable: rows carrying a different
+-- boot id than the running process belong to a job whose thread no longer
+-- exists, so they are reconciled to 'failed' once at startup rather than
+-- polling forever. `automation_runs` has the same problem and solves it with
+-- an 'unresolved' status; the in-memory reindex `_State` sidesteps it for
+-- free by resetting on restart, which a table does not get.
+CREATE TABLE IF NOT EXISTS ingest_jobs (
+    id             TEXT PRIMARY KEY,
+    boot_id        TEXT NOT NULL,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at    TEXT,
+    status         TEXT NOT NULL
+                   CHECK (status IN ('queued', 'running', 'ok', 'partial', 'failed')),
+    target         TEXT NOT NULL,
+    summary_prompt TEXT NOT NULL DEFAULT '',
+    total          INTEGER NOT NULL DEFAULT 0,
+    done           INTEGER NOT NULL DEFAULT 0,
+    error          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_jobs_created_at
+    ON ingest_jobs(created_at DESC, id DESC);
+
+-- One row per file, and the reason the UI can show a real pipeline instead of
+-- a spinner. `stage` is the wire shape the progress list renders directly.
+-- 'skipped' is a first-class outcome, not a failure: a `#no-ai` file whose
+-- summary was deliberately not generated must say so, because silently not
+-- summarising looks exactly like a bug.
+-- `ON DELETE CASCADE` relies on connect()'s PRAGMA foreign_keys=ON.
+CREATE TABLE IF NOT EXISTS ingest_job_items (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       TEXT NOT NULL REFERENCES ingest_jobs(id) ON DELETE CASCADE,
+    filename     TEXT NOT NULL,
+    path         TEXT,
+    stage        TEXT NOT NULL
+                 CHECK (stage IN ('queued', 'saving', 'indexing', 'summarizing',
+                                  'done', 'failed', 'skipped')),
+    chunks       INTEGER NOT NULL DEFAULT 0,
+    summary_path TEXT,
+    error        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_job_items_job
+    ON ingest_job_items(job_id, id);
 """
 
 
