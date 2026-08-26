@@ -51,6 +51,14 @@ class FakeIndex:
     def all_chunks(self):
         return CORPUS
 
+    def chunk_counts(self):
+        counts: dict[str, int] = {}
+        for chunk in CORPUS:
+            path = chunk["meta"].get("path")
+            if path:
+                counts[path] = counts.get(path, 0) + 1
+        return counts
+
     def upsert_file(self, vault_path, rel_path):
         self.upserts.append(rel_path)
         return 1
@@ -175,6 +183,63 @@ def test_course_sources_lists_non_markdown_materials(client: TestClient) -> None
     # Not in the fixture's fake index -> None, not 0 (0 would falsely claim
     # "indexed, zero chunks" rather than "not indexed at all").
     assert by_name["slides.pptx"]["chunks"] is None
+
+
+def test_course_sources_shape_is_unchanged(client: TestClient) -> None:
+    """Regression guard for rebuilding course_sources on vault.sources.
+
+    The Course Hub rail switches on ``zone`` (three usages in
+    CourseSourcesPanel.tsx) and the TS type unions it, so the JSON this
+    endpoint returns must not drift while its implementation is replaced.
+    """
+    client.post(
+        "/api/study/upload",
+        data={"course": "CS201"},
+        files={"file": ("handout.pdf", b"fake pdf", "application/octet-stream")},
+    )
+
+    sources = client.get("/api/study/courses/CS201/sources").json()
+
+    assert sources, "fixture course must have at least one file"
+    for item in sources:
+        assert set(item) == {"path", "title", "zone", "kind", "modified", "chunks"}
+        assert item["zone"] in {"materials", "notes", "study"}
+
+
+def test_course_sources_stays_flat(client: TestClient, tmp_path: Path) -> None:
+    """course_sources walks each zone with iterdir, not rglob.
+
+    The generic lister defaults to recursive; the course rail must not
+    silently start showing `materials/week1/slides.pdf`, which it never has.
+    """
+    nested = tmp_path / "vault" / "15-Courses" / "CS201" / "materials" / "week1"
+    nested.mkdir(parents=True, exist_ok=True)
+    (nested / "deep.pdf").write_bytes(b"fake pdf")
+
+    paths = {item["path"] for item in client.get("/api/study/courses/CS201/sources").json()}
+
+    assert not any("week1" in path for path in paths)
+
+
+def test_course_sources_hides_a_no_ai_note(client: TestClient, tmp_path: Path) -> None:
+    """Behaviour change, deliberate: the rail used to list `#no-ai` notes.
+
+    course_sources only ever checked directories, so a note tagged `#no-ai`
+    inside a course folder was listed (and offered as retrieval context) even
+    though I3 says it is never indexed or sent anywhere. Rebuilding on
+    vault.sources, which uses the full `is_visible` predicate, closes that.
+    """
+    notes_dir = tmp_path / "vault" / "15-Courses" / "CS201" / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    (notes_dir / "private-thoughts.md").write_text(
+        "---\ntags: [no-ai]\n---\n\n# Mine\n", encoding="utf-8"
+    )
+    (notes_dir / "shareable.md").write_text("# Fine\n", encoding="utf-8")
+
+    paths = {item["path"] for item in client.get("/api/study/courses/CS201/sources").json()}
+
+    assert not any("private-thoughts" in path for path in paths), "I3 violation"
+    assert any("shareable" in path for path in paths)
 
 
 def test_exam_generation_quiz_and_attempt_roundtrip(client: TestClient, tmp_path: Path) -> None:

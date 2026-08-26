@@ -5,6 +5,7 @@ The generator (agent) and vault index are injected so tests run with fakes.
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 import threading
@@ -32,6 +33,8 @@ from backend.features.study.practice_exam import (
 from backend.features.study.study_guide import generate_study_guide
 from backend.vault.errors import raise_http
 from backend.vault.writer import WriterError
+
+logger = logging.getLogger("argus.study")
 
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ -]")
 
@@ -110,8 +113,17 @@ def build_study_router(
         """Real files (materials/notes/study) — powers the Course Hub SOURCES
         rail, which ``GET /api/notes`` alone can't (markdown-only)."""
         safe_code = SAFE_NAME_RE.sub("", code)
+        counts: dict[str, int] | None = None
+        try:
+            counts = index_factory().chunk_counts()
+        except Exception as exc:
+            # An index that is unavailable (no [rag] extras) or broken must
+            # not take the rail down with it -- the files are still real and
+            # still listable; they just report an unknown chunk count. Same
+            # posture as /api/index/status.
+            logger.warning("course sources: chunk counts unavailable: %s", exc)
         return course_sources(
-            settings.vault_path, safe_code, taxonomy=settings.taxonomy, index=index_factory()
+            settings.vault_path, safe_code, taxonomy=settings.taxonomy, chunk_counts=counts
         )
 
     @router.delete("/courses/{code}", response_model=CourseDeleteSummary)

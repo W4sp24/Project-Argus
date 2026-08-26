@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +10,7 @@ from pydantic import BaseModel
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.index import VaultIndex
+from backend.vault.sources import list_sources
 
 # Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
 # settings.taxonomy.courses / active_taxonomy().courses.
@@ -92,15 +92,23 @@ def course_sources(
     code: str,
     *,
     taxonomy: Taxonomy | None = None,
-    index: VaultIndex | None = None,
+    chunk_counts: dict[str, int] | None = None,
 ) -> list[CourseSourceInfo]:
     """Every real file under one course's materials/notes/study zones.
 
-    Unlike :func:`backend.vault.notes.list_notes` (markdown only), this walks
-    the actual filesystem, so PDF/PPTX/DOCX materials — invisible to
-    ``GET /api/notes`` — show up too. That gap was the reported "uploaded
-    files are invisible" bug: a course could have real, indexed materials and
-    the SOURCES rail (built on ``useNotes()``) would still show nothing.
+    A thin, zone-stamping wrapper over :func:`backend.vault.sources.list_sources`
+    -- the same filesystem walk, restricted to three folders. It stays a
+    separate function because ``zone`` is meaningful here and nowhere else:
+    the Course Hub rail switches on it, so it cannot live on the generic
+    ``SourceInfo``.
+
+    Each zone is walked non-recursively, as it always has been, so a file in
+    ``materials/week1/`` is still not listed.
+
+    ``chunk_counts`` is a plain ``{rel_path: chunks}`` map (from
+    :meth:`backend.rag.index.VaultIndex.chunk_counts`) rather than an index,
+    so this module no longer reaches into chromadb -- and no longer pays
+    ``all_chunks()``'s whole-vault *document* fetch just to take a length.
     """
     tax = taxonomy or active_taxonomy()
     zones = {
@@ -109,40 +117,23 @@ def course_sources(
         "study": tax.course_study(code),
     }
 
-    chunk_counts: dict[str, int] | None = None
-    if index is not None:
-        chunk_counts = {}
-        for chunk in index.all_chunks():
-            chunk_path = chunk["meta"].get("path")
-            if chunk_path:
-                chunk_counts[chunk_path] = chunk_counts.get(chunk_path, 0) + 1
-
     found: list[CourseSourceInfo] = []
     for zone, rel_dir in zones.items():
-        zone_dir = vault_path / rel_dir
-        if not zone_dir.is_dir():
-            continue
-        for file_path in sorted(zone_dir.iterdir()):
-            if not file_path.is_file():
-                continue
-            rel = file_path.relative_to(vault_path).as_posix()
-            title = file_path.stem
-            if file_path.suffix.lower() == ".md":
-                try:
-                    post = frontmatter.load(file_path)
-                    fm_title = post.metadata.get("title")
-                    if isinstance(fm_title, str) and fm_title.strip():
-                        title = fm_title.strip()
-                except Exception:
-                    pass
+        for source in list_sources(
+            vault_path,
+            taxonomy=tax,
+            chunk_counts=chunk_counts,
+            folder=rel_dir,
+            recursive=False,
+        ):
             found.append(
                 CourseSourceInfo(
-                    path=rel,
-                    title=title,
+                    path=source.path,
+                    title=source.title,
                     zone=zone,
-                    kind=file_path.suffix.lstrip(".").upper() or "FILE",
-                    modified=datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC).isoformat(),
-                    chunks=chunk_counts.get(rel) if chunk_counts is not None else None,
+                    kind=source.kind,
+                    modified=source.modified,
+                    chunks=source.chunks,
                 )
             )
     found.sort(key=lambda item: item.modified, reverse=True)
