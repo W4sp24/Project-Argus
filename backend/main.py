@@ -175,10 +175,23 @@ def create_app(
     def health() -> HealthResponse:
         return HealthResponse()
 
-    def _default_index_factory() -> object:
-        from backend.rag.index import VaultIndex
+    _shared_index: Callable[[], object] | None = None
 
-        return VaultIndex(resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy)
+    def _default_index_factory() -> object:
+        """One VaultIndex for this app, not one per call.
+
+        The construction and the reasoning both live in
+        :func:`backend.rag.index.make_index_factory`; this wrapper only defers
+        the import, so an install without the ``[rag]`` extras still boots.
+        """
+        from backend.rag.index import make_index_factory
+
+        nonlocal _shared_index
+        if _shared_index is None:
+            _shared_index = make_index_factory(
+                resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy
+            )
+        return _shared_index()
 
     def _default_generator(feature: str) -> Callable:
         """agent_generate bound to a feature label + db so usage rows attribute.
