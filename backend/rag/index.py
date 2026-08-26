@@ -255,6 +255,24 @@ class VaultIndex:
         files = {meta.get("path") for meta in result["metadatas"] if meta.get("path")}
         return {"chunks": total, "files": len(files)}
 
+    def chunk_counts(self) -> dict[str, int]:
+        """``{rel_path: chunks}`` for every indexed file — metadata only.
+
+        Deliberately not built on ``all_chunks()``: that fetches the *text* of
+        every chunk in the vault, and the only thing a source listing wants
+        from it is a count per path. This uses the same metadata-only
+        ``get`` that :meth:`size` is already blessed to call on every status
+        poll, and likewise never touches ``_embed``.
+        """
+        if self.collection.count() == 0:
+            return {}
+        counts: dict[str, int] = {}
+        for meta in self.collection.get(include=["metadatas"])["metadatas"]:
+            path = meta.get("path")
+            if path:
+                counts[path] = counts.get(path, 0) + 1
+        return counts
+
     def query(self, text: str, n_results: int = 20, where: dict | None = None) -> list[dict]:
         """Vector search returning [{text, meta, score}] (higher = closer)."""
         if self.collection.count() == 0:
