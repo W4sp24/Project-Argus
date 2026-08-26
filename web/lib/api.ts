@@ -960,6 +960,174 @@ export function reindexVault() {
   return mutateJSON<IndexStatus>("/api/index/reindex", undefined);
 }
 
+
+// --- Sources & ingestion ------------------------------------------------
+
+/**
+ * `POST /api/ingest` — the single-file, synchronous route.
+ *
+ * Declared here rather than inline at each call site: two components read
+ * this shape and both had their own copy of it, which is how the two drifted
+ * over what `indexed: false` means. `index_error` is the difference between
+ * "indexing broke" and "the [rag] extras are not installed", which
+ * `indexed: false` alone cannot express.
+ */
+export interface IngestResponse {
+  path: string;
+  chunks: number;
+  indexed: boolean;
+  index_error: string | null;
+}
+
+/** One real file in the vault, indexed or not. GET /api/sources. */
+export interface SourceInfo {
+  path: string;
+  title: string;
+  /** Parent directory, vault-relative; `""` for a file at the vault root. */
+  folder: string;
+  /** Uppercased extension, e.g. "PDF" / "MD". */
+  kind: string;
+  modified: string;
+  size: number;
+  /** Chunks in the live index, or `null` when unknown — either the index holds
+   * nothing for this file, or there is no index to ask. Never `0`; see
+   * `index_available` for telling those two apart. */
+  chunks: number | null;
+}
+
+export interface SourcesResponse {
+  sources: SourceInfo[];
+  /** False when the [rag] extras are missing or chroma is unreadable, which is
+   * why every `chunks` came back null. */
+  index_available: boolean;
+}
+
+/** Everything in the vault that RAG can read. */
+export function useSources(folder?: string) {
+  const query = folder ? `?folder=${encodeURIComponent(folder)}` : "";
+  return useSWR<SourcesResponse>(`/api/sources${query}`, fetcher);
+}
+
+/** Vault folders an ingest may be pointed at. Taxonomy-derived, server-side:
+ * never build one of these paths in the frontend. */
+export function useIngestDestinations() {
+  return useSWR<{ destinations: string[] }>("/api/ingest/destinations", fetcher);
+}
+
+/** Where one file got to. `stage` is rendered directly by the progress list. */
+export type IngestStage =
+  | "queued"
+  | "saving"
+  | "indexing"
+  | "summarizing"
+  | "done"
+  | "failed"
+  | "skipped";
+
+export interface IngestJobItem {
+  id: number;
+  filename: string;
+  path: string | null;
+  stage: IngestStage;
+  chunks: number;
+  summary_path: string | null;
+  error: string | null;
+}
+
+export type IngestJobStatus = "queued" | "running" | "ok" | "partial" | "failed";
+
+export interface IngestJob {
+  id: string;
+  created_at: string;
+  finished_at: string | null;
+  status: IngestJobStatus;
+  target: string;
+  summary_prompt: string;
+  total: number;
+  done: number;
+  error: string | null;
+  /** Present on GET /api/ingest/jobs/{id}, absent from the history listing. */
+  items?: IngestJobItem[];
+}
+
+const JOB_POLL_MS = 700;
+
+/**
+ * Poll one ingest job. Polling rather than streaming, deliberately: the job
+ * outlives its request, so it must survive a tab close, a navigation away and
+ * a reload — none of which a response stream does.
+ *
+ * `refreshInterval` is the function form so it stops on its own once the job
+ * reaches a terminal status; there is no timeout to manage and nothing to
+ * clean up on unmount.
+ */
+export function useIngestJob(jobId: string | null) {
+  return useSWR<IngestJob>(jobId ? `/api/ingest/jobs/${jobId}` : null, fetcher, {
+    refreshInterval: (job) =>
+      job && (job.status === "queued" || job.status === "running") ? JOB_POLL_MS : 0,
+  });
+}
+
+/** Recent ingest jobs, newest first, without their items. */
+export function useIngestJobs() {
+  return useSWR<{ jobs: IngestJob[] }>("/api/ingest/jobs", fetcher);
+}
+
+export interface IngestPrecheck {
+  exists: boolean;
+  path: string | null;
+  /** SHA-256 of the file already in the vault, for comparing against the
+   * browser's hash of the file about to be uploaded. */
+  sha256: string | null;
+}
+
+/** What is already at `<target>/<filename>`, so the UI can offer Replace. */
+export function precheckIngest(filename: string, target: string) {
+  return mutateJSON<IngestPrecheck>("/api/ingest/precheck", { filename, target });
+}
+
+/**
+ * Start a batch ingest. Returns immediately with a job id; poll
+ * `useIngestJob` for per-file progress.
+ */
+export async function startIngestJob(
+  files: File[],
+  options: { target: string; summaryPrompt?: string; replace?: boolean },
+): Promise<string> {
+  const body = new FormData();
+  files.forEach((file) => body.append("files", file));
+  body.append("target", options.target);
+  body.append("summary_prompt", options.summaryPrompt ?? "");
+  body.append("replace", String(options.replace ?? false));
+  const response = await apiFetch("/api/ingest/jobs", { method: "POST", body });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      payload,
+      typeof payload.detail === "string" ? payload.detail : `ingest failed (${response.status})`,
+    );
+  }
+  return (payload as { job_id: string }).job_id;
+}
+
+/**
+ * SHA-256 of a picked file, hex, matching the backend's digest of whatever is
+ * already at that path. `crypto.subtle` needs a secure context, which
+ * localhost is; it returns null rather than throwing if that ever fails, and
+ * the caller then treats the collision as "changed" and offers Replace.
+ */
+export async function hashFile(file: File): Promise<string | null> {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    return null;
+  }
+}
+
 // --- Quick Links --------------------------------------------------------
 
 /** How a Quick Link's icon is stored. `null` kind => fall back to the `icon` glyph. */

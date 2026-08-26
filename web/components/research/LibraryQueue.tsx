@@ -13,6 +13,7 @@ import {
   updateNoteWithRetry,
   useNotesIn,
   useVault,
+  type IngestResponse,
   type NoteInfo,
 } from "@/lib/api";
 import { useTypewriter } from "@/lib/useTypewriter";
@@ -251,7 +252,7 @@ export default function LibraryQueue({ onCounts }: { onCounts: (counts: LibraryC
           typeof payload.detail === "string" ? payload.detail : `upload failed (${response.status})`,
         );
       }
-      const { path: filePath, index_error } = payload as { path: string; index_error: string | null };
+      const { path: filePath, index_error } = payload as IngestResponse;
       const guessedTitle =
         file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || file.name;
       const notePath = await createPaperWithRetry(papersDir, slugify(guessedTitle), () =>

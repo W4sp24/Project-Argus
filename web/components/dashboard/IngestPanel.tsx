@@ -1,10 +1,11 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
-import { ApiError, apiFetch, mutateJSON } from "@/lib/api";
+import { ApiError, apiFetch, mutateJSON, type IngestResponse } from "@/lib/api";
 import { useTypewriter } from "@/lib/useTypewriter";
 
 const ACCEPT = ".pdf,.pptx,.docx,.md,.eml";
@@ -55,11 +56,7 @@ export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
           typeof payload.detail === "string" ? payload.detail : `upload failed (${response.status})`,
         );
       }
-      const { chunks, indexed, index_error } = payload as {
-        chunks: number;
-        indexed: boolean;
-        index_error: string | null;
-      };
+      const { chunks, indexed, index_error } = payload as IngestResponse;
       if (indexed) {
         setStatus(`done :: ${file.name} indexed · ${chunks} chunks`);
       } else if (index_error) {
@@ -126,7 +123,17 @@ export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
   }
 
   return (
-    <Panel label="INGEST">
+    <Panel
+      label="INGEST"
+      headerRight={
+        <Link
+          href="/sources"
+          className="font-mono text-meta uppercase tracking-wide text-ink-faint transition-colors hover:text-[var(--ac)]"
+        >
+          sources →
+        </Link>
+      }
+    >
       {/* A <button>, not a clickable <div>: the dropzone was mouse-only, with
           no role, no tabindex and no key handler. */}
       <button

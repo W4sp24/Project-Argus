@@ -24,4 +24,8 @@ export const FLAGS = {
   // (GET /api/study/courses/<code>/sources, not markdown-only /api/notes).
   courseHub: "enabled",
   quickLinks: "enabled", // GET/POST/PUT/DELETE /api/quick-links are wired
+  // /sources — the corpus as a browsable list, and the ingest form that
+  // fills it. GET /api/sources + POST /api/ingest/jobs are wired; progress
+  // is polled from GET /api/ingest/jobs/{id}.
+  sources: "enabled",
 } as const;
