@@ -238,6 +238,7 @@ def run_ingest_job(
     index_factory: Callable[[], Any],
     generator: Generator | None,
     staging_dir: Path,
+    replace: bool = False,
 ) -> None:
     """Save, index and optionally summarise every staged file. Never raises."""
     conn = connect(settings.db_path)
@@ -247,8 +248,15 @@ def run_ingest_job(
         if job is None:
             logger.warning("ingest job %s vanished before it ran", job_id)
             return
-        _run(conn, job, settings=settings, index_factory=index_factory, generator=generator,
-             staging_dir=staging_dir)
+        _run(
+            conn,
+            job,
+            settings=settings,
+            index_factory=index_factory,
+            generator=generator,
+            staging_dir=staging_dir,
+            replace=replace,
+        )
     except Exception as exc:  # a job that dies silently is the bug this replaces
         logger.exception("ingest job %s failed", job_id)
         try:
@@ -268,6 +276,7 @@ def _run(
     index_factory: Callable[[], Any],
     generator: Generator | None,
     staging_dir: Path,
+    replace: bool = False,
 ) -> None:
     """The happy path, with per-file failures contained to their own item."""
     job_id = job["id"]
@@ -294,6 +303,7 @@ def _run(
                 generator=generator,
                 instruction=instruction,
                 target=target,
+                replace=replace,
             )
         )
 
@@ -322,6 +332,7 @@ def _run_one(
     generator: Generator | None,
     instruction: str,
     target: str,
+    replace: bool = False,
 ) -> str:
     """One file through save -> index -> summary. Returns its terminal stage."""
     item_id = item["id"]
@@ -335,6 +346,7 @@ def _run_one(
             taxonomy=settings.taxonomy,
             snapshot=False,
             log=False,
+            replace=replace,
         )
 
         store.advance_item(conn, item_id, stage="indexing", path=rel_path)

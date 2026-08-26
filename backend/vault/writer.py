@@ -256,6 +256,7 @@ def save_ingest_file(
     taxonomy: Taxonomy | None = None,
     snapshot: bool = True,
     log: bool = True,
+    replace: bool = False,
 ) -> str:
     """Save one uploaded file into the vault (snapshot-first, I1/I2).
 
@@ -272,6 +273,13 @@ def save_ingest_file(
     for it. A caller passing ``snapshot=False`` takes responsibility for
     calling :func:`snapshot_vault` once, before the first file. The path
     guard runs either way -- deferring the undo point never defers I3.
+
+    ``replace=True`` writes over a file already at that name instead of
+    deduping to ``name-2``. Dedupe is the right default -- an upload should
+    never silently destroy something -- but it is wrong for the one case where
+    the user has been shown the collision and asked for it: re-ingesting a
+    corrected file. Deduping there leaves the stale copy indexed alongside the
+    new one, and every answer can then cite either.
     """
     tax = taxonomy or active_taxonomy()
     safe_name = SAFE_NAME_RE.sub("_", filename).strip() or "upload.bin"
@@ -280,7 +288,7 @@ def save_ingest_file(
     if snapshot:
         _git_snapshot(vault_path, f"ingest {safe_name}")
     guarded.parent.mkdir(parents=True, exist_ok=True)
-    destination = _dedupe(guarded)
+    destination = guarded if replace else _dedupe(guarded)
     destination.write_bytes(data)
     rel_path = destination.relative_to(vault_path).as_posix()
     if log:

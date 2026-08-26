@@ -89,6 +89,7 @@ def create_app(
     scheduler_factory: Callable | None = None,
     model_prober: Callable | None = None,
     model_puller: Callable | None = None,
+    ingest_job_runner: Callable | None = None,
 ) -> FastAPI:
     """Build the FastAPI app around the given (or default) settings.
 
@@ -230,7 +231,12 @@ def create_app(
         build_study_router(resolved, generator or _default_generator("study"), index)
     )
     app.include_router(
-        build_ingest_router(resolved, generator or _default_generator("ingest"), index)
+        build_ingest_router(
+            resolved,
+            generator or _default_generator("ingest"),
+            index,
+            job_runner=ingest_job_runner,
+        )
     )
     app.include_router(build_system_router(resolved, model_prober, model_puller))
     app.include_router(build_tasks_router(resolved))
