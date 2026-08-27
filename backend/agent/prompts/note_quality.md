@@ -1,4 +1,4 @@
-## What makes this note worth keeping
+**What makes this note worth keeping.**
 
 The reader is a student who will come back to this note weeks later, without
 the document beside them, to revise from. Everything below follows from that.
@@ -23,7 +23,7 @@ the document beside them, to revise from. Everything below follows from that.
   worked case, keep it. Abstractions are what the reader already failed to
   remember.
 
-## End every note with a self-test
+**End every note with a self-test.**
 
 After your last section, add:
 

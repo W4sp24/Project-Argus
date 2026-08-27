@@ -158,8 +158,11 @@ COURSE_NOTE_SUFFIX = ".notes.md"
 #: :mod:`backend.agent.formatting`, shared with the chat agent and the
 #: course-wide study guide -- so a guide and the note beside it are held to one
 #: set of rules rather than to whichever sentence each prompt happened to grow.
-_HOUSE_RULES = """Do not add a title heading; one is already in the note's
-frontmatter, and a second one just repeats it."""
+_HOUSE_RULES = """The rules below apply to every note whatever its shape. They
+are instructions, not content: none of their headings belong in what you write.
+
+Do not add a title heading either -- one is already in the note's frontmatter,
+and a second just repeats it."""
 
 _PROMPT = """{instruction}
 

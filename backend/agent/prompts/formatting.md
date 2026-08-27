@@ -1,4 +1,4 @@
-## Mathematical and technical notation
+**Mathematical and technical notation.**
 
 Write every equation, variable, symbol and unit as LaTeX. A symbol typed as
 plain text — `x^2`, `1/2`, `alpha`, `O(n log n)` — is a symbol the reader has
@@ -40,7 +40,7 @@ them means the same note renders correctly in both.
 - **Never put maths inside a code fence**, and never wrap your whole answer in
   one. A fence means "this is code, show it literally".
 
-## Everything else
+**Everything else.**
 
 Plain GitHub-flavoured markdown: `##` headings, `-` bullets, tables, and fenced
 code blocks with a language tag (```` ```python ````) for code and only for

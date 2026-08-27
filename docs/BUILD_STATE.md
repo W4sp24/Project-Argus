@@ -12,6 +12,36 @@
 | Last green commit | feat/redesign-h-integration head (full pytest + web lint + build + perf:budget green; see Phase H evidence below) |
 | Next action | Ethan: review/merge PR for `feat/redesign-h-integration` (supersedes the per-phase redesign branches); approve or reject Task 15 vault-cleanup candidates; optional: gcal/Todoist credentials + setup.ps1; `/code-review ultra` follow-up |
 
+## Bundle budget — measured 2026-08-28 (`feature/sources-ingest`)
+
+The Phase H numbers below are from **2026-07-16** and are stale; the suite was
+151 tests then and is now ~1450. `/dashboard` had drifted to **141 kB** against
+the documented 135 kB ceiling and `npm run perf:budget` had been failing for
+weeks, unobserved, because that script is not one of CI's `test / web` steps
+(that job runs `tsc --noEmit`, `next lint`, `next build` and the version
+manifest — see `.github/workflows/_test.yml`).
+
+Current, after the LaTeX work and the dashboard split:
+
+```
+npm run perf:budget -> Perf budget OK
+  heaviest routes: /dashboard 127 kB, /system 132 kB, /code 123 kB,
+                   /study 122 kB, /study/course/[code] 121 kB
+  CSS: 44.5 kB render-blocking (budget 60 kB)
+       25.5 kB in lazy chunks (katex.min.css, unbudgeted)
+```
+
+`check-bundles.mjs` now measures CSS as well as JS. It did not before, which
+made it blind to a whole class of regression: Next's route table reports JS
+only, so a 26 kB stylesheet landing in the layout would not have moved a
+single number it printed.
+
+Two e2e specs fail and both predate this branch, each verified by checking the
+failing test out at an older commit and running it alone:
+
+- `web/e2e/system.spec.ts:42` — fails on `main`.
+- `web/e2e/dashboard.spec.ts:91` — fails at `2696d06`, this branch's start.
+
 ## Phase H (redesign integration) exit criteria evidence (2026-07-16)
 
 ```
