@@ -30,6 +30,25 @@ WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 DATE_IN_NAME_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 FENCE_RE = re.compile(r"^\s*```")
 
+# A line opening (or closing) a `$$ ... $$` display-maths block. Paired the
+# same way a fence is, for the same reason: half an equation indexed as a
+# chunk is worse than useless, and the other half turning up in the next
+# chunk is worse still.
+DISPLAY_MATH_RE = re.compile(r"^\s*\$\$")
+
+
+def _is_math_opener(line: str) -> bool:
+    """Does this line *start* a display block that continues below it?
+
+    The case a fence never has: `$$E = mc^2$$` opens and closes on one line.
+    Treating it as an opener would run the scanner on to the *next* `$$`
+    somewhere further down the note, swallowing every heading and paragraph
+    in between into one indivisible unit. Two delimiters on a line means the
+    block is self-contained.
+    """
+    return DISPLAY_MATH_RE.match(line) is not None and line.count("$$") == 1
+
+
 # An inline Obsidian tag: a '#' immediately (no space) followed by a word
 # char, then more word chars / '-' / '/' (nesting, e.g. "#project/argus").
 # The negative lookbehind excludes a '#' that is itself preceded by a word
@@ -66,8 +85,17 @@ def _sections(text: str) -> list[tuple[str, str, int, list[str]]]:
     """
     sections: list[tuple[str, str, int, list[str]]] = [("", "", 0, [])]
     stack: list[tuple[int, str]] = []
+    in_fence = False
     for line in text.splitlines():
-        match = HEADING_RE.match(line)
+        # A `#` inside a code block is a comment, not a heading. Without this
+        # every Python block in a note started a new section, splitting the
+        # block away from the prose explaining it and giving the resulting
+        # chunk a heading like "not a heading, just a comment".
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            sections[-1][3].append(line)
+            continue
+        match = None if in_fence else HEADING_RE.match(line)
         if match:
             level = len(match.group(1))
             heading = match.group(2).strip()
@@ -117,10 +145,11 @@ def _atomic_units(lines: list[str]) -> list[list[str]]:
 
     A fenced code block (opening ```` ``` ```` to its matching close, or to
     end-of-text if unterminated) is one unit that later windowing must never
-    split apart. Any other line becomes its own unit, except a single line
-    longer than TARGET_WORDS words, which is pre-split (see
-    :func:`_split_long_line`) into several word-windowed units so an
-    unwrapped giant paragraph still chunks.
+    split apart. A ``$$ ... $$`` display-maths block is the same: retrieving
+    the first half of an equation is not retrieving anything. Any other line
+    becomes its own unit, except a single line longer than TARGET_WORDS words,
+    which is pre-split (see :func:`_split_long_line`) into several
+    word-windowed units so an unwrapped giant paragraph still chunks.
     """
     units: list[list[str]] = []
     i, n = 0, len(lines)
@@ -130,6 +159,13 @@ def _atomic_units(lines: list[str]) -> list[list[str]]:
             while j < n and not FENCE_RE.match(lines[j]):
                 j += 1
             end = min(j + 1, n)  # include the closing fence line when present
+            units.append(lines[i:end])
+            i = end
+        elif _is_math_opener(lines[i]):
+            j = i + 1
+            while j < n and not DISPLAY_MATH_RE.match(lines[j]):
+                j += 1
+            end = min(j + 1, n)  # include the closing $$ line when present
             units.append(lines[i:end])
             i = end
         else:
