@@ -35,6 +35,9 @@ MATH_PROMPT = _PROMPTS / "formatting.md"
 #: neither.
 NOTE_QUALITY_PROMPT = _PROMPTS / "note_quality.md"
 
+#: Notation for a model answering in JSON rather than in markdown.
+JSON_MATH_PROMPT = _PROMPTS / "formatting_json.md"
+
 
 @cache
 def math_contract() -> str:
@@ -46,6 +49,27 @@ def math_contract() -> str:
 def note_quality() -> str:
     """What a note has to do to be worth coming back to."""
     return NOTE_QUALITY_PROMPT.read_text(encoding="utf-8").strip()
+
+
+@cache
+def json_math_contract() -> str:
+    r"""Notation rules for a reply that is JSON rather than markdown.
+
+    A narrowing of :func:`math_contract`, not an addition to it, and the two
+    are mutually exclusive at any one call site. Three of the markdown rules
+    invert once the answer is a JSON document:
+
+    * A backslash has to be doubled, because JSON has already claimed it.
+    * ``$$`` display blocks are out -- every string here is rendered inside a
+      line of a question, not as a block of its own.
+    * The ``answer`` field of a short question carries no notation at all. It
+      is string-compared against what a person typed into an ``<input>``, and
+      no one types ``\frac{1}{2}``.
+
+    Handing the markdown contract to the exam generator would therefore
+    actively instruct it to produce something the exam cannot use.
+    """
+    return JSON_MATH_PROMPT.read_text(encoding="utf-8").strip()
 
 
 def compose(*blocks: str) -> str:

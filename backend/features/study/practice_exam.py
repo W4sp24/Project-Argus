@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from backend.agent.formatting import compose, json_math_contract
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 
 Generator = Callable[[str], Awaitable[str]]
@@ -233,15 +234,34 @@ def render_exam_md(exam: Exam) -> str:
     return "\n".join(lines)
 
 
+def _escape_dollars(text: str) -> str:
+    r"""Neutralise a bare ``$`` so it cannot open a maths span.
+
+    Applied to the *verbatim* strings -- a citation quote is lifted straight
+    out of course material, so it can carry a price, a shell variable or a
+    stray delimiter that Argus and Obsidian would both read as the start of an
+    equation running to the next ``$`` somewhere further down the key. A ``$``
+    that is already escaped is left alone.
+    """
+    return re.sub(r"(?<!\\)\$", r"\\$", text)
+
+
 def render_key_md(exam: Exam) -> str:
     lines = [f"# {exam.title} — answer key", ""]
     for number, question in enumerate(exam.questions, start=1):
+        # Blank lines between the three fields, not just newlines. Consecutive
+        # lines are one paragraph with soft breaks, which puts "**Why:**" and
+        # anything the explanation contains mid-line -- so a display block
+        # never starts a line and renders as a literal $$ instead of maths.
+        quote = _escape_dollars(question.citation.quote)
         lines += [
             f"## {number}. {question.q}",
             "",
             f"**Answer:** {question.answer}",
+            "",
             f"**Why:** {question.explanation}",
-            f"**Source:** {question.citation.label()} — “{question.citation.quote}”",
+            "",
+            f"**Source:** {question.citation.label()} — “{quote}”",
             "",
         ]
     return "\n".join(lines)
@@ -266,7 +286,7 @@ def exam_prompt(
         used += len(block)
 
     topic_line = f"Focus on: {topics}." if topics else "Cover the material broadly."
-    return f"""Create a {difficulty} practice exam with exactly {n} questions for course {course},
+    task = f"""Create a {difficulty} practice exam with exactly {n} questions for course {course},
 grounded ONLY in the source excerpts below. {topic_line}
 
 Return ONLY JSON (no prose) with this exact schema:
@@ -277,10 +297,15 @@ Return ONLY JSON (no prose) with this exact schema:
 Citation rules (questions violating them will be discarded):
 - "path" must be one of the SOURCE paths verbatim.
 - "quote" must be a short VERBATIM substring copied from that source excerpt.
-- Do not ask about anything not present in the excerpts.
+- Do not ask about anything not present in the excerpts."""
 
-SOURCES:
-{"".join(excerpts)}"""
+    # json_math_contract(), not the markdown math_contract() the notes and the
+    # study guide get. Three of those rules invert once the reply is JSON --
+    # backslashes double, $$ blocks are out, and `answer` must stay plain
+    # because the grader compares it to what a person typed. Handing over the
+    # markdown contract here would instruct the model to produce exactly what
+    # this feature cannot consume.
+    return compose(task, json_math_contract(), f"SOURCES:\n{''.join(excerpts)}")
 
 
 async def generate_practice_exam(
