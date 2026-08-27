@@ -13,8 +13,12 @@ from backend.features.study.practice_exam import (
     MAX_PROMPT_CHARS,
     Generator,
     StudyError,
-    _strip_fences,
 )
+
+#: A reply that is *entirely* one fenced block, and nothing else. Small models
+#: habitually wrap a whole markdown answer in ```` ```markdown ````, so
+#: unwrapping that is worth doing -- but only that.
+_WHOLE_REPLY_FENCE = re.compile(r"\A```[^\n]*\n(.*?)\n?```\Z", re.DOTALL)
 
 
 def _is_generated(rel_path: str) -> bool:
@@ -63,6 +67,25 @@ def notes_gap_list(corpus: list[dict[str, Any]]) -> list[str]:
     return gaps[:20]
 
 
+def _unwrap_fenced_reply(raw: str) -> str:
+    """Undo a model fencing its *whole* answer, and nothing more.
+
+    This deliberately is not ``practice_exam._strip_fences``. That function
+    answers "where is the JSON payload in this reply", so it searches for the
+    first fence anywhere and returns its contents -- correct for an exam,
+    catastrophic for a guide. A guide is prose that may legitimately *contain*
+    a fence: the prompt asks for step-by-step worked examples, which for a CS
+    course is a code block. Run through the extractor, such a guide had its
+    outline, concepts and citations replaced by the body of that one block,
+    silently, and that is what got written to the vault.
+
+    So the match is anchored to both ends: unwrap only when the fence *is* the
+    reply. Anything else is returned untouched.
+    """
+    match = _WHOLE_REPLY_FENCE.match(raw.strip())
+    return match.group(1) if match else raw
+
+
 def guide_prompt(course: str, scope: str, corpus: list[dict[str, Any]]) -> str:
     excerpts: list[str] = []
     used = 0
@@ -106,7 +129,7 @@ async def generate_study_guide(
     if not corpus:
         raise StudyError(f"no indexed material for course {course} — upload to materials/ first")
 
-    body = _strip_fences(await generator(guide_prompt(course, scope, corpus))).strip()
+    body = _unwrap_fenced_reply(await generator(guide_prompt(course, scope, corpus))).strip()
     if not body:
         raise StudyError("generator returned an empty guide")
 
