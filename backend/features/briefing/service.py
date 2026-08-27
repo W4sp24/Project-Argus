@@ -185,11 +185,31 @@ def render_briefing(data: BriefingData) -> str:
 
 
 def _composer_prompt(data: BriefingData) -> str:
+    """The one prose surface that is told *not* to use notation.
+
+    Every other generated surface gets ``formatting.math_contract()``. This one
+    gets the opposite instruction, because ``web/components/dashboard/BriefingCard.tsx``
+    renders the result with a hand-rolled line splitter that understands
+    ``**bold**`` and ``- `` and nothing else -- deliberately, since it sits at
+    the top of ``/dashboard`` and pulling the markdown stack in above the fold
+    is not worth it for two formatting features.
+
+    "A briefing never contains maths" was an assumption, not a fact: the
+    briefing is composed *from the vault*, so once notes carry ``$...$`` a
+    briefing summarising one carries it too, and BriefingCard would show it as
+    literal characters. Whichever way that is resolved, the renderer and the
+    prompt have to agree, so the constraint is written down on the side that
+    can enforce it.
+    """
     return (
         "You are Argus writing the user's morning briefing for their daily note.\n"
         "Rewrite the facts below as a short, warm, scannable markdown briefing "
         "(bold section labels, bullet lists, no H1/H2 headings). Do not invent "
-        "events or tasks; keep every date exactly as given.\n\n"
+        "events or tasks; keep every date exactly as given.\n"
+        "Use no formatting beyond `**bold**` and `- ` bullets — in particular no "
+        "LaTeX, no `$` maths delimiters, no tables and no code fences. This one "
+        "surface renders a plain subset of markdown, and anything else shows up "
+        "as literal characters. Write any notation out in words instead.\n\n"
         f"FACTS:\n{render_briefing(data)}\n\nDATA (JSON):\n{data.model_dump_json(indent=1)}"
     )
 
@@ -244,9 +264,7 @@ def compose_briefing(
             # ...but it must not be invisible either. This ran unattended at
             # 07:00 and silently produced the deterministic template forever on
             # any machine where the agent could not start.
-            logger.warning(
-                "briefing composer failed, falling back to the plain render: %s", exc
-            )
+            logger.warning("briefing composer failed, falling back to the plain render: %s", exc)
         else:
             # Audited only on success, and against the model that actually ran.
             # Logging before the call claimed opus had read these paths even

@@ -107,9 +107,7 @@ def test_a_failed_composer_writes_no_audit_row(vault: Path, conn: sqlite3.Connec
         raise RuntimeError("agent unavailable")
 
     compose_briefing(Settings(_vault_path=vault), conn, composer=broken_composer, today=TODAY)
-    rows = conn.execute(
-        "SELECT COUNT(*) AS n FROM audit WHERE entry_point = 'briefing'"
-    ).fetchone()
+    rows = conn.execute("SELECT COUNT(*) AS n FROM audit WHERE entry_point = 'briefing'").fetchone()
     assert rows["n"] == 0
 
 
@@ -130,3 +128,31 @@ def test_compose_briefing_uses_composer_output(vault: Path, conn: sqlite3.Connec
         today=TODAY,
     )
     assert markdown == "Good morning! 1 overdue."
+
+
+def test_the_briefing_prompt_rules_out_notation_its_renderer_cannot_show() -> None:
+    """The one prose surface told *not* to use LaTeX.
+
+    Every other generated surface gets the shared math contract. BriefingCard
+    renders with a hand-rolled splitter that knows `**bold**` and `- ` and
+    nothing else, so the prompt has to say so -- and it is worth a test,
+    because the failure mode is a briefing full of literal dollar signs and
+    nothing raising.
+    """
+    from backend.features.briefing.service import BriefingData, _composer_prompt
+
+    prompt = _composer_prompt(
+        BriefingData(
+            date="2026-08-28",
+            events=[],
+            due_today=[],
+            overdue=[],
+            yesterday_unfinished=[],
+            exam_countdowns=[],
+            weak_topics=[],
+        )
+    )
+
+    assert "LaTeX" in prompt
+    assert "$" in prompt
+    assert "**bold**" in prompt
