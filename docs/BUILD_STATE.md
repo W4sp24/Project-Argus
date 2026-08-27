@@ -36,11 +36,25 @@ made it blind to a whole class of regression: Next's route table reports JS
 only, so a 26 kB stylesheet landing in the layout would not have moved a
 single number it printed.
 
-Two e2e specs fail and both predate this branch, each verified by checking the
-failing test out at an older commit and running it alone:
+Full suite, 2026-08-28: `pytest 1475 passed`, `ruff` clean repo-wide, `tsc` +
+`next lint` + `next build` clean, desktop smoke 29/29, `check-versions` OK,
+Playwright **67 passed / 2 failed**.
 
-- `web/e2e/system.spec.ts:42` — fails on `main`.
-- `web/e2e/dashboard.spec.ts:91` — fails at `2696d06`, this branch's start.
+Both e2e failures predate this branch. The whole suite was run at `2696d06`
+(the branch point) for comparison and produced **the same two failures**:
+
+- `web/e2e/system.spec.ts:42` — also fails on `main`.
+- `web/e2e/dashboard.spec.ts:91` — fails at `2696d06`; verified again by
+  checking that commit out and running the test alone.
+
+**On the un-root-caused e2e server death.** Two consecutive full runs failed 9
+and then 42 tests, always as a block from some point onwards, every failure
+taking a uniform ~3.2 s — the signature of the front-end or backend process
+being gone rather than of an assertion. The death point moved *earlier* on each
+successive run. Deleting `web/test-results/` and `web/playwright-report/` and
+re-running restored 67/2 exactly. So it correlates with accumulated artifacts
+or host resource pressure (this machine was at 6.4 GB free disk and a 308 MB
+`.next`), not with any one spec. Worth trying before believing a cascade.
 
 ## Phase H (redesign integration) exit criteria evidence (2026-07-16)
 
