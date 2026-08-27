@@ -47,56 +47,94 @@ class NoteStyle:
     instruction: str
 
 
+# Each style commits to one thing learning research is clear about, rather
+# than every style hedging towards all of them. A summary that also tries to
+# be a worked-example walkthrough and a self-test is a worse summary, and the
+# shared contract in backend/agent/prompts/note_quality.md already carries
+# what applies to all four -- including the `Q::`/`A::` self-test tail, which
+# is why no style below asks for one.
 _STYLES: tuple[NoteStyle, ...] = (
     NoteStyle(
         key="summary",
         label="Summary",
-        description="Condensed prose plus the key takeaways.",
+        description="What the document says, condensed, plus what to remember.",
+        # Signalling and coherence: the reader should be able to see the shape
+        # of the document from the note, and nothing should be in it that the
+        # document did not spend time on.
         instruction=(
-            "Summarise this document for a student revising it later. Write a short "
-            "opening paragraph saying what the document covers, then a `## Key points` "
-            "list of its substantive claims, then a `## Takeaways` list of what a reader "
-            "should remember. Keep the document's own terminology."
+            "Summarise this document for someone revising it weeks from now without "
+            "the document to hand. Use exactly these sections:\n"
+            "An opening paragraph, at most three sentences, saying what the document "
+            "covers and what it is for.\n"
+            "`## Key points` -- its substantive claims, in the document's own order, "
+            "one claim per bullet. Include the numbers, definitions and conditions a "
+            "claim depends on; a claim stripped of its conditions is not the claim.\n"
+            "`## Takeaways` -- the three to five things worth keeping if everything "
+            "else were forgotten. These are conclusions, not a second list of topics."
         ),
     ),
     NoteStyle(
         key="study-guide",
         label="Study guide",
-        description="Outline, key concepts with definitions, then worked examples.",
-        # Deliberately the same three-section shape as
+        description="Outline, concepts, worked examples, and the mistakes they invite.",
+        # Worked examples with self-explanation. A solved example teaches
+        # little when it is only a sequence of steps -- the gain comes from
+        # each step saying why it follows, which is what turns reading into
+        # explaining.
+        #
+        # Deliberately the same section shape as
         # backend/features/study/study_guide.py's course-wide guide, scoped to
         # one document -- two different structures for "study guide" in one app
         # would be a worse answer than one structure at two scales.
         instruction=(
             "Turn this document into a study guide. Use exactly these sections:\n"
             "`## Outline` -- the topic map, in the document's own order.\n"
-            "`## Key concepts` -- each concept as a bullet with a one-line definition, "
-            "and the page or slide it is introduced on where the document says so.\n"
-            "`## Worked examples` -- two or three step-by-step examples taken from the "
-            "document. Omit this section entirely if the document contains no examples."
+            "`## Key concepts` -- each concept as a bullet: the term in bold, a "
+            "one-line definition in the document's own words, and the page or slide "
+            "it is introduced on where the document says so.\n"
+            "`## Worked examples` -- two or three examples taken from the document, "
+            "each step on its own line saying both what was done and *why* it follows "
+            "from the step above. A list of steps with no reasons is a recipe, not an "
+            "example. Omit this section entirely if the document contains none.\n"
+            "`## Common mistakes` -- the errors this material invites, where the "
+            "document names or implies them: the condition people forget, the two "
+            "terms that get confused, the step that is easy to skip. Omit the section "
+            "rather than inventing one."
         ),
     ),
     NoteStyle(
         key="cornell",
         label="Cornell notes",
-        description="Cue questions beside the notes, with a summary block.",
+        description="Cue questions you can self-test against, notes, and a summary.",
+        # Retrieval practice. The cue column is the whole method: it only works
+        # if each cue is a question you can cover the notes and answer, so the
+        # instruction is about that property rather than about the layout.
         instruction=(
             "Write Cornell-style notes for this document. Use exactly these sections:\n"
-            "`## Cues` -- the questions this material answers, one per line.\n"
-            "`## Notes` -- the detailed notes, as nested bullets, in the document's order.\n"
-            "`## Summary` -- one paragraph, at most five sentences, of the whole document."
+            "`## Cues` -- one question per line, each answerable from the Notes "
+            "section below and from nothing else. These are meant to be used with the "
+            "notes covered up, so write questions that make the reader recall "
+            "something, not questions they can answer yes or no.\n"
+            "`## Notes` -- the detailed notes as nested bullets, in the document's "
+            "order, grouped so that everything answering one cue sits together.\n"
+            "`## Summary` -- at most five sentences, written as if explaining the "
+            "document to someone who has not read it."
         ),
     ),
     NoteStyle(
         key="key-terms",
         label="Key terms + Q&A",
-        description="Definitions plus self-test questions with answers.",
+        description="Every term the document defines, with its definition.",
+        # Vocabulary first. The examinable core of most course material is its
+        # terminology, and confusable pairs are where marks are actually lost.
         instruction=(
-            "Extract the examinable content of this document. Use exactly these sections:\n"
-            "`## Key terms` -- every term the document defines, as `**term** -- definition`.\n"
-            "`## Self-test` -- eight to twelve questions covering the material, each written "
-            "as `Q:: <question>` on one line and `A:: <answer>` on the next, so the list can "
-            "be parsed into flashcards as it stands."
+            "Extract the examinable vocabulary of this document. Use exactly this "
+            "section:\n"
+            "`## Key terms` -- every term the document defines, in the order it "
+            "introduces them, as `**term** -- definition`. Use the document's own "
+            "definition rather than a general one. Where it distinguishes two similar "
+            "terms, add a bullet under them saying what separates the two, because "
+            "that distinction is what gets tested."
         ),
     ),
 )

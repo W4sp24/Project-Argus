@@ -59,6 +59,60 @@ def test_every_style_contributes_its_structure_to_the_prompt(key):
     assert "TEXT" in prompt
 
 
+#: The section headings each style is responsible for. The self-test tail is
+#: absent on purpose -- see the test below it.
+STYLE_SECTIONS = {
+    "summary": ["## Key points", "## Takeaways"],
+    "study-guide": ["## Outline", "## Key concepts", "## Worked examples", "## Common mistakes"],
+    "cornell": ["## Cues", "## Notes", "## Summary"],
+    "key-terms": ["## Key terms"],
+}
+
+
+@pytest.mark.parametrize(("key", "sections"), sorted(STYLE_SECTIONS.items()))
+def test_a_style_names_the_sections_it_promises(key, sections):
+    """The style's `description` is UI copy; this is the contract behind it."""
+    instruction = notes.NOTE_STYLES[key].instruction
+    for section in sections:
+        assert section in instruction, f"{key} no longer asks for {section}"
+
+
+@pytest.mark.parametrize("key", sorted(STYLE_SECTIONS))
+def test_no_style_asks_for_its_own_self_test(key):
+    """Retrieval practice is shared, so it belongs to the shared contract.
+
+    ``note_quality.md`` ends every note with a ``Q::``/``A::`` block, which is
+    what lets any generated note seed a deck through
+    ``flashcards.store.parse_qa_pairs``. A style asking for one as well would
+    produce the section twice -- and the duplicate is what a parser reading
+    ``Q::`` line-prefixes would silently fold into one deck.
+    """
+    assert "Q::" not in notes.NOTE_STYLES[key].instruction
+    assert "## Self-test" not in notes.NOTE_STYLES[key].instruction
+
+
+@pytest.mark.parametrize("key", sorted(STYLE_SECTIONS))
+def test_the_self_test_tail_still_reaches_every_style(key):
+    """...but it does have to arrive, or nothing seeds a deck."""
+    prompt = notes.build_prompt(notes.NOTE_STYLES[key], "", "a/b.pdf", "TEXT")
+
+    assert "## Self-test" in prompt
+    assert "Q::" in prompt and "A::" in prompt
+
+
+def test_the_prompt_asks_for_notation_in_a_form_both_renderers_accept():
+    r"""The note is written to the vault, so Obsidian is the second reader.
+
+    These three are where KaTeX and MathJax disagree; getting them wrong makes
+    a note that renders in the app and not in Obsidian, or the reverse.
+    """
+    prompt = notes.build_prompt(notes.NOTE_STYLES["summary"], "", "a/b.pdf", "TEXT")
+
+    assert "$$" in prompt, "display maths must be specified"
+    assert chr(92) + "(" in prompt, "the \\(...\\) form must be ruled out by name"
+    assert chr(92) + "$" in prompt, "a literal dollar must be escaped"
+
+
 def test_a_custom_instruction_appends_to_the_style_rather_than_replacing_it():
     style = notes.NOTE_STYLES["study-guide"]
     prompt = notes.build_prompt(style, "focus on chapter 4", "a/b.pdf", "TEXT")
