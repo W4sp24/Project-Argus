@@ -259,3 +259,42 @@ body {
 .prose-md .hljs-literal {
   @apply text-danger;
 }
+
+/* KaTeX (remark-math + rehype-katex, wired in web/components/MarkdownImpl.tsx).
+   katex.min.css does the typesetting; these rules only fit it to the surface
+   it lands on — no new colors, no font overrides that would break the metrics
+   KaTeX computes against its own fonts. */
+
+/* A long equation is the same failure mode as a wide table, and gets the same
+   answer as `.prose-md table` above: scroll inside your own box rather than
+   stretching the message bubble and, with it, the whole transcript. The
+   vertical hidden matters too — KaTeX's fraction bars and radicals overhang
+   their line box, and an `overflow-x: auto` alone makes that overhang produce
+   a permanent vertical scrollbar. */
+.prose-md .katex-display {
+  @apply my-4 overflow-x-auto overflow-y-hidden;
+  padding: 0.25rem 0;
+}
+
+/* Inherit the surrounding ink rather than KaTeX's own black. `1.05em` because
+   maths set at exactly the prose size reads a little small next to it, and
+   anything larger starts to reflow the line. */
+.prose-md .katex {
+  color: inherit;
+  font-size: 1.05em;
+}
+
+/* An expression KaTeX could not parse. `throwOnError: false` renders the
+   source in place of the maths and marks it up with this class, so the reader
+   sees which expression failed instead of a message that lost its position. */
+.prose-md .katex-error {
+  @apply border-b border-dotted border-danger text-danger;
+}
+
+/* Maths inside a heading, a table cell or a blockquote must not drag the
+   accent color and monospace border of `.prose-md code` along with it. */
+.prose-md .katex .mord,
+.prose-md .katex .mrel,
+.prose-md .katex .mbin {
+  color: inherit;
+}

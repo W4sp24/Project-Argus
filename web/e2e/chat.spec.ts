@@ -52,6 +52,19 @@ test("a seeded thread restores its markdown, tool trace and citations", async ({
   // before rendering, so it does not double up with the chip above.
   await expect(page.getByText("[15-Courses/CS000/course.md]")).toHaveCount(0);
 
+  // Maths is typeset, not shown as source. Asserting on `.katex-mathml math`
+  // rather than just `.katex` on purpose: that node only exists under
+  // `output: "htmlAndMathml"`, so a regression to `output: "html"` — which
+  // still looks right and is silently unreadable to a screen reader — fails
+  // here instead of shipping.
+  const transcript = page.getByRole("log");
+  await expect(transcript.locator(".katex-mathml math").first()).toBeAttached();
+  await expect(transcript.locator(".katex-display")).toHaveCount(1);
+  // The delimiters themselves must be gone, and no expression may have failed
+  // to parse.
+  await expect(page.getByText("$$")).toHaveCount(0);
+  await expect(transcript.locator(".katex-error")).toHaveCount(0);
+
   // ...and stripping it leaves the rest of the answer's whitespace alone.
   // `stripCitationMarkers` used to collapse every run of two-plus spaces in
   // the whole message to clean up after itself, which flattened indentation

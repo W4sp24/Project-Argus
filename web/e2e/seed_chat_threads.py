@@ -57,6 +57,15 @@ Where the week 4 reading sits [15-Courses/CS000/course.md]:
   - Breadth-first search
   - Depth-first search
 
+Sorting by comparison costs $O(n \\log n)$ in the average case, which falls out
+of the recurrence
+
+$$
+T(n) = 2T\\!\\left(\\frac{n}{2}\\right) + O(n)
+$$
+
+once you unroll it.
+
 The traversal you asked about is plain BFS:
 
 ```python

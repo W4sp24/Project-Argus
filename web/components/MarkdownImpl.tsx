@@ -19,7 +19,16 @@ import React, { useRef, useState, type ComponentPropsWithoutRef } from "react";
 import type { Element as HastElement } from "hast";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
+
+// KaTeX's own stylesheet, self-hosted. The CSP in `web/next.config.mjs` is
+// `font-src 'self' data:` with no CDN, so this cannot be a <link> to
+// jsdelivr — Next's css-loader rewrites the `url(fonts/KaTeX_*.woff2)`
+// references inside it to same-origin `/_next/static/media/*`, which is what
+// makes it work at all. See the CSP comment in next.config.mjs.
+import "katex/dist/katex.min.css";
 
 // rehype-highlight v7's `subset` option only narrows which registered
 // languages `detect: true` is allowed to *guess between* — it does nothing
@@ -145,6 +154,40 @@ function CodeBlock({
   );
 }
 
+/**
+ * KaTeX options, every one of them load-bearing.
+ *
+ * `trust: false` is the security-relevant one. `next.config.mjs` states
+ * outright that the chat surface renders agent output, so a prompt-injected
+ * response must not be able to reach a remote origin with vault content —
+ * and `\href`, `\url` and `\includegraphics` are precisely that hole. False
+ * is KaTeX's default; it is set explicitly because the default changing
+ * silently is not a risk worth carrying here.
+ *
+ * `throwOnError: false` + `strict: "ignore"`: a model writing an unsupported
+ * command should cost the reader that one expression, rendered in red, not
+ * the whole message. And `strict` left at its default warns to the console
+ * for every Unicode character in a formula, which a maths-heavy answer emits
+ * by the hundred.
+ *
+ * `output: "htmlAndMathml"` is the accessibility answer. KaTeX emits a
+ * visual `.katex-html` tree marked `aria-hidden` itself, plus a
+ * `.katex-mathml` sibling carrying real MathML for a screen reader. Dropping
+ * to `"html"` would leave assistive tech reading the visual tree's
+ * characters one at a time, in visual rather than semantic order.
+ *
+ * `maxExpand` bounds macro recursion. The contract forbids `\newcommand`,
+ * but a contract is a request, and an expansion bomb in an answer would hang
+ * the render on the main thread.
+ */
+const REHYPE_KATEX_OPTIONS = {
+  trust: false,
+  strict: "ignore" as const,
+  throwOnError: false,
+  output: "htmlAndMathml" as const,
+  maxExpand: 1000,
+};
+
 const components: Components = {
   pre: CodeBlock as Components["pre"],
 };
@@ -153,8 +196,11 @@ function MarkdownImpl({ text, className = "text-body" }: { text: string; classNa
   return (
     <div className={`prose-md ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, REHYPE_HIGHLIGHT_OPTIONS]]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[
+          [rehypeHighlight, REHYPE_HIGHLIGHT_OPTIONS],
+          [rehypeKatex, REHYPE_KATEX_OPTIONS],
+        ]}
         components={components}
       >
         {text}

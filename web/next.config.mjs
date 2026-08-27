@@ -20,6 +20,25 @@ const packaged = process.env.ARGUS_PACKAGED === "1";
  * so dev additionally needs 'unsafe-eval' — without it no client component
  * hydrates (this is Next's documented dev requirement). Production and packaged
  * builds don't use eval-based refresh, so they keep the strict policy.
+ *
+ * TWO RULES BELOW ARE LOAD-BEARING FOR MATH RENDERING, and neither says so
+ * from its own line:
+ *
+ *   - `style-src 'unsafe-inline'` — KaTeX positions every glyph with inline
+ *     `style="..."` attributes. Those are governed by `style-src-attr`, which
+ *     falls back to `style-src`. Tightening this to a nonce (the usual
+ *     hardening move, and the one the `script-src` comment above gestures at)
+ *     silently blanks every equation in the app. It would need
+ *     `style-src-attr 'unsafe-inline'` kept alongside it.
+ *   - `font-src 'self'` — `katex.min.css` is imported in
+ *     `web/components/MarkdownImpl.tsx` so that Next's css-loader rewrites its
+ *     `url(fonts/KaTeX_*.woff2)` references to same-origin
+ *     `/_next/static/media/*`. A CDN <link> would be blocked here, which is
+ *     why it is self-hosted rather than linked.
+ *
+ * `rehype-katex` runs with `trust: false` for the same reason `connect-src` is
+ * loopback-only: `\href` and `\includegraphics` in a prompt-injected answer are
+ * exactly the remote-origin hole this policy exists to close.
  */
 const isDev = process.env.NODE_ENV !== "production";
 const csp = [
