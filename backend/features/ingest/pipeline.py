@@ -1,4 +1,4 @@
-"""The body of one ingest job: save, index, and optionally summarise N files.
+"""The body of one ingest job: save, index, and optionally take notes on N files.
 
 Runs on a daemon thread and **never raises** -- an exception escaping here
 would surface only in a log nobody is watching, so every failure is recorded
@@ -42,6 +42,7 @@ import frontmatter
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.features.ingest import notes as note_styles
 from backend.features.ingest import store
 from backend.vault.privacy import is_no_ai_text, is_private_path, is_visible
 from backend.vault.writer import create_note, save_ingest_file, snapshot_vault
@@ -50,19 +51,10 @@ logger = logging.getLogger("argus.rag")
 
 Generator = Callable[..., Awaitable[str]]
 
-#: How much of a file's text is handed to the model. Matches the email
-#: extractor's budget -- large enough for a lecture, small enough that a
-#: 400-page PDF does not become one enormous prompt.
-MAX_SUMMARY_CHARS = 12_000
-
-SUMMARY_PROMPT = """{instruction}
-
-Write the summary as markdown. Do not add a title heading; one is already
-in the note's frontmatter. Do not invent anything the document does not say.
-
-DOCUMENT ({path}):
-{text}
-"""
+#: Re-exported for the callers and tests that already import it from here.
+#: The budget itself, like the prompt and the note's destination, now belongs
+#: to :mod:`backend.features.ingest.notes`.
+MAX_SUMMARY_CHARS = note_styles.MAX_NOTE_CHARS
 
 
 def summary_is_permitted(
@@ -128,34 +120,6 @@ def _source_text(vault_path: Path, rel_path: str) -> str:
     return "\n\n".join(block.text for block in blocks).strip()[:MAX_SUMMARY_CHARS]
 
 
-def _summary_note(rel_path: str, instruction: str, body: str) -> tuple[str, str]:
-    """``(summary_rel_path, markdown)`` for one source file.
-
-    The name is derived from the **deduped** source path, not from the
-    uploaded filename: ``_dedupe`` renames a colliding upload to
-    ``lecture-2.md``, and a summary still called ``lecture.summary.md`` would
-    collide with the previous one. ``create_note`` is deliberately create-only,
-    so that collision would fail the item for a reason the user cannot act on.
-
-    The trailing wikilink is load-bearing rather than decorative: it is what
-    lets ``retrieve.py``'s existing one-hop link expansion reach the source
-    from the summary, with no new retrieval code. It resolves only when the
-    source is itself markdown -- ``build_link_index`` is markdown-only -- so
-    for a PDF the link is a readable breadcrumb and nothing more.
-    """
-    source = Path(rel_path)
-    summary_path = source.with_name(f"{source.stem}.summary.md").as_posix()
-    front = {
-        "title": f"{source.stem} — summary",
-        "type": "summary",
-        "generated_by": "argus",
-        "source": rel_path,
-        "prompt": instruction,
-    }
-    post = frontmatter.Post(f"{body.strip()}\n\n[[{source.stem}]]\n", **front)
-    return summary_path, frontmatter.dumps(post) + "\n"
-
-
 def _staged_files(staging_dir: Path) -> list[Path]:
     """Staged uploads in the order the router wrote them.
 
@@ -179,22 +143,27 @@ def _generate(generator: Generator, prompt: str) -> str:
     return asyncio.run(generator(prompt))
 
 
-def _summarise(
+def _write_note(
     *,
     settings: Settings,
     generator: Generator,
+    style: note_styles.NoteStyle | None,
     instruction: str,
     rel_path: str,
     index: Any,
     conn: Any,
     item_id: int,
 ) -> None:
-    """Generate one summary note and index it. Never raises.
+    """Generate one note from the saved file and index it. Never raises.
 
     A failure here must not undo the ingest: by this point the file is saved
     and indexed, and a provider being down is not a reason to lose it. So the
-    item still finishes ``done``, carrying the error as a note on why no
-    summary appeared.
+    item still finishes ``done``, carrying the error as the reason no note
+    appeared.
+
+    Where the note lands is :func:`backend.features.ingest.notes.note_destination`'s
+    call, not this function's -- a course material's note goes to that course's
+    ``notes/`` zone, everything else beside its source.
     """
     text = _source_text(settings.vault_path, rel_path)
     # The privacy verdict is taken BEFORE the empty-text check, not after.
@@ -208,26 +177,30 @@ def _summarise(
             conn,
             item_id,
             stage="skipped",
-            error="tagged #no-ai — summary skipped, nothing was sent to the model",
+            error="tagged #no-ai — note skipped, nothing was sent to the model",
         )
         return
     if not text:
         return
 
+    # `summarizing` is the wire stage the progress readout renders; the UI
+    # labels it "note". Renaming the value would mean rebuilding the table
+    # (it is in a CHECK constraint) for something the frontend can say itself.
     store.advance_item(conn, item_id, stage="summarizing")
-    prompt = SUMMARY_PROMPT.format(instruction=instruction, path=rel_path, text=text)
-    body = _generate(generator, prompt)
-    summary_path, markdown = _summary_note(rel_path, instruction, body)
+    body = _generate(generator, note_styles.build_prompt(style, instruction, rel_path, text))
+    note_path, markdown = note_styles.note_markdown(
+        rel_path, style, instruction, body, taxonomy=settings.taxonomy
+    )
     written = create_note(
         settings.vault_path,
-        summary_path,
+        note_path,
         markdown,
         taxonomy=settings.taxonomy,
         snapshot=False,
         log=False,
     )
     chunks = index.upsert_file(settings.vault_path, written)
-    logger.info("ingest: summarised %s -> %s (%d chunks)", rel_path, written, chunks)
+    logger.info("ingest: noted %s -> %s (%d chunks)", rel_path, written, chunks)
     store.advance_item(conn, item_id, stage="summarizing", summary_path=written)
 
 
@@ -240,7 +213,7 @@ def run_ingest_job(
     staging_dir: Path,
     replace: bool = False,
 ) -> None:
-    """Save, index and optionally summarise every staged file. Never raises."""
+    """Save, index and optionally take notes on every staged file. Never raises."""
     conn = connect(settings.db_path)
     try:
         init_schema(conn)
@@ -282,6 +255,14 @@ def _run(
     job_id = job["id"]
     target = job["target"]
     instruction = (job["summary_prompt"] or "").strip()
+    # Resolved once for the whole job rather than per file. An unknown key
+    # cannot reach here -- the router validates before the row is written --
+    # but a database hand-edited between the two must not crash N files.
+    try:
+        style = note_styles.resolve_style(job.get("note_style"))
+    except note_styles.NoteStyleError as exc:
+        logger.warning("ingest job %s: %s", job_id, exc)
+        style = None
     store.start_job(conn, job_id)
 
     # Both of these can fail for the whole job rather than for one file: no
@@ -301,6 +282,7 @@ def _run(
                 settings=settings,
                 index=index,
                 generator=generator,
+                style=style,
                 instruction=instruction,
                 target=target,
                 replace=replace,
@@ -330,11 +312,12 @@ def _run_one(
     settings: Settings,
     index: Any,
     generator: Generator | None,
+    style: note_styles.NoteStyle | None,
     instruction: str,
     target: str,
     replace: bool = False,
 ) -> str:
-    """One file through save -> index -> summary. Returns its terminal stage."""
+    """One file through save -> index -> note. Returns its terminal stage."""
     item_id = item["id"]
     try:
         store.advance_item(conn, item_id, stage="saving")
@@ -357,14 +340,18 @@ def _run_one(
         store.advance_item(conn, item_id, stage="failed", error=str(exc))
         return "failed"
 
-    if not instruction or generator is None:
+    # Either half is enough to ask for a note: a style with no instruction is
+    # the common case now, and an instruction with no style is how this worked
+    # before styles existed.
+    if not (style or instruction) or generator is None:
         store.advance_item(conn, item_id, stage="done")
         return "done"
 
     try:
-        _summarise(
+        _write_note(
             settings=settings,
             generator=generator,
+            style=style,
             instruction=instruction,
             rel_path=rel_path,
             index=index,
@@ -373,12 +360,12 @@ def _run_one(
         )
     except Exception as exc:
         # The file is already saved and indexed; a dead provider is not a
-        # reason to lose it. Record why no summary appeared and move on.
-        logger.warning("ingest: summary for %s failed: %s", rel_path, exc)
+        # reason to lose it. Record why no note appeared and move on.
+        logger.warning("ingest: note for %s failed: %s", rel_path, exc)
         store.advance_item(conn, item_id, stage="done", error=str(exc))
         return "done"
 
-    # _summarise marks the item 'skipped' itself when I3 refuses it, and that
+    # _write_note marks the item 'skipped' itself when I3 refuses it, and that
     # is a terminal stage the caller must not overwrite with 'done'.
     current = conn.execute(
         "SELECT stage FROM ingest_job_items WHERE id = ?", (item_id,)

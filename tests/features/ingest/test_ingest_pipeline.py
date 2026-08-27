@@ -1,4 +1,4 @@
-"""The ingest job body: save, index, optionally summarise, record every step.
+"""The ingest job body: save, index, optionally take notes, record every step.
 
 ``run_ingest_job`` is called here synchronously. It is a plain function;
 making it a thread is the router's job, and a test that spawned one would be
@@ -90,9 +90,24 @@ def _stage(tmp_path: Path, files: dict[str, bytes]) -> Path:
     return staging
 
 
-def _run(settings, conn, tmp_path, files, *, prompt="", index=None, generator=None):
+def _run(
+    settings,
+    conn,
+    tmp_path,
+    files,
+    *,
+    prompt="",
+    index=None,
+    generator=None,
+    style="",
+    target="00-Inbox/files",
+):
     job_id = store.create_job(
-        conn, target="00-Inbox/files", summary_prompt=prompt, filenames=list(files)
+        conn,
+        target=target,
+        summary_prompt=prompt,
+        filenames=list(files),
+        note_style=style,
     )
     fake_index = index if index is not None else FakeIndex()
     run_ingest_job(
@@ -259,7 +274,8 @@ def test_a_prompt_writes_a_summary_note_beside_its_source(settings, conn, tmp_pa
     summary = vault / "00-Inbox" / "files" / "lecture.summary.md"
     assert summary.is_file()
     body = summary.read_text(encoding="utf-8")
-    assert "type: summary" in body
+    assert "type: note" in body
+    assert "note_style: custom" in body, "a bare instruction with no style"
     assert "source: 00-Inbox/files/lecture.md" in body
     assert "list the key definitions" in body, "the instruction is recorded verbatim"
     assert "Dijkstra, explained." in body
@@ -370,3 +386,101 @@ def test_a_generator_failure_does_not_lose_the_file(settings, conn, tmp_path, va
     assert "00-Inbox/files/a.md" in index.upserts
     assert job["items"][0]["stage"] == "done"
     assert "provider is down" in (job["items"][0]["error"] or "")
+
+
+# --- where the note lands, and what asks for one ------------------------------
+
+
+def test_a_course_material_gets_its_note_in_the_courses_notes_zone(
+    settings, conn, tmp_path, vault
+) -> None:
+    """The whole point of the feature: drop a lecture into a course and end up
+    with the file in materials/ and a study note in notes/ — not two files in
+    materials/, where `corpus.courses()` never counts the note."""
+    (vault / "15-Courses" / "CS201" / "materials").mkdir(parents=True)
+    generator = FakeGenerator("## Cues\n\n- what is a heap?\n")
+
+    job_id, index = _run(
+        settings,
+        conn,
+        tmp_path,
+        {"lecture-03.md": b"# Lecture 3\n\nHeaps and priority queues.\n"},
+        style="cornell",
+        target="15-Courses/CS201/materials",
+        generator=generator,
+    )
+
+    assert (vault / "15-Courses" / "CS201" / "materials" / "lecture-03.md").is_file()
+    note = vault / "15-Courses" / "CS201" / "notes" / "lecture-03.notes.md"
+    assert note.is_file(), "the note belongs in notes/, not beside the material"
+    body = note.read_text(encoding="utf-8")
+    assert "note_style: cornell" in body
+    assert "course: CS201" in body
+
+    item = store.get_job(conn, job_id)["items"][0]
+    assert item["summary_path"] == "15-Courses/CS201/notes/lecture-03.notes.md"
+    assert item["stage"] == "done"
+    assert "15-Courses/CS201/notes/lecture-03.notes.md" in index.upserts
+
+
+def test_a_style_alone_is_enough_to_ask_for_a_note(settings, conn, tmp_path, vault) -> None:
+    """Before styles existed, only a free-text prompt triggered the note stage.
+    Picking "Study guide" and typing nothing must not silently ingest with no
+    note."""
+    generator = FakeGenerator("## Outline\n\n- topic\n")
+    _run(
+        settings,
+        conn,
+        tmp_path,
+        {"lecture.md": b"# Lecture\n\nShortest paths.\n"},
+        style="study-guide",
+        generator=generator,
+    )
+
+    assert (vault / "00-Inbox" / "files" / "lecture.summary.md").is_file()
+    assert len(generator.prompts) == 1
+    assert "## Outline" in generator.prompts[0], "the style's structure reached the model"
+
+
+def test_no_style_and_no_prompt_still_skips_the_note_stage(settings, conn, tmp_path, vault) -> None:
+    generator = FakeGenerator()
+    _run(settings, conn, tmp_path, {"lecture.md": b"# L\n\nBody.\n"}, generator=generator)
+
+    assert generator.prompts == []
+    assert not (vault / "00-Inbox" / "files" / "lecture.summary.md").exists()
+
+
+def test_a_style_and_an_instruction_both_reach_the_model(settings, conn, tmp_path) -> None:
+    generator = FakeGenerator()
+    _run(
+        settings,
+        conn,
+        tmp_path,
+        {"lecture.md": b"# L\n\nBody.\n"},
+        style="key-terms",
+        prompt="focus on chapter 4",
+        generator=generator,
+    )
+
+    prompt = generator.prompts[0]
+    assert "## Key terms" in prompt
+    assert "focus on chapter 4" in prompt
+
+
+def test_an_unrecognised_stored_style_degrades_to_no_style(settings, conn, tmp_path) -> None:
+    """The router validates before the row is written, so an unknown style can
+    only come from a hand-edited database — which must not fail every file in
+    the job."""
+    generator = FakeGenerator()
+    _run(
+        settings,
+        conn,
+        tmp_path,
+        {"lecture.md": b"# L\n\nBody.\n"},
+        style="outline",
+        prompt="just summarise it",
+        generator=generator,
+    )
+
+    assert len(generator.prompts) == 1
+    assert "just summarise it" in generator.prompts[0]
