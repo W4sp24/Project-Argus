@@ -1,21 +1,22 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import Markdown from "@/components/Markdown";
 
 /**
- * Markdown, rendered by react-markdown exactly as the journal does.
+ * An automation's text payload, rendered through the one shared markdown
+ * boundary (`web/components/Markdown.tsx`).
  *
- * Two layers keep pushed markup inert, and both matter. The backend has
+ * This used to reach for `react-markdown` directly, with no plugins at all —
+ * so a workflow that pushed a table rendered it as a paragraph full of pipes,
+ * and a fenced block came out unhighlighted. That was never a decision, just
+ * the cost of a second renderer existing.
+ *
+ * Two layers keep pushed markup inert, and both still matter. The backend has
  * already run the body through the one allowlist sanitiser
  * (`backend/features/automations/sanitize.py`), and react-markdown does not
  * render raw HTML unless `rehype-raw` is added — which is deliberately not a
- * dependency here. A workflow author is not a trusted source of markup.
+ * dependency. A workflow author is not a trusted source of markup.
  */
-const ReactMarkdown = dynamic(() => import("react-markdown"), {
-  ssr: false,
-  loading: () => <p className="text-label text-ink-faint">Loading…</p>,
-});
-
 export default function Text({ payload }: { payload: unknown }) {
   const raw = (payload ?? {}) as { body?: unknown };
   const body = typeof raw.body === "string" ? raw.body : null;
@@ -27,9 +28,5 @@ export default function Text({ payload }: { payload: unknown }) {
     return <p className="text-label text-ink-faint">Nothing to report.</p>;
   }
 
-  return (
-    <div className="prose-journal text-body">
-      <ReactMarkdown>{body}</ReactMarkdown>
-    </div>
-  );
+  return <Markdown text={body} />;
 }

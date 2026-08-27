@@ -5,7 +5,7 @@
  *
  * `react-markdown`, `remark-gfm` and `rehype-highlight` (plus the
  * `highlight.js` language grammars below) MAY ONLY EVER BE IMPORTED HERE. A
- * convenience `import Markdown from "@/components/chat/MarkdownImpl"` — or
+ * convenience `import Markdown from "@/components/MarkdownImpl"` — or
  * any other file reaching past the dynamic boundary straight into this
  * module — silently pulls the whole markdown + syntax-highlighting stack
  * into the initial route bundle. `tsc` and `next lint` both stay green when
@@ -151,7 +151,7 @@ const components: Components = {
 
 function MarkdownImpl({ text, className = "text-body" }: { text: string; className?: string }) {
   return (
-    <div className={`prose-chat ${className}`}>
+    <div className={`prose-md ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, REHYPE_HIGHLIGHT_OPTIONS]]}

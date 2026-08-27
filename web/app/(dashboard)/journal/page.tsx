@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import dynamic from "next/dynamic";
+import Markdown from "@/components/Markdown";
 import Panel from "@/components/Panel";
 import {
   useJournalNote,
@@ -9,11 +9,6 @@ import {
   useJournalSessions,
   type JournalSession,
 } from "@/lib/api";
-
-const ReactMarkdown = dynamic(() => import("react-markdown"), {
-  ssr: false,
-  loading: () => <p className="text-sm text-ink-faint">Loading note…</p>,
-});
 
 function relativeDay(iso: string): string {
   const today = new Date();
@@ -172,8 +167,15 @@ export default function JournalPage() {
                   Open in Obsidian ↗
                 </a>
               </div>
-              <article className="prose-journal max-w-none text-sm leading-relaxed text-ink-muted">
-                <ReactMarkdown>{note.markdown.replace(/^---[\s\S]*?---/, "")}</ReactMarkdown>
+              {/* The shared boundary (web/components/Markdown.tsx), not a
+                  bare react-markdown import: this pane had no plugins, so a
+                  note containing a table rendered here as a paragraph full
+                  of pipes. */}
+              <article className="max-w-none">
+                <Markdown
+                  text={note.markdown.replace(/^---[\s\S]*?---/, "")}
+                  className="text-sm leading-relaxed text-ink-muted"
+                />
               </article>
             </Panel>
           )}

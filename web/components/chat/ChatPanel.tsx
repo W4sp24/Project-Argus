@@ -6,7 +6,7 @@ import Button from "@/components/ui/Button";
 import { useVault } from "@/lib/api";
 import { useChat, type ChatMessage } from "@/lib/chat";
 import CitationChips from "@/components/chat/CitationChips";
-import Markdown from "@/components/chat/Markdown";
+import Markdown from "@/components/Markdown";
 import ToolTrace from "@/components/chat/ToolTrace";
 import { stripCitationMarkers } from "@/lib/citations";
 import { useSelectedModel } from "@/lib/models";
