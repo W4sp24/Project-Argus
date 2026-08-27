@@ -27,6 +27,9 @@ test("study sub-nav deep-links between overview, flashcards, and exam", async ({
 
 test("flashcard flip and grading advance the mock study session", async ({ page }) => {
   await page.goto("/study/flashcards");
+  // Named explicitly rather than relying on which deck lands first in the
+  // list: there is now a second, notation-carrying deck beside this one.
+  await page.getByRole("button", { name: /CS000 flashcards/ }).click();
   const front = page.getByTestId("flashcard-front");
   await expect(front).toContainText("What is Big-O of binary search?");
   // Both faces stay mounted (CSS backface-visibility, not display:none), so
@@ -34,14 +37,41 @@ test("flashcard flip and grading advance the mock study session", async ({ page 
   // text visibility — Playwright's visibility check doesn't model 3D backfaces.
   const inner = page.getByTestId("flashcard-inner");
   await expect(inner).not.toHaveClass(/is-flipped/);
-  await front.click();
+  // The faces are no longer buttons — they render markdown, and an <a> inside
+  // a <button> is invalid while an aria-label built from the raw card text
+  // would have a screen reader read LaTeX source. The flip is its own control.
+  const flip = page.getByTestId("flashcard-flip");
+  await expect(flip).toHaveAttribute("aria-pressed", "false");
+  await flip.click();
   await expect(inner).toHaveClass(/is-flipped/);
+  await expect(flip).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "GOOD" }).click();
   // Real wording (Flashcards.tsx): "scheduled :: <grade> — next due <date>" —
   // the exact due date is FSRS-computed and locale-formatted, so only the
   // fixed prefix is asserted.
   await expect(page.getByText(/scheduled :: good — next due/)).toBeVisible();
+});
+
+test("a flashcard carrying notation is typeset on both faces", async ({ page }) => {
+  await page.goto("/study/flashcards");
+
+  // Its own deck, selected by name. The suite runs with workers: 1 against one
+  // shared vault, so the test above grades its card out of the due queue for
+  // everything that follows — a notation card behind it in the same deck would
+  // be reachable or not depending on test order.
+  await page.getByRole("button", { name: /CS000 notation/ }).click();
+  const front = page.getByTestId("flashcard-front");
+
+  // `.katex-mathml math` rather than `.katex`: that node exists only under
+  // `output: "htmlAndMathml"`, so a regression to `output: "html"` — which
+  // looks identical and is silently unreadable to a screen reader — fails
+  // here rather than shipping.
+  await expect(front.locator(".katex-mathml math").first()).toBeAttached();
+  await expect(page.getByTestId("flashcard-back").locator(".katex").first()).toBeAttached();
+  // The delimiters are gone and nothing failed to parse.
+  await expect(page.getByText("$\\nabla")).toHaveCount(0);
+  await expect(page.locator(".katex-error")).toHaveCount(0);
 });
 
 test("course hub opens from a course row and links back", async ({ page }) => {

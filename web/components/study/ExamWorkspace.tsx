@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Markdown from "@/components/Markdown";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import { apiFetch, fetcher, useStudyCourses, useStudyExams } from "@/lib/api";
@@ -104,7 +105,7 @@ export default function ExamWorkspace() {
             const options = quiz?.questions[i]?.options ?? null;
             return (
               <div key={i} className="border border-line p-3">
-                <p className="mb-2 text-lead text-ink">{item.q}</p>
+                <Markdown text={item.q} className="mb-2 text-lead text-ink" />
                 {options ? (
                   <div className="grid gap-1.5">
                     {options.map((option) => {
@@ -117,7 +118,7 @@ export default function ExamWorkspace() {
                           : "border-line text-ink-muted";
                       return (
                         <div key={option} className={`border px-3 py-1.5 text-body ${border}`}>
-                          {option}
+                          <Markdown text={option} inline className="text-body" />
                         </div>
                       );
                     })}
@@ -126,10 +127,17 @@ export default function ExamWorkspace() {
                   <p className={`text-body ${item.correct ? "text-ok" : "text-danger"}`}>
                     {item.correct ? "✓ " : "✗ "}
                     {item.your_answer || "(no answer)"}
-                    {!item.correct && <span className="text-ink-muted"> — correct: {item.correct_answer}</span>}
+                    {!item.correct && (
+                      <span className="text-ink-muted">
+                        {" — correct: "}
+                        <Markdown text={item.correct_answer} inline className="text-body" />
+                      </span>
+                    )}
                   </p>
                 )}
-                {item.explanation && <p className="mt-2 text-label text-ink-muted">{item.explanation}</p>}
+                {item.explanation && (
+                  <Markdown text={item.explanation} className="mt-2 text-label text-ink-muted" />
+                )}
                 {item.citation && (
                   <p className="mt-2 font-mono text-label text-[var(--ac)]">{`⌗ ${item.citation}`}</p>
                 )}
@@ -160,7 +168,7 @@ export default function ExamWorkspace() {
         <div className="mb-4 h-1 w-full bg-sunken">
           <div className="h-1 bg-[var(--ac)] transition-[width]" style={{ width: `${pct}%` }} />
         </div>
-        <p className="mb-5 font-body text-title text-ink-bright">{question.q}</p>
+        <Markdown text={question.q} className="mb-5 font-body text-title text-ink-bright" />
         {question.options ? (
           <div className="grid gap-2">
             {question.options.map((option, i) => {
@@ -175,7 +183,7 @@ export default function ExamWorkspace() {
                   }`}
                 >
                   <span className="mr-2 font-mono text-xs text-[var(--ac)]">{letter})</span>
-                  {option}
+                  <Markdown text={option} inline className="text-body" />
                 </button>
               );
             })}

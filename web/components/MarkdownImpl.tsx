@@ -193,6 +193,27 @@ const components: Components = {
 };
 
 /**
+ * Markdown for somewhere only *phrasing* content is legal — inside a
+ * `<button>`, a `<label>`, a table cell that must not grow a paragraph.
+ *
+ * An exam's multiple-choice options are the case that forced this. They are
+ * buttons, and they carry notation ("Which of these equals $\frac{1}{2}$?"),
+ * so they need typesetting; but a `<p>` inside a `<button>` is invalid (flow
+ * content in a phrasing-only model) and an `<a>` inside one is worse — an
+ * interactive element inside an interactive element, which Firefox resolves
+ * by activating the button when the link is clicked.
+ *
+ * So the paragraph wrapper is dropped and a link degrades to its own text.
+ * Losing a link in an exam option costs nothing; the option is not a place a
+ * link belongs, and the alternative is markup that browsers disagree about.
+ */
+const INLINE_COMPONENTS: Components = {
+  ...components,
+  p: ({ children }) => <>{children}</>,
+  a: ({ children }) => <>{children}</>,
+};
+
+/**
  * Hide a display block that has opened but not yet closed.
  *
  * micromark's flow-math construct behaves like an unterminated code fence: an
@@ -224,25 +245,28 @@ function MarkdownImpl({
   text,
   className = "text-body",
   streaming = false,
+  inline = false,
 }: {
   text: string;
   className?: string;
   streaming?: boolean;
+  inline?: boolean;
 }) {
   const body = streaming ? hideIncompleteDisplayMath(text) : text;
+  const Wrapper = inline ? "span" : "div";
   return (
-    <div className={`prose-md ${className}`}>
+    <Wrapper className={`prose-md ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[
           [rehypeHighlight, REHYPE_HIGHLIGHT_OPTIONS],
           [rehypeKatex, REHYPE_KATEX_OPTIONS],
         ]}
-        components={components}
+        components={inline ? INLINE_COMPONENTS : components}
       >
         {body}
       </ReactMarkdown>
-    </div>
+    </Wrapper>
   );
 }
 
