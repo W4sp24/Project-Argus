@@ -192,7 +192,44 @@ const components: Components = {
   pre: CodeBlock as Components["pre"],
 };
 
-function MarkdownImpl({ text, className = "text-body" }: { text: string; className?: string }) {
+/**
+ * Hide a display block that has opened but not yet closed.
+ *
+ * micromark's flow-math construct behaves like an unterminated code fence: an
+ * unmatched `$$` consumes everything to the end of the input. Mid-stream that
+ * is the entire rest of the message, which KaTeX is then asked to parse as one
+ * expression — it fails, and `throwOnError: false` paints the result red.
+ *
+ * So from the moment `$$` arrives until its closer lands, every frame renders
+ * a growing red block where the answer should be. That is the whole tail of a
+ * message flashing red on *every* display equation, several times a second.
+ *
+ * Withholding the incomplete block instead costs the reader nothing they can
+ * perceive — the equation appears when it is complete rather than assembling
+ * itself in red — and skips a KaTeX parse that was going to fail anyway.
+ *
+ * Only for text still streaming. A settled message with an odd `$$` is a model
+ * that wrote a stray delimiter, and showing that honestly is right.
+ */
+function hideIncompleteDisplayMath(text: string): string {
+  const opener = text.lastIndexOf("$$");
+  if (opener === -1) return text;
+  // Count from the start: an even number of delimiters before this one means
+  // this one opens a block that has not been closed.
+  const before = text.slice(0, opener).split("$$").length - 1;
+  return before % 2 === 0 ? text.slice(0, opener) : text;
+}
+
+function MarkdownImpl({
+  text,
+  className = "text-body",
+  streaming = false,
+}: {
+  text: string;
+  className?: string;
+  streaming?: boolean;
+}) {
+  const body = streaming ? hideIncompleteDisplayMath(text) : text;
   return (
     <div className={`prose-md ${className}`}>
       <ReactMarkdown
@@ -203,7 +240,7 @@ function MarkdownImpl({ text, className = "text-body" }: { text: string; classNa
         ]}
         components={components}
       >
-        {text}
+        {body}
       </ReactMarkdown>
     </div>
   );
@@ -212,4 +249,13 @@ function MarkdownImpl({ text, className = "text-body" }: { text: string; classNa
 // Re-renders on every batched streaming flush (a new `text` string as the
 // assistant's answer grows token by token), so memoising on that one prop
 // keeps re-parses down to actual content changes.
+//
+// Considered and rejected: splitting the message on blank lines into
+// separately-memoised blocks, so a flush re-parses only the last one. It is
+// the standard trick and it would bound the per-flush cost, but a blank line
+// is not a safe cut in markdown — it separates the items of a loose list, sits
+// inside fenced blocks, and precedes the link definitions of a reference-style
+// link. Cutting there changes how a settled message renders, permanently, to
+// speed up the seconds it was arriving. The parse is memoised per distinct
+// string; the expensive part that was actually visible is handled above.
 export default React.memo(MarkdownImpl);

@@ -222,7 +222,10 @@ export default function ChatPanel({
                 />
                 {message.text && (
                   <div className="border border-line bg-void px-3.5 py-2.5 text-body leading-relaxed text-ink-muted">
-                    <Markdown text={stripCitationMarkers(message.text)} />
+                    <Markdown
+                      text={stripCitationMarkers(message.text)}
+                      streaming={message.status === "streaming"}
+                    />
                     <CitationChips steps={message.steps} vaultPath={vaultPath} />
                   </div>
                 )}
@@ -248,6 +251,7 @@ export default function ChatPanel({
                     <Markdown
                       text={stripCitationMarkers(message.text)}
                       className="text-lead leading-[1.7] text-ink"
+                      streaming={message.status === "streaming"}
                     />
                     <CitationChips steps={message.steps} vaultPath={vaultPath} />
                   </>
