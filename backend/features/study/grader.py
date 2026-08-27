@@ -36,8 +36,68 @@ class AttemptResult(BaseModel):
     weak_topics: list[str]
 
 
+#: LaTeX commands that carry no word a student would ever type -- they place
+#: their arguments rather than name anything. Deleted before comparison.
+#:
+#: Deliberately *only* layout. An operator keeps its name, because ``\log`` is
+#: something a person writes: strip it and ``$O(\log n)$`` normalises to
+#: ``"o n"``, which would then accept a bare ``O(n)`` -- a different complexity
+#: class, graded correct.
+_LATEX_LAYOUT = frozenset(
+    {
+        "frac",
+        "dfrac",
+        "tfrac",
+        "left",
+        "right",
+        "begin",
+        "end",
+        "text",
+        "textbf",
+        "textit",
+        "textrm",
+        "mathrm",
+        "mathbf",
+        "mathit",
+        "displaystyle",
+        "quad",
+        "qquad",
+    }
+)
+
+_LATEX_COMMAND = re.compile(r"\\([a-zA-Z]+)")
+
+#: ``\begin{cases}`` and its closer, taken with the environment name. That name
+#: is an *argument*, so the command rule above cannot reach it -- and left
+#: behind it becomes the word "cases", which containment then accepts.
+_LATEX_ENVIRONMENT = re.compile(r"\\(?:begin|end)\s*\{[^{}]*\}")
+
+
+def _strip_latex(text: str) -> str:
+    r"""Drop the markup, keep the content.
+
+    ``_normalize`` below reduces everything to ``[a-z0-9]``, which strips a
+    command's backslash and leaves the command *as a word*: ``\frac{1}{2}``
+    becomes ``"frac 1 2"``. Since a short answer is graded by containment
+    either way, that word is not merely noise -- ``frac`` becomes an accepted
+    answer, and the student who types it scores the point.
+    """
+    return _LATEX_COMMAND.sub(
+        lambda match: " " if match.group(1) in _LATEX_LAYOUT else f" {match.group(1)} ",
+        _LATEX_ENVIRONMENT.sub(" ", text),
+    )
+
+
 def _normalize(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    """Comparable form of an answer.
+
+    Distinct from ``practice_exam._normalize``, which is *not* LaTeX-aware and
+    should not be: that one checks a model's quote against the source text it
+    was copied from, so both sides carry the same markup. This one compares a
+    model's answer against what a human typed into an ``<input>``, and only one
+    side of that has ever seen a backslash.
+    """
+    return re.sub(r"[^a-z0-9]+", " ", _strip_latex(text).lower()).strip()
 
 
 def _is_correct(question: Question, answer: str) -> bool:
