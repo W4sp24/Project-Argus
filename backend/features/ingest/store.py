@@ -54,6 +54,7 @@ def _job_row(row: sqlite3.Row) -> dict[str, Any]:
         "status": row["status"],
         "target": row["target"],
         "summary_prompt": row["summary_prompt"],
+        "note_style": row["note_style"],
         "total": row["total"],
         "done": row["done"],
         "error": row["error"],
@@ -78,13 +79,15 @@ def create_job(
     target: str,
     summary_prompt: str,
     filenames: list[str],
+    note_style: str = "",
 ) -> str:
     """Record a queued job and one queued item per file. Returns the job id."""
     job_id = uuid.uuid4().hex
     conn.execute(
-        "INSERT INTO ingest_jobs (id, boot_id, status, target, summary_prompt, total) "
-        "VALUES (?, ?, 'queued', ?, ?, ?)",
-        (job_id, BOOT_ID, target, summary_prompt, len(filenames)),
+        "INSERT INTO ingest_jobs "
+        "(id, boot_id, status, target, summary_prompt, note_style, total) "
+        "VALUES (?, ?, 'queued', ?, ?, ?, ?)",
+        (job_id, BOOT_ID, target, summary_prompt, note_style, len(filenames)),
     )
     conn.executemany(
         "INSERT INTO ingest_job_items (job_id, filename, stage) VALUES (?, ?, 'queued')",

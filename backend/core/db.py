@@ -315,6 +315,10 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
                    CHECK (status IN ('queued', 'running', 'ok', 'partial', 'failed')),
     target         TEXT NOT NULL,
     summary_prompt TEXT NOT NULL DEFAULT '',
+    -- Which of `ingest.notes.NOTE_STYLES` shaped the generated note, or ''
+    -- for "no note". Kept beside `summary_prompt` rather than replacing it:
+    -- a style and a free-text instruction compose, they do not exclude.
+    note_style     TEXT NOT NULL DEFAULT '',
     total          INTEGER NOT NULL DEFAULT 0,
     done           INTEGER NOT NULL DEFAULT 0,
     error          TEXT
@@ -396,6 +400,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # Safe only now that the column is guaranteed to exist — see SCHEMA.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cli_usage_agent ON cli_usage(agent, ts)")
     _migrate_scan_key(conn)
+    ingest_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingest_jobs)")}
+    if "note_style" not in ingest_columns:  # migration for pre-note-style DBs
+        conn.execute("ALTER TABLE ingest_jobs ADD COLUMN note_style TEXT NOT NULL DEFAULT ''")
 
     # Multi-instance n8n support (chunk B1): additive columns for databases
     # that reached automation_widgets/automation_runs/automation_workflows

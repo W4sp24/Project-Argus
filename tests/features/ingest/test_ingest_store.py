@@ -182,3 +182,40 @@ def test_running_job_id_reports_the_one_in_flight(conn: sqlite3.Connection) -> N
 
     store.finish_job(conn, job_id, status="ok")
     assert store.running_job_id(conn) is None
+
+
+def test_note_style_round_trips(conn):
+    job_id = store.create_job(
+        conn, target="00-Inbox/files", summary_prompt="", filenames=["a.md"], note_style="cornell"
+    )
+    assert store.get_job(conn, job_id)["note_style"] == "cornell"
+    assert store.list_jobs(conn)[0]["note_style"] == "cornell"
+
+
+def test_note_style_defaults_to_none_chosen(conn):
+    job_id = store.create_job(conn, target="00-Inbox/files", summary_prompt="", filenames=["a.md"])
+    assert store.get_job(conn, job_id)["note_style"] == ""
+
+
+def test_a_database_predating_note_style_is_migrated(tmp_path):
+    """`init_schema` runs on every connection, so an existing 0.2 database has
+    to grow the column rather than fail every ingest query with
+    `no such column`. Simulated by dropping the column back off."""
+    db_path = tmp_path / "argus.db"
+    first = connect(db_path)
+    init_schema(first)
+    first.execute("ALTER TABLE ingest_jobs DROP COLUMN note_style")
+    first.commit()
+    first.close()
+
+    second = connect(db_path)
+    init_schema(second)
+    try:
+        columns = {row["name"] for row in second.execute("PRAGMA table_info(ingest_jobs)")}
+        assert "note_style" in columns
+        job_id = store.create_job(
+            second, target="00-Inbox/files", summary_prompt="", filenames=["a.md"]
+        )
+        assert store.get_job(second, job_id)["note_style"] == ""
+    finally:
+        second.close()
