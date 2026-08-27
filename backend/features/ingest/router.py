@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.features.ingest import notes as note_styles
 from backend.features.ingest import store
 from backend.features.ingest.pipeline import run_ingest_job
 from backend.rag.email import parse_email
@@ -90,6 +91,23 @@ class DestinationsResponse(BaseModel):
     """
 
     destinations: list[str]
+
+
+class NoteStyleInfo(BaseModel):
+    """One entry of ``GET /api/ingest/note-styles``.
+
+    Served rather than hardcoded in the dialog for the same reason
+    ``/api/ingest/destinations`` is: a list the frontend keeps its own copy of
+    is a list that drifts the moment a style is added on this side.
+    """
+
+    key: str
+    label: str
+    description: str
+
+
+class NoteStylesResponse(BaseModel):
+    styles: list[NoteStyleInfo]
 
 
 class PrecheckRequest(BaseModel):
@@ -460,6 +478,15 @@ def build_ingest_router(
     def destinations() -> DestinationsResponse:
         return DestinationsResponse(destinations=_destinations(settings))
 
+    @router.get("/ingest/note-styles", response_model=NoteStylesResponse)
+    def note_style_options() -> NoteStylesResponse:
+        return NoteStylesResponse(
+            styles=[
+                NoteStyleInfo(key=style.key, label=style.label, description=style.description)
+                for style in note_styles.NOTE_STYLES.values()
+            ]
+        )
+
     @router.post("/ingest/precheck", response_model=PrecheckResponse)
     def precheck(request: PrecheckRequest) -> PrecheckResponse:
         target = _guarded_target(settings, request.target)
@@ -479,12 +506,20 @@ def build_ingest_router(
         files: Annotated[list[UploadFile], File()] = None,
         target: Annotated[str | None, Form()] = None,
         summary_prompt: Annotated[str, Form()] = "",
+        note_style: Annotated[str, Form()] = "",
         replace: Annotated[bool, Form()] = False,
     ) -> JobAccepted:
         """Accept a batch, stage it, and hand it to a background job."""
         uploads = files or []
         clean_target = _guarded_target(settings, target or "")
         names = _validate_batch(uploads)
+        # Validated here rather than in the job: a style the user cannot have
+        # chosen means a broken client, and 202-ing it would ingest the batch
+        # with no note at all, which looks exactly like the feature failing.
+        try:
+            style = note_styles.resolve_style(note_style)
+        except note_styles.NoteStyleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         conn = connect(settings.db_path)
         try:
@@ -502,6 +537,7 @@ def build_ingest_router(
                 target=clean_target,
                 summary_prompt=(summary_prompt or "").strip(),
                 filenames=names,
+                note_style=style.key if style else "",
             )
         finally:
             conn.close()

@@ -361,3 +361,56 @@ def test_without_replace_a_collision_still_dedupes(client: TestClient, vault: Pa
     body = (vault / "00-Inbox" / "files" / "seeded.md").read_text(encoding="utf-8")
     assert body == "# Seeded\n"
     assert (vault / "00-Inbox" / "files" / "seeded-2.md").is_file()
+
+
+# --- note styles --------------------------------------------------------------
+
+
+def test_note_styles_are_served_not_hardcoded_in_the_dialog(client: TestClient) -> None:
+    payload = client.get("/api/ingest/note-styles").json()
+
+    keys = [style["key"] for style in payload["styles"]]
+    assert keys == ["summary", "study-guide", "cornell", "key-terms"]
+    assert all(style["label"] and style["description"] for style in payload["styles"])
+
+
+def test_a_job_records_the_chosen_style(client: TestClient) -> None:
+    response = client.post(
+        "/api/ingest/jobs",
+        files=[("files", ("lecture.md", b"# Lecture\n\nHeaps.\n", "text/markdown"))],
+        data={"target": "15-Courses/CS301/materials", "note_style": "study-guide"},
+    )
+
+    assert response.status_code == 202
+    job = client.get(f"/api/ingest/jobs/{response.json()['job_id']}").json()
+    assert job["note_style"] == "study-guide"
+    assert job["items"][0]["summary_path"] == "15-Courses/CS301/notes/lecture.notes.md"
+
+
+def test_an_unknown_style_is_refused_before_anything_is_staged(
+    client: TestClient, vault: Path
+) -> None:
+    """422 rather than a 202 that ingests with no note — which the user would
+    read as the feature being broken, not as a rejected request."""
+    response = client.post(
+        "/api/ingest/jobs",
+        files=[("files", ("lecture.md", b"# L\n", "text/markdown"))],
+        data={"target": "00-Inbox/files", "note_style": "outline"},
+    )
+
+    assert response.status_code == 422
+    assert "study-guide" in response.json()["detail"], "the valid keys are named"
+    assert not (vault / "00-Inbox" / "files" / "lecture.md").exists()
+    assert client.get("/api/ingest/jobs").json()["jobs"] == []
+
+
+def test_omitting_the_style_keeps_the_old_prompt_only_behaviour(client: TestClient) -> None:
+    response = client.post(
+        "/api/ingest/jobs",
+        files=[("files", ("lecture.md", b"# L\n\nBody.\n", "text/markdown"))],
+        data={"target": "00-Inbox/files", "summary_prompt": "list the definitions"},
+    )
+
+    job = client.get(f"/api/ingest/jobs/{response.json()['job_id']}").json()
+    assert job["note_style"] == ""
+    assert job["items"][0]["summary_path"] == "00-Inbox/files/lecture.summary.md"
