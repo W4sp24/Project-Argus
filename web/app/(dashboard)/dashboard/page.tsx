@@ -1,22 +1,42 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import AgentUsage from "@/components/AgentUsage";
 import StatRow from "@/components/StatRow";
 import TokenUsage from "@/components/TokenUsage";
-import ActivityFeed from "@/components/dashboard/ActivityFeed";
-import AutomationWidgets from "@/components/dashboard/AutomationWidgets";
 import AutomationsHud from "@/components/dashboard/AutomationsHud";
 import BriefingCard from "@/components/dashboard/BriefingCard";
 import Heatmap from "@/components/dashboard/Heatmap";
-import IngestPanel from "@/components/dashboard/IngestPanel";
-import InsightsChart from "@/components/dashboard/InsightsChart";
 import PlannerTimeline from "@/components/dashboard/PlannerTimeline";
 import QuickLinks from "@/components/dashboard/QuickLinks";
 import TasksPanel from "@/components/dashboard/TasksPanel";
 import { useDashboardStats } from "@/lib/useDashboardStats";
 import { useAutomationsStatus } from "@/lib/useAutomationsStatus";
 import { useTypewriter } from "@/lib/useTypewriter";
+
+/**
+ * Below-the-fold panels, split out of the initial bundle.
+ *
+ * /dashboard mounts fourteen client components, which is why it was the one
+ * route over the 135 kB first-load budget in `scripts/check-bundles.mjs` --
+ * and had been for long enough that BUILD_STATE.md still recorded it as
+ * passing at 113 kB. These five are the heaviest of the ones a reader has to
+ * scroll to reach, so nothing above the fold waits on them.
+ *
+ * `ssr: false` matches the `Markdown.tsx` boundary: each fetches its own data
+ * client-side through SWR and already renders an empty state while that is in
+ * flight, so prerendering them buys nothing.
+ *
+ * AgentUsage is imported normally on /code and /system, which are inside
+ * budget -- this boundary is the dashboard's, not the component's.
+ */
+const AutomationWidgets = dynamic(() => import("@/components/dashboard/AutomationWidgets"), {
+  ssr: false,
+});
+const IngestPanel = dynamic(() => import("@/components/dashboard/IngestPanel"), { ssr: false });
+const AgentUsage = dynamic(() => import("@/components/AgentUsage"), { ssr: false });
+const ActivityFeed = dynamic(() => import("@/components/dashboard/ActivityFeed"), { ssr: false });
+const InsightsChart = dynamic(() => import("@/components/dashboard/InsightsChart"), { ssr: false });
 
 function formatToday(): string {
   return new Date().toLocaleDateString("en-US", {
