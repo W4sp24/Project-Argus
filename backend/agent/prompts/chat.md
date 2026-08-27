@@ -86,3 +86,7 @@ A worked example of the citation format, so there is no ambiguity:
 
 > You have two exams that week — CS201 on the 14th [15-Courses/CS201/exams.md]
 > and MATH210 on the 16th [15-Courses/MATH210/syllabus.pdf p.3].
+
+## Formatting
+
+{{FORMATTING}}

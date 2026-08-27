@@ -22,6 +22,7 @@ from pathlib import PurePosixPath
 
 import frontmatter
 
+from backend.agent.formatting import compose, math_contract, note_quality
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 
 #: How much of a file's text is handed to the model. Matches the email
@@ -114,11 +115,17 @@ GENERATED_BY = "argus"
 #: -- and by ``notes_gap_list`` -- without parsing frontmatter.
 COURSE_NOTE_SUFFIX = ".notes.md"
 
+#: Everything about the note that is true whatever style was picked. The
+#: notation and note-quality halves come from
+#: :mod:`backend.agent.formatting`, shared with the chat agent and the
+#: course-wide study guide -- so a guide and the note beside it are held to one
+#: set of rules rather than to whichever sentence each prompt happened to grow.
+_HOUSE_RULES = """Do not add a title heading; one is already in the note's
+frontmatter, and a second one just repeats it."""
+
 _PROMPT = """{instruction}
 
-Write the note as markdown. Do not add a title heading; one is already in the
-note's frontmatter. Do not invent anything the document does not say -- if the
-document does not cover what a section would need, leave that section out.
+{house_rules}
 
 DOCUMENT ({path}):
 {text}
@@ -162,9 +169,11 @@ def build_prompt(style: NoteStyle | None, instruction: str, rel_path: str, text:
     style at all the instruction stands alone -- which is exactly how this
     behaved before styles existed.
     """
-    parts = [part for part in ((style.instruction if style else ""), instruction.strip()) if part]
     return _PROMPT.format(
-        instruction="\n\n".join(parts), path=rel_path, text=text[:MAX_NOTE_CHARS]
+        instruction=compose(style.instruction if style else "", instruction),
+        house_rules=compose(_HOUSE_RULES, note_quality(), math_contract()),
+        path=rel_path,
+        text=text[:MAX_NOTE_CHARS],
     )
 
 

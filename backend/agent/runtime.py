@@ -34,6 +34,7 @@ from backend.agent.adapters import (
     resolve_run_target,
     text_result,
 )
+from backend.agent.formatting import math_contract
 from backend.agent.history import budget_history
 from backend.agent.text_tool_calls import BUILTIN_CHAT_TOOL_NAMES
 from backend.core.config import Settings
@@ -80,11 +81,18 @@ def _load_system_prompt(taxonomy: Taxonomy, today: date | None = None) -> str:
     model with no date cannot resolve "this week" or "since Friday" against a
     vault whose notes are all dated, and would quietly answer as of its
     training cutoff instead.
+
+    ``{{FORMATTING}}`` is the shared output contract from
+    :mod:`backend.agent.formatting`. Substituted rather than written into
+    ``chat.md`` so that chat and the note generators are held to one set of
+    notation rules from one file -- a copy here is a copy that drifts, and
+    drift means an answer that renders and a note that does not.
     """
     return (
         PROMPT_PATH.read_text(encoding="utf-8")
         .replace("{{PRIVATE_DIR}}", taxonomy.private)
         .replace("{{TODAY}}", (today or date.today()).isoformat())
+        .replace("{{FORMATTING}}", math_contract())
     )
 
 

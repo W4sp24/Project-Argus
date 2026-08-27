@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from backend.agent.formatting import compose, math_contract, note_quality
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.ingest.notes import COURSE_NOTE_SUFFIX
 from backend.features.study.practice_exam import (
@@ -101,18 +102,25 @@ def guide_prompt(course: str, scope: str, corpus: list[dict[str, Any]]) -> str:
             break
         excerpts.append(block)
         used += len(block)
-    return f"""Write a study guide for course {course}, scope: {scope}.
+    structure = f"""Write a study guide for course {course}, scope: {scope}.
 Use ONLY the source excerpts below. Structure (markdown):
 
 1. `## Outline` — the topic map.
 2. `## Key concepts` — each with a one-line definition and a citation like
    [<file> p.N] / [<file> slide N] / [<path>] taken from the SOURCE markers.
-3. `## Worked examples` — 2-3 step-by-step examples from the material.
+3. `## Worked examples` — 2-3 step-by-step examples from the material, each
+   step saying *why* it follows from the one above it.
+4. `## Common mistakes` — the errors this material invites, where the sources
+   name or imply them. Omit the section rather than inventing one.
 
-Every factual claim needs a citation. Do not invent content.
+Every factual claim needs a citation."""
 
-SOURCES:
-{"".join(excerpts)}"""
+    # The same two contracts the per-document note styles get
+    # (backend/features/ingest/notes.py). A course guide and the note sitting
+    # next to it in the vault are the same kind of artefact and are held to the
+    # same rules; two copies of "here is how to write a note" is how they stop
+    # being.
+    return compose(structure, note_quality(), math_contract(), f"SOURCES:\n{''.join(excerpts)}")
 
 
 async def generate_study_guide(
