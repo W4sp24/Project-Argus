@@ -69,9 +69,26 @@ def courses(vault_path: Path, *, taxonomy: Taxonomy | None = None) -> list[Cours
     return found
 
 
-def course_corpus(index: VaultIndex, course: str) -> list[dict[str, Any]]:
-    """Every indexed chunk belonging to one course."""
-    return [chunk for chunk in index.all_chunks() if chunk["meta"].get("course") == course]
+def course_corpus(
+    index: VaultIndex, course: str, paths: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Every indexed chunk belonging to one course.
+
+    ``paths``, when given, narrows that to the files the user ticked in the
+    Course Hub's SOURCES rail, so "make a guide from just these three
+    lectures" means what it says. As in
+    :func:`backend.rag.retrieve.retrieve_result`, ``None`` and ``[]`` are
+    different: no restriction versus nothing selected. The callers turn an
+    empty corpus into a ``StudyError`` either way, which is the honest answer
+    to "generate from nothing".
+    """
+    selected = None if paths is None else frozenset(paths)
+    return [
+        chunk
+        for chunk in index.all_chunks()
+        if chunk["meta"].get("course") == course
+        and (selected is None or chunk["meta"].get("path") in selected)
+    ]
 
 
 class CourseSourceInfo(BaseModel):

@@ -32,7 +32,7 @@ from backend.features.study.practice_exam import (
 )
 from backend.features.study.study_guide import generate_study_guide
 from backend.vault.errors import raise_http
-from backend.vault.writer import WriterError
+from backend.vault.writer import WriterError, WriterForbidden, save_ingest_file
 
 logger = logging.getLogger("argus.study")
 
@@ -45,6 +45,11 @@ class GuideRequest(BaseModel):
     # A registry model name (§7). Omitted keeps the default backend, so every
     # existing client keeps working without sending this.
     model: str | None = None
+    # Vault-relative files ticked in the Course Hub's SOURCES rail. Omitted
+    # (None) means the whole course, which is what every existing client
+    # sends; [] means the user unticked everything and is refused rather than
+    # silently widened back to the course.
+    sources: list[str] | None = None
 
 
 class ExamRequest(BaseModel):
@@ -53,6 +58,7 @@ class ExamRequest(BaseModel):
     n: int = 10
     difficulty: str = "medium"
     model: str | None = None
+    sources: list[str] | None = None
 
 
 class ExamSummary(BaseModel):
@@ -153,23 +159,61 @@ def build_study_router(
 
     @router.post("/upload")
     async def upload(course: Annotated[str, Form()], file: UploadFile) -> dict[str, str]:
-        course_dir = settings.vault_path / settings.taxonomy.course_dir(
-            SAFE_NAME_RE.sub("", course)
-        )
-        if not course_dir.is_dir():
-            raise HTTPException(status_code=404, detail=f"no course folder {course}")
-        name = SAFE_NAME_RE.sub("_", file.filename or "upload.bin")
-        materials = course_dir / "materials"
-        materials.mkdir(exist_ok=True)
-        destination = materials / name
-        destination.write_bytes(await file.read())
+        """Save one file into a course's materials/.
 
-        rel_path = destination.relative_to(settings.vault_path).as_posix()
+        The Course Hub now ingests through ``POST /api/ingest/jobs`` instead
+        (progress, a generated note, one snapshot per batch), so this is the
+        legacy single-file path. It used to write with
+        ``destination.write_bytes``: no ``guard_user_path``, so a crafted
+        ``course`` escaped the vault or landed in a protected zone (I1), and
+        no snapshot, so the write had no undo point (I2). It goes through
+        ``save_ingest_file`` now, which is the one writer both invariants live
+        in — and which dedupes a collision to ``name-2`` rather than silently
+        overwriting a file the user still wanted.
+        """
+        code = SAFE_NAME_RE.sub("", course)
+        if not (settings.vault_path / settings.taxonomy.course_dir(code)).is_dir():
+            raise HTTPException(status_code=404, detail=f"no course folder {course}")
+        try:
+            rel_path = save_ingest_file(
+                settings.vault_path,
+                settings.taxonomy.course_materials(code),
+                file.filename or "upload.bin",
+                await file.read(),
+                taxonomy=settings.taxonomy,
+            )
+        except WriterForbidden as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except WriterError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         index = index_factory()
         threading.Thread(  # indexing may load the embedding model — keep off the request
             target=lambda: index.upsert_file(settings.vault_path, rel_path), daemon=True
         ).start()
         return {"path": rel_path, "status": "saved, indexing in background"}
+
+    def _corpus_for(course: str, sources: list[str] | None) -> list[dict[str, Any]]:
+        """The chunks a generation should read, or the reason there are none.
+
+        Worth its own error rather than reusing the generators' "no indexed
+        material for course X — upload to materials/ first": with a selection
+        in play that sentence is simply wrong, and it sends the user off to
+        upload a file they already have.
+        """
+        corpus = course_corpus(index_factory(), course, sources)
+        if corpus or sources is None:
+            return corpus
+        if not sources:
+            raise HTTPException(
+                status_code=422,
+                detail="no sources are selected — tick at least one file in the SOURCES rail",
+            )
+        raise HTTPException(
+            status_code=422,
+            detail=f"none of the {len(sources)} selected source(s) are indexed for {course} "
+            "— pick different ones, or reindex from System",
+        )
 
     def _generator_for(model: str | None) -> Generator:
         """Bind the injected generator to a chosen model, if it accepts one.
@@ -193,7 +237,7 @@ def build_study_router(
 
     @router.post("/guide")
     async def guide(request: GuideRequest) -> dict[str, str]:
-        corpus = course_corpus(index_factory(), request.course)
+        corpus = _corpus_for(request.course, request.sources)
         try:
             path = await generate_study_guide(
                 settings.vault_path,
@@ -209,7 +253,7 @@ def build_study_router(
 
     @router.post("/exam")
     async def exam(request: ExamRequest) -> dict[str, Any]:
-        corpus = course_corpus(index_factory(), request.course)
+        corpus = _corpus_for(request.course, request.sources)
         conn = db()
         try:
             exam_id, built, path = await generate_practice_exam(

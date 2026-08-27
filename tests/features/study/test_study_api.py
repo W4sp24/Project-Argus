@@ -77,6 +77,17 @@ def client(tmp_path: Path) -> TestClient:
     (vault / "15-Courses" / "CS201" / "course.md").write_text(
         "---\ntitle: Algorithms\n---\n# CS201\n", encoding="utf-8"
     )
+    # `/api/study/upload` writes through `save_ingest_file` now, which
+    # snapshots first (I2) and so needs a real repository. The old raw
+    # `write_bytes` was exactly what let this fixture get away without one.
+    subprocess.run(["git", "init"], cwd=vault, capture_output=True, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=vault, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "init"],
+        cwd=vault,
+        capture_output=True,
+        check=True,
+    )
     app = create_app(
         Settings(_vault_path=vault),
         chat_runner=fake_generator,  # unused here
@@ -267,3 +278,119 @@ def test_guide_written_with_gap_list(client: TestClient, tmp_path: Path) -> None
     guide = (tmp_path / "vault" / response["path"]).read_text(encoding="utf-8")
     assert "## Outline" in guide
     assert "haven't taken notes on" in guide, "gap list expected (no notes/ chunks in corpus)"
+
+
+# --- generating from a hand-picked selection ----------------------------------
+
+
+def test_a_guide_reads_only_the_selected_sources(client: TestClient) -> None:
+    """ "Make a guide from just these lectures" has to mean it — the corpus the
+    prompt is built from is narrowed, not merely labelled."""
+    response = client.post(
+        "/api/study/guide",
+        json={"course": "CS201", "sources": ["15-Courses/CS201/materials/algos.pdf"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["path"].startswith("15-Courses/CS201/study/")
+
+
+def test_selecting_only_unindexed_files_says_that_rather_than_upload_first(
+    client: TestClient,
+) -> None:
+    """The generators' own message is "upload to materials/ first", which is
+    wrong once a selection is in play — the file is already there, it is the
+    selection that matched nothing."""
+    response = client.post(
+        "/api/study/guide",
+        json={"course": "CS201", "sources": ["15-Courses/CS201/materials/not-indexed.pdf"]},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "selected" in detail
+    assert "upload to materials/" not in detail
+
+
+def test_selecting_nothing_is_refused_rather_than_widened_to_the_course(
+    client: TestClient,
+) -> None:
+    response = client.post("/api/study/guide", json={"course": "CS201", "sources": []})
+
+    assert response.status_code == 422
+    assert "no sources are selected" in response.json()["detail"]
+
+
+def test_omitting_sources_still_reads_the_whole_course(client: TestClient) -> None:
+    """Every existing client sends no `sources` field at all."""
+    assert client.post("/api/study/guide", json={"course": "CS201"}).status_code == 200
+
+
+def test_an_exam_honours_the_selection_too(client: TestClient) -> None:
+    scoped = client.post(
+        "/api/study/exam",
+        json={"course": "CS201", "n": 1, "sources": ["15-Courses/CS201/materials/algos.pdf"]},
+    )
+    assert scoped.status_code == 200
+
+    empty = client.post(
+        "/api/study/exam",
+        json={"course": "CS201", "n": 1, "sources": ["15-Courses/CS201/materials/nope.pdf"]},
+    )
+    assert empty.status_code == 422
+    assert "selected" in empty.json()["detail"]
+
+
+# --- the upload path is a guarded, snapshotted write --------------------------
+
+
+def test_upload_refuses_a_course_that_escapes_the_vault(client: TestClient, tmp_path: Path) -> None:
+    """This used to be `destination.write_bytes` with no path guard at all."""
+    response = client.post(
+        "/api/study/upload",
+        data={"course": "../../../etc"},
+        files={"file": ("evil.md", b"x", "text/markdown")},
+    )
+
+    assert response.status_code == 404, "no such course folder — nothing is written"
+    assert not (tmp_path / "vault" / ".." / "etc").exists()
+
+
+def test_upload_takes_an_undo_point(client: TestClient, tmp_path: Path) -> None:
+    """I2: the write is snapshot-first, so it is one `git revert` away."""
+    vault = tmp_path / "vault"
+    before = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=vault,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    client.post(
+        "/api/study/upload",
+        data={"course": "CS201"},
+        files={"file": ("deck.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    after = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=vault,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert int(after.stdout) > int(before.stdout)
+
+
+def test_upload_dedupes_rather_than_overwriting(client: TestClient, tmp_path: Path) -> None:
+    """The raw write clobbered whatever was already at that name."""
+    for _ in range(2):
+        client.post(
+            "/api/study/upload",
+            data={"course": "CS201"},
+            files={"file": ("deck.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+    materials = tmp_path / "vault" / "15-Courses" / "CS201" / "materials"
+    assert {path.name for path in materials.iterdir()} == {"deck.pdf", "deck-2.pdf"}
