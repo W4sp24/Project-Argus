@@ -427,3 +427,65 @@ def test_a_turn_limit_reaches_the_browser_without_becoming_a_tool_step(tmp_path:
     answer = stored[-1]
     assert answer["text"] == "as far as I got", "the partial answer is still banked"
     assert answer["tools"] == [], "a notice is not a tool step"
+
+
+def test_ws_chat_passes_selected_sources_to_a_sources_aware_runner(tmp_path: Path) -> None:
+    """The Course Hub SOURCES rail's ticks reach the runner, which is what
+    forces `search_vault`'s per-file filter in the real agent."""
+    seen: list[list[str] | None] = []
+
+    async def sources_runner(
+        message: str, model: str | None = None, sources: list[str] | None = None
+    ) -> AsyncIterator[str]:
+        seen.append(sources)
+        yield "ok"
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    app = create_app(Settings(_vault_path=vault), chat_runner=sources_runner)
+    with TestClient(app).websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "q", "sources": ["a/b.md", "a/c.pdf"]})
+        _turn(ws)
+        # Deselecting everything is not the same as sending nothing: [] must
+        # reach the runner so retrieval can honour it, rather than being
+        # dropped as falsy and silently searching the whole vault.
+        ws.send_json({"message": "q", "sources": []})
+        _turn(ws)
+        ws.send_json({"message": "q"})
+        _turn(ws)
+
+    assert seen == [["a/b.md", "a/c.pdf"], [], None]
+
+
+def test_ws_chat_cleans_up_a_sources_frame(tmp_path: Path) -> None:
+    """Blanks, duplicates and non-strings come off the wire; the cap keeps one
+    frame from pushing an unbounded `$in` clause into chroma."""
+    seen: list[list[str] | None] = []
+
+    async def sources_runner(message: str, sources: list[str] | None = None) -> AsyncIterator[str]:
+        seen.append(sources)
+        yield "ok"
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    app = create_app(Settings(_vault_path=vault), chat_runner=sources_runner)
+    with TestClient(app).websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "q", "sources": ["a.md", "  ", "a.md", "b.md"]})
+        _turn(ws)
+        ws.send_json({"message": "q", "sources": [f"f{i}.md" for i in range(300)]})
+        _turn(ws)
+        # Not a list — an older or confused client must degrade to "no
+        # restriction", not to an error frame.
+        ws.send_json({"message": "q", "sources": "a.md"})
+        _turn(ws)
+
+    assert seen[0] == ["a.md", "b.md"]
+    assert len(seen[1]) == 200
+    assert seen[2] is None
+
+
+def test_ws_chat_sources_field_safe_with_legacy_runner(client: TestClient) -> None:
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "shortest paths?", "sources": ["a.md"]})
+        frames = _turn(ws)
+    assert frames[-1]["type"] == "done"

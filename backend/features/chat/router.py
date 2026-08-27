@@ -119,6 +119,28 @@ def _call_runner(runner: ChatRunner, message: str, **extras: object) -> AsyncIte
     return runner(message, **kwargs)
 
 
+#: A selection is a filter, not a payload. The Course Hub rail lists one
+#: course's files, so this is far above any real selection while still
+#: bounding what one frame can push into a chroma `$in` clause.
+MAX_FRAME_SOURCES = 200
+
+
+def _frame_sources(raw: object) -> list[str] | None:
+    """The ``sources`` field of an inbound chat frame, or ``None``.
+
+    ``None`` (field absent) and ``[]`` mean different things all the way down
+    to :func:`backend.rag.retrieve.retrieve_result`: no restriction versus the
+    user having unticked everything. Anything that is not a list is treated as
+    absent rather than as an error — an older frontend sending nothing must
+    keep working, which is the same tolerance ``_tool_frame`` documents in the
+    other direction.
+    """
+    if not isinstance(raw, list):
+        return None
+    cleaned = [str(item).strip() for item in raw if str(item).strip()]
+    return list(dict.fromkeys(cleaned))[:MAX_FRAME_SOURCES]
+
+
 def _tool_frame(event: ToolStarted | ToolFinished) -> dict:
     """Render a tool event as its wire frame.
 
@@ -289,11 +311,12 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
     async def ws_chat(websocket: WebSocket) -> None:
         """Bridge agent streaming deltas to the browser.
 
-        Frames in: {message, model?, course?} — ``model`` (a registry name,
-        §7) and ``course`` (Course Hub scoping, forces the vault search to
-        one course rather than leaving it to the model) are both optional and
-        flow through to runners that accept them; runners with the legacy
-        single-argument signature keep working.
+        Frames in: {message, model?, course?, sources?} — ``model`` (a registry
+        name, §7), ``course`` (Course Hub scoping, forces the vault search to
+        one course rather than leaving it to the model) and ``sources`` (the
+        vault-relative files ticked in that hub's SOURCES rail) are all
+        optional and flow through to runners that accept them; runners with
+        the legacy single-argument signature keep working.
         Frames out: {type: "delta", text} | {type: "tool", ...} |
         {type: "notice", kind, detail} ... {type: "done"} | {type: "error", detail}.
         """
@@ -305,6 +328,7 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
                 message = str(payload.get("message", "")).strip()
                 model = str(payload.get("model") or "").strip() or None
                 course = str(payload.get("course") or "").strip() or None
+                sources = _frame_sources(payload.get("sources"))
                 raw_thread = payload.get("thread_id")
                 thread_id = int(raw_thread) if isinstance(raw_thread, int | str) and (
                     str(raw_thread).strip().isdigit()
@@ -325,6 +349,7 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
                             message,
                             model=model,
                             course=course or thread["course"],
+                            sources=sources,
                             history=history,
                             thread_id=thread["id"],
                         )

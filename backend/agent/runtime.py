@@ -179,6 +179,7 @@ def build_vault_tools(
     model_label: str = MODEL,
     ready: threading.Event | None = None,
     course: str | None = None,
+    sources: list[str] | None = None,
 ) -> list[ToolSpec]:
     """The read-only tool belt shared by chat, and re-exposed over MCP.
 
@@ -205,7 +206,21 @@ def build_vault_tools(
     than trusting the model to always remember and pass it. Global chat (the
     dock, ``/chat``) passes ``None`` here, so it keeps the model's own
     judgment call on when to filter by course.
+
+    ``sources``, likewise, is a *fixed* per-file scope: the vault-relative
+    paths the user ticked in the Course Hub's SOURCES rail. It narrows
+    ``course`` rather than competing with it, and the model is told about it
+    in the tool description — a model that thinks it can see the whole course
+    will confidently report that something is absent when it was simply not
+    selected. ``None`` means no per-file restriction; an empty list means the
+    user has deselected everything, and is honoured as such.
     """
+    scoped_note = ""
+    if sources:
+        scoped_note = (
+            " The user has restricted this conversation to "
+            f"{len(sources)} specific file(s); results come only from those."
+        )
 
     async def _await_index() -> None:
         if ready is not None and not ready.is_set():
@@ -231,6 +246,14 @@ def build_vault_tools(
         # itself passed — the user already scoped this whole conversation to
         # one course by opening it from there.
         effective_course = course or (str(args["course"]) if args.get("course") else None)
+        if sources is not None and not sources:
+            return _tool_text(
+                {
+                    "results": [],
+                    "note": "no sources are selected — every file is unticked in the "
+                    "SOURCES rail, so there is nothing to search",
+                }
+            )
         # to_thread, not a direct call: retrieve() is synchronous and can take
         # seconds against a cold index. On the MCP stdio server that would stall
         # the whole event loop; in chat it would stall the deltas already
@@ -242,6 +265,7 @@ def build_vault_tools(
             settings.vault_path,
             k=8,
             course=effective_course,
+            paths=sources,
             taxonomy=settings.taxonomy,
             rerank=settings.rerank_enabled,
         )
@@ -391,6 +415,7 @@ def build_vault_tools(
                 "Hybrid semantic+keyword search over the user's vault (notes and course "
                 "materials). Call this before answering anything about the user's life, "
                 "notes, or courses. Returns chunks with path/page/slide for citations."
+                + scoped_note
             ),
             parameters=json_schema(
                 {
@@ -550,6 +575,7 @@ class ChatAgent:
         message: str,
         model: str | None = None,
         course: str | None = None,
+        sources: list[str] | None = None,
         history: Sequence[Message] | None = None,
         thread_id: int | None = None,
     ) -> AsyncIterator[str | ToolStarted | ToolFinished | Notice]:
@@ -568,7 +594,10 @@ class ChatAgent:
         ``course``, when given, fixes ``search_vault``'s retrieval scope to
         one course — see :func:`build_vault_tools`. Passed by the Course Hub
         chat frame (``backend.features.chat.router``); the global chat dock
-        omits it.
+        omits it. ``sources`` narrows that further to the files ticked in the
+        Course Hub's SOURCES rail, and rides per-turn rather than being stored
+        on the thread: it is a live filter the user changes mid-conversation,
+        unlike the course the thread belongs to.
 
         ``thread_id`` is accepted but not yet used: session resume reads it
         in the commit that follows.
@@ -588,6 +617,7 @@ class ChatAgent:
             model_label=resolved_model,
             ready=self._ready,
             course=course,
+            sources=sources,
         )
         # Registered automations are callable from chat too, so "run my meeting
         # prep" works in the dock as well as by button. Chat only — these are

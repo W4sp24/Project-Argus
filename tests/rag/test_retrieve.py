@@ -246,3 +246,81 @@ def test_retrieve_result_with_rerank_enabled_does_not_raise_on_model_failure(
     )
 
     assert result.results, "rerank failure must not empty out real results"
+
+
+# --- per-file scoping (the Course Hub's ticked SOURCES) -----------------------
+
+
+def test_paths_restrict_retrieval_to_the_selected_files(index, vault: Path) -> None:
+    from backend.rag.retrieve import retrieve_result
+
+    result = retrieve_result(
+        index,
+        "Dijkstra shortest path",
+        vault,
+        k=8,
+        paths=["50-Reference/algorithms.md"],
+        expand_links=False,
+    )
+
+    assert result.results
+    assert {hit["meta"]["path"] for hit in result.results} == {"50-Reference/algorithms.md"}
+
+
+def test_a_selected_file_survives_pool_starvation(courses_index, courses_vault: Path) -> None:
+    """Ticking three files out of two hundred is the case where the global
+    top-20 contains none of them — the same starvation the course filter was
+    pushed into the fetch to fix, so the path filter has to be pushed there
+    too rather than applied after the pool is cut."""
+    from backend.rag.retrieve import retrieve_result
+
+    result = retrieve_result(
+        courses_index,
+        "gradient descent optimization neural network training",
+        courses_vault,
+        k=8,
+        paths=["15-Courses/CSX/notes/note.md"],
+        expand_links=False,
+    )
+
+    assert result.results, "the selected file was starved out by the 25 unselected ones"
+    assert all(hit["meta"]["path"] == "15-Courses/CSX/notes/note.md" for hit in result.results)
+
+
+def test_paths_and_course_narrow_together(courses_index, courses_vault: Path) -> None:
+    """Two predicates need an explicit `$and` in chroma — there is no implicit
+    AND across top-level keys, so a naive dict silently drops one of them."""
+    from backend.rag.retrieve import retrieve_result
+
+    result = retrieve_result(
+        courses_index,
+        "gradient descent optimization",
+        courses_vault,
+        k=8,
+        course="CSY",
+        paths=["15-Courses/CSY/notes/note0.md", "15-Courses/CSX/notes/note.md"],
+        expand_links=False,
+    )
+
+    assert result.results
+    assert {hit["meta"]["path"] for hit in result.results} == {"15-Courses/CSY/notes/note0.md"}
+
+
+def test_selecting_nothing_returns_nothing_rather_than_everything(index, vault: Path) -> None:
+    """`None` and `[]` are different questions: no restriction versus the user
+    having unticked every file. Answering the second with the whole vault
+    would answer a question they did not ask."""
+    from backend.rag.retrieve import retrieve_result
+
+    assert retrieve_result(index, "Dijkstra", vault, k=8, paths=[]).results == []
+    assert retrieve_result(index, "Dijkstra", vault, k=8, paths=None).results
+
+
+def test_the_retrieve_shim_forwards_paths(index, vault: Path) -> None:
+    """`search_vault` and the search route both go through the shim, so a
+    parameter it drops reaches nothing — the bug `rerank` already had here."""
+    from backend.rag.retrieve import retrieve
+
+    hits = retrieve(index, "Dijkstra shortest path", vault, k=8, paths=["Mom.md"])
+
+    assert all(hit["meta"]["path"] == "Mom.md" for hit in hits)
