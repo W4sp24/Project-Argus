@@ -12,6 +12,7 @@ import {
   useStudyExams,
 } from "@/lib/api";
 import { ChatProvider } from "@/lib/chat";
+import { useCourseSelection } from "@/lib/courseSelection";
 import { selectedModel, useSelectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
@@ -39,21 +40,81 @@ const SUGGESTIONS = [
  * `course` rides on every outbound frame, where `build_vault_tools`
  * (backend/agent/runtime.py) turns it into a *forced* `search_vault` filter
  * rather than leaving the scope to the model's discretion — the whole point
- * of asking from inside a course's hub.
+ * of asking from inside a course's hub. The SOURCES rail's ticks ride along
+ * beside it and narrow that filter further, so "what does lecture 3 say"
+ * asked with only lecture 3 selected reads only lecture 3.
+ *
+ * The line under the input states the scope. A user who has narrowed to two
+ * files and forgotten needs to be able to see why the answer looks thin,
+ * without opening the rail to count checkboxes.
  */
 export function CourseChat({ code }: { code: string }) {
   const model = useSelectedModel();
+  const { paths, available } = useCourseSelection();
+  const scoped = paths.length < available.length;
   return (
-    <ChatProvider course={code}>
+    <ChatProvider course={code} sources={paths}>
       <Panel label={`ARGUS.CHAT · ${code}`} className="flex h-full flex-col">
         <ChatPanel
           variant="dock"
           suggestions={SUGGESTIONS}
-          placeholder={`ask ${code} · grounded in its materials & notes`}
+          placeholder={
+            paths.length === 0
+              ? `ask ${code} · no sources selected`
+              : `ask ${code} · grounded in ${scoped ? `${paths.length} selected source${paths.length === 1 ? "" : "s"}` : "its materials & notes"}`
+          }
         />
-        <p className="mt-2 font-mono text-meta text-ink-faint">model :: {model}</p>
+        <p className="mt-2 font-mono text-meta text-ink-faint">
+          model :: {model} · sources :: {paths.length}/{available.length}
+        </p>
       </Panel>
     </ChatProvider>
+  );
+}
+
+/**
+ * One STUDIO button, with an honest running state.
+ *
+ * These used to change their own label to "writing…" and then go silent for
+ * however long a provider takes — minutes, for a guide over a whole course.
+ * The blinking bar is the same idiom `IngestJobProgress` uses, and for the
+ * same reason: it moves only while something is actually running, so a stall
+ * looks like a stall rather than like progress.
+ */
+function StudioAction({
+  label,
+  running,
+  runningLabel,
+  disabled,
+  onClick,
+  note,
+}: {
+  label: string;
+  running: boolean;
+  runningLabel: string;
+  disabled: boolean;
+  onClick: () => void;
+  note?: string;
+}) {
+  return (
+    <div>
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        aria-busy={running}
+        className="w-full border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {running ? `${runningLabel}…` : label}
+      </button>
+      {running && (
+        <div className="mt-1 h-0.5 w-full bg-line" aria-hidden>
+          <span className="block h-full w-1/3 animate-blink bg-[var(--ac)]" />
+        </div>
+      )}
+      {note && !running && (
+        <p className="mt-1 font-mono text-micro text-ink-faint">{note}</p>
+      )}
+    </div>
   );
 }
 
@@ -80,7 +141,13 @@ export function CourseStudio({ code }: { code: string }) {
   const { data: exams, mutate: refreshExams } = useStudyExams(code);
   const { data: decks, mutate: refreshDecks } = useFlashcardDecks(code);
   const { data: sources, mutate: refreshSources } = useCourseSources(code);
+  const { paths, available, refresh: refreshSelection } = useCourseSelection();
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const scoped = paths.length < available.length;
+  // A guide or an exam built from nothing is not a request worth sending —
+  // the backend refuses it, and disabling the button says so a round trip
+  // earlier.
+  const nothingSelected = paths.length === 0 && available.length > 0;
 
   const guides = (sources ?? []).filter(
     (source) => source.zone === "study" && /^guide-/.test(source.path.split("/").pop() ?? ""),
@@ -118,9 +185,11 @@ export function CourseStudio({ code }: { code: string }) {
       const payload = await mutateJSON<{ path: string }>("/api/study/guide", {
         course: code,
         model: selectedModel(),
+        sources: paths,
       });
       show(`study guide written to ${payload.path}`);
       refreshSources();
+      refreshSelection();
     } catch (error) {
       show(`study guide failed: ${error instanceof Error ? error.message : "backend offline?"}`);
     } finally {
@@ -136,10 +205,12 @@ export function CourseStudio({ code }: { code: string }) {
         course: code,
         n: 10,
         model: selectedModel(),
+        sources: paths,
       });
       show(`exam ready: ${payload.questions} cited questions → ${payload.path}`);
       refreshExams();
       refreshSources();
+      refreshSelection();
     } catch (error) {
       show(`exam generation failed: ${error instanceof Error ? error.message : "backend offline?"}`);
     } finally {
@@ -160,31 +231,44 @@ export function CourseStudio({ code }: { code: string }) {
     }
   }
 
+  const scopeNote = scoped ? ` · ${paths.length} source${paths.length === 1 ? "" : "s"}` : "";
+
   return (
     <Panel label="STUDIO">
       <div className="flex flex-col gap-2">
-        <button
+        <StudioAction
+          label={`study guide${scopeNote}`}
+          running={busyAction === "guide"}
+          runningLabel="writing the guide"
+          disabled={busyAction !== null || nothingSelected}
           onClick={generateGuide}
+        />
+        <StudioAction
+          label="flashcard deck"
+          running={busyAction === "deck"}
+          runningLabel="parsing flashcards.md"
           disabled={busyAction !== null}
-          className="border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
-        >
-          {busyAction === "guide" ? "writing…" : "study guide"}
-        </button>
-        <button
           onClick={generateDeck}
-          disabled={busyAction !== null}
-          className="border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
-        >
-          {busyAction === "deck" ? "parsing…" : "flashcard deck"}
-        </button>
-        <button
+          // Decks are parsed from the course's own flashcards.md, never from
+          // the corpus (backend/features/flashcards/store.py), so the source
+          // selection genuinely does not apply. Saying so beats printing a
+          // count this button would not honour.
+          note="reads flashcards.md · ignores the selection"
+        />
+        <StudioAction
+          label={`practice exam${scopeNote}`}
+          running={busyAction === "exam"}
+          runningLabel="generating questions"
+          disabled={busyAction !== null || nothingSelected}
           onClick={generateExam}
-          disabled={busyAction !== null}
-          className="border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
-        >
-          {busyAction === "exam" ? "generating…" : "practice exam"}
-        </button>
+        />
       </div>
+
+      {nothingSelected && (
+        <p className="mt-2 font-mono text-meta text-warn">
+          Nothing is selected — tick a source to generate from it.
+        </p>
+      )}
 
       <div className="mt-4 border-t border-line pt-3">
         <p className="mb-2 font-mono text-meta uppercase tracking-[0.16em] text-ink-faint">generated</p>

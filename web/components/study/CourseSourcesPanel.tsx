@@ -1,178 +1,192 @@
 "use client";
 
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Panel from "@/components/Panel";
-import { useToast } from "@/components/Toast";
-import { apiFetch, useCourseSources, type CourseSource } from "@/lib/api";
+import IngestDialog from "@/components/sources/IngestDialog";
+import IngestJobProgress from "@/components/sources/IngestJobProgress";
+import Button from "@/components/ui/Button";
+import { FIELD_CONTROL } from "@/components/ui/Field";
+import { useIngestJob, type CourseSource } from "@/lib/api";
+import { useCourseSelection } from "@/lib/courseSelection";
 
-const ACCEPTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md"];
+const ZONES: { key: CourseSource["zone"]; label: string }[] = [
+  { key: "materials", label: "materials" },
+  { key: "notes", label: "notes" },
+];
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
-  const diffMs = Date.now() - then;
-  const days = Math.floor(diffMs / 86_400_000);
+  const days = Math.floor((Date.now() - then) / 86_400_000);
   if (days <= 0) return "today";
   if (days === 1) return "1d ago";
   if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  return `${months}mo ago`;
-}
-
-function isAcceptedFile(file: File): boolean {
-  const name = file.name.toLowerCase();
-  return ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext));
+  return `${Math.floor(days / 30)}mo ago`;
 }
 
 /**
- * SOURCES rail (§4 Course Hub, left 300px) — real data from the dedicated
- * `GET /api/study/courses/<code>/sources` (backend/features/study/corpus.py
- * `course_sources`), scoped to the `materials` and `notes` zones. Replaces
- * filtering `useNotes()` by a hardcoded `15-Courses/<CODE>/` prefix, which
- * only ever listed markdown — a PDF/PPTX/DOCX material (the common case for
- * course materials) could never appear here even though it was really saved
- * and indexed. The dropzone is real too: it POSTs to `/api/study/upload`
- * (the same endpoint `CoursesPanel`'s + FILES button uses), not a decorative
- * `[preview]` div with no drop handler and no file input.
+ * SOURCES rail (§4 Course Hub, left 300px) — what the course is made of, and
+ * which parts of it the other two panes are working from.
  *
- * Checkbox selection is still a client-only RAG-context toggle — no query is
- * actually scoped by it yet (course-level scoping is real now, via chat's
- * `course` field; per-file selection remains a follow-up).
+ * The checkboxes used to be decoration: their own docstring said so, and
+ * nothing downstream read them. They now drive `useCourseSelection`, which
+ * ARGUS.CHAT sends on every frame and STUDIO sends to the generators, and the
+ * selection survives a reload.
+ *
+ * Ingestion moved here from `POST /api/study/upload` — one file, no progress,
+ * no note, and (until this branch) a raw `write_bytes` with no path guard and
+ * no snapshot. `+ INGEST` opens the same dialog `/sources` uses, pinned to
+ * this course's `materials_path`, and the job's per-file progress renders in
+ * this panel while it runs. That is the loading feedback the old dropzone
+ * replaced with the word "uploading…".
  */
-export default function CourseSourcesPanel({ code }: { code: string }) {
-  const { data: sources, mutate: refreshSources } = useCourseSources(code);
-  const { show } = useToast();
+export default function CourseSourcesPanel({
+  materialsPath,
+}: {
+  /** The course's real materials folder, from `GET /api/study/courses`.
+   * Never built here — a literal `15-Courses/<CODE>/materials` in the
+   * frontend is the bug the configurable-taxonomy refactor fixed. */
+  materialsPath?: string;
+}) {
+  const { available, selected, toggle, selectAll, selectNone, refresh, isLoading } =
+    useCourseSelection();
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const initialized = useRef(false);
+  const [filter, setFilter] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const { data: job } = useIngestJob(jobId);
+
+  // Refetch once the job settles: the files it wrote are new rows in this
+  // list. In an effect rather than during render — `refresh` is a side
+  // effect, and clearing `jobId` mid-render would drop the finished job's
+  // report before the user has read it.
+  const status = job?.status;
   useEffect(() => {
-    if (initialized.current || !sources) return;
-    initialized.current = true;
-    setSelected(new Set(sources.filter((s) => s.zone !== "study").map((s) => s.path)));
-  }, [sources]);
+    if (status === "ok" || status === "partial" || status === "failed") refresh();
+  }, [status, refresh]);
 
-  const [dragOver, setDragOver] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const visibleSources: CourseSource[] = (sources ?? []).filter(
-    (source) => source.zone === "materials" || source.zone === "notes",
+  const needle = filter.trim().toLowerCase();
+  const visible = useMemo(
+    () =>
+      needle
+        ? available.filter(
+            (source) =>
+              source.title.toLowerCase().includes(needle) ||
+              source.path.toLowerCase().includes(needle),
+          )
+        : available,
+    [available, needle],
   );
 
-  function toggle(path: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }
-
-  async function upload(file: File) {
-    if (!isAcceptedFile(file)) {
-      show(`"${file.name}" isn't supported — use ${ACCEPTED_EXTENSIONS.join(", ")}`);
-      return;
-    }
-    setBusy(true);
-    const body = new FormData();
-    body.append("course", code);
-    body.append("file", file);
-    try {
-      const response = await apiFetch("/api/study/upload", { method: "POST", body });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(
-          typeof payload.detail === "string" ? payload.detail : `upload failed (${response.status})`,
-        );
-      }
-      show(`saved ${payload.path} — indexing in the background`);
-      refreshSources();
-    } catch (error) {
-      show(`upload failed — ${error instanceof Error ? error.message : "backend offline?"}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function pickFile(picked: File | null | undefined) {
-    if (!picked || busy) return;
-    upload(picked);
-  }
-
-  function handleDrop(event: DragEvent<HTMLElement>) {
-    event.preventDefault();
-    setDragOver(false);
-    pickFile(event.dataTransfer.files?.[0]);
-  }
-
-  const selectedCount = visibleSources.filter((s) => selected.has(s.path)).length;
+  const selectedCount = available.filter((source) => selected.has(source.path)).length;
 
   return (
-    <Panel label={`SOURCES · ${selectedCount}/${visibleSources.length} selected`}>
-      {visibleSources.length === 0 ? (
-        <p className="text-label text-ink-faint">No indexed files for this course yet.</p>
-      ) : (
-        <ul className="space-y-1.5">
-          {visibleSources.map((source) => (
-            <li
-              key={source.path}
-              className="flex items-start gap-2 border border-line px-2.5 py-2 transition-colors hover:border-lineHi"
-            >
-              <button
-                role="checkbox"
-                aria-checked={selected.has(source.path)}
-                aria-label={`Include ${source.title} in retrieval`}
-                onClick={() => toggle(source.path)}
-                className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center border transition-colors ${
-                  selected.has(source.path) ? "border-[var(--ac)] bg-[var(--ac)] text-void" : "border-line"
-                }`}
-              >
-                {selected.has(source.path) && "✓"}
-              </button>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-label text-ink">{source.title}</p>
-                <p className="mt-0.5 font-mono text-meta text-ink-faint">
-                  {source.zone} · {relativeTime(source.modified)}
-                  {source.chunks !== null && ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
-                </p>
-              </div>
-              <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
-                {source.kind}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <button
-        type="button"
-        onDragOver={(event) => {
-          event.preventDefault();
-          if (!busy) setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-        disabled={busy}
-        className={`mt-3 w-full cursor-pointer border border-dashed px-3 py-4 text-center transition-[border-color,background-color] disabled:cursor-wait disabled:opacity-60 ${
-          dragOver ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
-        }`}
+    <>
+      <Panel
+        label={`SOURCES · ${selectedCount}/${available.length} selected`}
+        headerRight={
+          <Button variant="primary" size="sm" onClick={() => setDialogOpen(true)}>
+            + INGEST
+          </Button>
+        }
       >
-        <span className="font-mono text-meta text-ink-faint">
-          {busy ? "uploading…" : `drop a file, or click to choose (${ACCEPTED_EXTENSIONS.join(" ")})`}
-        </span>
-      </button>
-      <input
-        ref={inputRef}
-        type="file"
-        accept={ACCEPTED_EXTENSIONS.join(",")}
-        aria-hidden
-        tabIndex={-1}
-        className="hidden"
-        onChange={(event) => {
-          pickFile(event.target.files?.[0]);
-          event.target.value = "";
-        }}
-      />
-    </Panel>
+        {job && (
+          <div className="mb-3 border border-line px-3 py-2">
+            <IngestJobProgress job={job} />
+          </div>
+        )}
+
+        {available.length > 0 && (
+          <div className="mb-2 flex items-center gap-2">
+            <input
+              type="search"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder="filter"
+              aria-label="Filter sources"
+              className={`${FIELD_CONTROL} h-7 flex-1 py-0 text-meta`}
+            />
+            <Button size="sm" onClick={selectAll}>
+              ALL
+            </Button>
+            <Button size="sm" onClick={selectNone}>
+              NONE
+            </Button>
+          </div>
+        )}
+
+        {selectedCount === 0 && available.length > 0 && (
+          <p className="mb-2 font-mono text-meta text-warn">
+            Nothing selected — chat and STUDIO have nothing to read.
+          </p>
+        )}
+
+        {isLoading ? (
+          <p className="text-label text-ink-faint">Reading this course…</p>
+        ) : available.length === 0 ? (
+          <p className="text-label text-ink-faint">
+            No files for this course yet. Ingest a lecture and Argus will store it, index it, and
+            write you a note from it.
+          </p>
+        ) : visible.length === 0 ? (
+          <p className="text-label text-ink-faint">Nothing matches “{filter}”.</p>
+        ) : (
+          ZONES.map(({ key, label }) => {
+            const rows = visible.filter((source) => source.zone === key);
+            if (rows.length === 0) return null;
+            return (
+              <div key={key} className="mb-3 last:mb-0">
+                <p className="mb-1.5 font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">
+                  {label} · {rows.length}
+                </p>
+                <ul className="space-y-1.5">
+                  {rows.map((source) => (
+                    <li
+                      key={source.path}
+                      className="flex items-start gap-2 border border-line px-2.5 py-2 transition-colors hover:border-lineHi"
+                    >
+                      <button
+                        role="checkbox"
+                        aria-checked={selected.has(source.path)}
+                        aria-label={`Use ${source.title} as a source`}
+                        onClick={() => toggle(source.path)}
+                        className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center border transition-colors ${
+                          selected.has(source.path)
+                            ? "border-[var(--ac)] bg-[var(--ac)] text-void"
+                            : "border-line"
+                        }`}
+                      >
+                        {selected.has(source.path) && "✓"}
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-label text-ink">{source.title}</p>
+                        <p className="mt-0.5 font-mono text-meta text-ink-faint">
+                          {relativeTime(source.modified)}
+                          {source.chunks !== null &&
+                            ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
+                          {source.chunks === null && " · not indexed"}
+                        </p>
+                      </div>
+                      <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
+                        {source.kind}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })
+        )}
+      </Panel>
+
+      {dialogOpen && (
+        <IngestDialog
+          onClose={() => setDialogOpen(false)}
+          onStarted={setJobId}
+          lockedTarget={materialsPath}
+          // Opening this from inside a course means the point is the note.
+          defaultNoteStyle="summary"
+        />
+      )}
+    </>
   );
 }

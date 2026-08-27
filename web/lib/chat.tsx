@@ -135,8 +135,21 @@ function applyToolFrame(steps: ToolStep[], frame: Record<string, unknown>): Tool
  * `course` scopes the provider to one Course Hub: it rides on every outbound
  * frame, where `build_vault_tools` (backend/agent/runtime.py) turns it into a
  * forced `search_vault` filter rather than leaving the scope to the model.
+ * `sources` narrows that to the files ticked in that hub's SOURCES rail, the
+ * same way and in the same place. It rides per-frame rather than being stored
+ * on the thread because the user retickets boxes mid-conversation; `undefined`
+ * means no restriction, and `[]` means they have unticked everything, which
+ * the backend answers with a note saying so rather than with the whole vault.
  */
-export function ChatProvider({ children, course }: { children: ReactNode; course?: string }) {
+export function ChatProvider({
+  children,
+  course,
+  sources,
+}: {
+  children: ReactNode;
+  course?: string;
+  sources?: string[];
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threadId, setThreadId] = useState<number | null>(null);
   const [threadTitle, setThreadTitle] = useState("");
@@ -148,6 +161,12 @@ export function ChatProvider({ children, course }: { children: ReactNode; course
   // at connect time — refs keep them from going stale without forcing a
   // reconnect on every render.
   const threadIdRef = useRef<number | null>(null);
+  // A ref for the same reason `threadId` is one: the selection changes
+  // whenever a checkbox moves, and putting it in `send`'s dependency list
+  // would rebuild the callback — and with it the listeners the socket
+  // captured — on every tick.
+  const sourcesRef = useRef<string[] | undefined>(sources);
+  sourcesRef.current = sources;
   const busyRef = useRef(false);
   const stoppingRef = useRef(false);
 
@@ -385,6 +404,7 @@ export function ChatProvider({ children, course }: { children: ReactNode; course
         message,
         model: selectedModel(),
         ...(course ? { course } : {}),
+        ...(sourcesRef.current === undefined ? {} : { sources: sourcesRef.current }),
         ...(threadIdRef.current !== null ? { thread_id: threadIdRef.current } : {}),
       });
 
