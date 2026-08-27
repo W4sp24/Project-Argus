@@ -113,3 +113,91 @@ test("uploading through the shared ingest panel lands in materials/ and unlocks 
   await expect(guideButton).toBeEnabled();
   await expect(page.getByRole("button", { name: "+ EXAM" })).toBeEnabled();
 });
+
+// These run against the real backend, so the generator is a live provider
+// call. Every ingest below therefore leaves the note style on "don't write a
+// note" — the save/index/progress path is what the Course Hub gained, and
+// exercising the note would make the suite depend on a live model. Same
+// constraint sources.spec.ts documents.
+
+test("the course hub ingests into materials/ and reports every stage in place", async ({
+  page,
+}) => {
+  await page.goto("/study/course/CS000");
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  await expect(sources).toBeVisible();
+
+  await sources.getByRole("button", { name: "+ INGEST" }).click();
+  const dialog = page.getByRole("dialog", { name: "Ingest files" });
+  await expect(dialog).toBeVisible();
+  // The destination is pinned to the course, so there is no picker to set.
+  await expect(dialog.getByText("15-Courses/CS000/materials")).toBeVisible();
+  await expect(dialog.getByLabel("Save to")).toHaveCount(0);
+
+  await dialog.getByLabel("Write a note from each file").selectOption("");
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "e2e-hub-lecture.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# Hub Lecture\n\nA fact only this file knows.\n"),
+  });
+  await expect(dialog.getByText("e2e-hub-lecture.md")).toBeVisible();
+  await dialog.getByRole("button", { name: /^Ingest/ }).click();
+  await expect(dialog).toBeHidden();
+
+  // Progress renders inside the rail — the file is named and its outcome
+  // reported, where the old dropzone said "uploading…" and nothing else.
+  await expect(sources.getByText("e2e-hub-lecture.md")).toBeVisible();
+  await expect(sources.getByText(/\d+ chunks|no chunks/)).toBeVisible({ timeout: 30_000 });
+
+  // …and it becomes a real, selected source under the materials zone.
+  await expect(
+    sources.getByRole("checkbox", { name: /Use e2e-hub-lecture as a source/ }),
+  ).toHaveAttribute("aria-checked", "true", { timeout: 30_000 });
+});
+
+test("unticking a source sticks across a reload and is counted everywhere", async ({ page }) => {
+  await page.goto("/study/course/CS000");
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  // course.md is seeded by start-backend.mjs, so the rail is never empty.
+  const box = sources.getByRole("checkbox").first();
+  await expect(box).toHaveAttribute("aria-checked", "true");
+  const label = (await box.getAttribute("aria-label")) ?? "";
+
+  const before = await sources.getByRole("checkbox", { checked: true }).count();
+  await box.click();
+  await expect(box).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByText(`SOURCES · ${before - 1}/`)).toBeVisible();
+
+  // The whole point: a selection is a working set, so it survives coming back
+  // to the same course tomorrow.
+  await page.reload();
+  const reloaded = sources.getByRole("checkbox", { name: label });
+  await expect(reloaded).toHaveAttribute("aria-checked", "false", { timeout: 15_000 });
+
+  // Chat states the scope, so a narrowed hub does not look like a thin index.
+  await expect(page.getByText(`sources :: ${before - 1}/`)).toBeVisible();
+
+  await sources.getByRole("button", { name: "ALL" }).click();
+  await expect(reloaded).toHaveAttribute("aria-checked", "true");
+});
+
+test("selecting nothing disables the generators rather than widening them", async ({ page }) => {
+  await page.goto("/study/course/CS000");
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  await sources.getByRole("button", { name: "NONE" }).click();
+
+  await expect(sources.getByText("Nothing selected")).toBeVisible();
+  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
+  await expect(studio.getByRole("button", { name: /^study guide/ })).toBeDisabled();
+  await expect(studio.getByRole("button", { name: /^practice exam/ })).toBeDisabled();
+  // Decks read flashcards.md, not the corpus, so the selection does not
+  // apply to them — and the button says so instead of going dark.
+  await expect(studio.getByRole("button", { name: "flashcard deck" })).toBeEnabled();
+  await expect(studio.getByText("reads flashcards.md · ignores the selection")).toBeVisible();
+
+  await sources.getByRole("button", { name: "ALL" }).click();
+  await expect(studio.getByRole("button", { name: /^study guide/ })).toBeEnabled();
+});
