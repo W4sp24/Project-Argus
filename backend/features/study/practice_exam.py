@@ -75,6 +75,115 @@ def _strip_fences(raw: str) -> str:
     return match.group(1) if match else raw
 
 
+#: Hex digits, for recognising a well-formed ``\uXXXX``.
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+#: Escapes a model writing this schema plausibly *means*. Everything else
+#: following a backslash is read as LaTeX and the backslash is kept literal.
+#:
+#: ``\n`` is in here and ``\t``/``\b``/``\f``/``\r`` are not, and that split is
+#: the whole judgement call. A line break inside an explanation is something a
+#: model really does want; a tab, backspace, formfeed or carriage return is
+#: not, while ``\times``, ``\begin``, ``\frac`` and ``\rho`` are among the most
+#: common commands in the language. So ``\n`` keeps its meaning and the other
+#: four are treated as notation. ``\neq`` is the one case this gets wrong, and
+#: the exam contract tells the model to double its backslashes because of it.
+_KEPT_ESCAPES = frozenset('"\\/n')
+
+#: Every C0 control character except LF. Finding one in a parsed payload is
+#: taken as proof that a LaTeX backslash was decoded as an escape.
+#:
+#: TAB is the one arguable member: a quote lifted verbatim out of an extracted
+#: PDF could contain a real one, and repairing such a payload would leave a
+#: literal ``\t`` in the quote, failing ``_citation_verified`` and costing that
+#: question. Included anyway, because ``\text`` is far more likely than a tab
+#: in a cited sentence, and losing one question beats writing a tab into the
+#: middle of an explanation in the vault permanently.
+_DECODED_CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f]")
+
+
+def _repair_lone_backslashes(text: str) -> str:
+    r"""Double any backslash inside a JSON string that isn't starting an escape.
+
+    Walks the document tracking whether it is inside a string literal, because
+    a backslash outside one is not an escape and must not be touched.
+    """
+    out: list[str] = []
+    index, end = 0, len(text)
+    in_string = False
+    while index < end:
+        char = text[index]
+        if not in_string:
+            in_string = char == '"'
+            out.append(char)
+            index += 1
+        elif char != "\\":
+            in_string = char != '"'
+            out.append(char)
+            index += 1
+        else:
+            following = text[index + 1 : index + 2]
+            unicode_escape = following == "u" and len(text[index + 2 : index + 6]) == 4
+            if unicode_escape:
+                unicode_escape = set(text[index + 2 : index + 6]) <= _HEX
+            if following in _KEPT_ESCAPES or unicode_escape:
+                out.append(char + following)
+                index += 2
+            else:
+                out.append("\\\\")
+                index += 1
+    return "".join(out)
+
+
+def _has_decoded_control(value: Any) -> bool:
+    """Did anything in this payload decode to a control character?"""
+    if isinstance(value, str):
+        return _DECODED_CONTROL.search(value) is not None
+    if isinstance(value, dict):
+        return any(_has_decoded_control(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_decoded_control(item) for item in value)
+    return False
+
+
+def _decode_payload(raw: str) -> Any:
+    r"""``json.loads``, tolerant of a model that wrote LaTeX into a JSON string.
+
+    Asking for mathematical notation and asking for JSON are in tension: a
+    backslash means one thing to LaTeX and another to JSON, and a model
+    reliably writes ``\frac`` where the format needs ``\\frac``. That has two
+    outcomes and no third. ``\alpha``, ``\sum``, ``\left``, ``\cdot``, ``\pi``
+    are not valid escapes, so the parse raises and the whole exam is lost.
+    ``\frac``, ``\text``, ``\begin`` and ``\rho`` *are*, so they decode
+    silently to a formfeed, a tab, a backspace and a carriage return -- past
+    ``_citation_verified``, which normalises to ``[a-z0-9]`` and so cannot
+    see them, into ``exams.questions_json``, and into the vault for good.
+
+    So a clean parse is not sufficient evidence of a clean payload. Both the
+    raised error and the tell-tale control character route to the same repair,
+    and the repair is only ever applied to text that has already failed one of
+    those two checks -- a payload the model escaped correctly is returned
+    exactly as ``json.loads`` produced it.
+    """
+    text = _strip_fences(raw)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as first_error:
+        try:
+            return json.loads(_repair_lone_backslashes(text))
+        except json.JSONDecodeError:
+            # Report the original failure: the repaired text is not what the
+            # generator sent, so its error offsets would point at nothing.
+            raise StudyError(f"generator returned invalid JSON: {first_error}") from first_error
+
+    if not _has_decoded_control(payload):
+        return payload
+    try:
+        return json.loads(_repair_lone_backslashes(text))
+    except json.JSONDecodeError:
+        return payload  # Mangled, but parseable — better than losing the exam.
+
+
 def _citation_verified(citation: Citation, corpus: list[dict[str, Any]]) -> bool:
     quote = _normalize(citation.quote)
     if not quote:
@@ -92,10 +201,7 @@ def build_exam(course: str, raw: str, corpus: list[dict[str, Any]]) -> tuple[Exa
 
     Returns the exam and the number of dropped questions.
     """
-    try:
-        payload = json.loads(_strip_fences(raw))
-    except json.JSONDecodeError as exc:
-        raise StudyError(f"generator returned invalid JSON: {exc}") from exc
+    payload = _decode_payload(raw)
 
     kept: list[Question] = []
     dropped = 0
