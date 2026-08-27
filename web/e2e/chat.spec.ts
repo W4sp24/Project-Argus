@@ -51,6 +51,12 @@ test("a seeded thread restores its markdown, tool trace and citations", async ({
   // The inline [path.md] marker the prompt asks the model to emit is stripped
   // before rendering, so it does not double up with the chip above.
   await expect(page.getByText("[15-Courses/CS000/course.md]")).toHaveCount(0);
+
+  // ...and stripping it leaves the rest of the answer's whitespace alone.
+  // `stripCitationMarkers` used to collapse every run of two-plus spaces in
+  // the whole message to clean up after itself, which flattened indentation
+  // it had nothing to do with: this sub-list rendered as three siblings.
+  await expect(page.locator("li", { hasText: "Graphs" }).locator("ul li")).toHaveCount(2);
 });
 
 test("the rail buckets threads by day and badges a course thread", async ({ page }) => {

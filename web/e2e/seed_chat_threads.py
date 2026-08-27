@@ -51,6 +51,12 @@ Two things are due this week, and the reading is the one you have not started.
 - [x] finish the week 3 problem set
 - [ ] read the week 4 notes
 
+Where the week 4 reading sits [15-Courses/CS000/course.md]:
+
+- Graphs
+  - Breadth-first search
+  - Depth-first search
+
 The traversal you asked about is plain BFS:
 
 ```python
