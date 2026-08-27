@@ -8,12 +8,28 @@ from pathlib import Path
 from typing import Any
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.features.ingest.notes import COURSE_NOTE_SUFFIX
 from backend.features.study.practice_exam import (
     MAX_PROMPT_CHARS,
     Generator,
     StudyError,
     _strip_fences,
 )
+
+
+def _is_generated(rel_path: str) -> bool:
+    """Did Argus write this note, rather than the user?
+
+    ``notes_gap_list`` below answers "what have you not taken notes on yet",
+    and it answers it by treating everything under ``notes/`` as the user's
+    own notes. Once ingestion started writing generated notes into that same
+    zone (see :mod:`backend.features.ingest.notes`), that question silently
+    answered itself: the AI note covering a lecture made the lecture look
+    covered. Matched on the filename suffix rather than frontmatter because
+    chunk metadata carries no ``generated_by`` field -- which is exactly why
+    the suffix is distinct in the first place.
+    """
+    return rel_path.endswith(COURSE_NOTE_SUFFIX)
 
 
 def notes_gap_list(corpus: list[dict[str, Any]]) -> list[str]:
@@ -23,7 +39,10 @@ def notes_gap_list(corpus: list[dict[str, Any]]) -> list[str]:
     "covered" when its keywords appear in any notes chunk.
     """
     notes_text = " ".join(
-        chunk["text"].lower() for chunk in corpus if "/notes/" in str(chunk["meta"].get("path", ""))
+        chunk["text"].lower()
+        for chunk in corpus
+        if "/notes/" in str(chunk["meta"].get("path", ""))
+        and not _is_generated(str(chunk["meta"].get("path", "")))
     )
     gaps: list[str] = []
     for chunk in corpus:
