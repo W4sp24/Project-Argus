@@ -1014,6 +1014,23 @@ export function useIngestDestinations() {
   return useSWR<{ destinations: string[] }>("/api/ingest/destinations", fetcher);
 }
 
+/** One shape a generated note can take. */
+export interface NoteStyle {
+  key: string;
+  label: string;
+  description: string;
+}
+
+/**
+ * The note shapes the backend actually offers. Fetched rather than listed
+ * here for the same reason destinations are: a copy in the dialog is a copy
+ * that drifts the first time a style is added in
+ * `backend/features/ingest/notes.py`.
+ */
+export function useIngestNoteStyles() {
+  return useSWR<{ styles: NoteStyle[] }>("/api/ingest/note-styles", fetcher);
+}
+
 /** Where one file got to. `stage` is rendered directly by the progress list. */
 export type IngestStage =
   | "queued"
@@ -1043,6 +1060,8 @@ export interface IngestJob {
   status: IngestJobStatus;
   target: string;
   summary_prompt: string;
+  /** Which `NoteStyle.key` shaped the notes, or "" for "no note". */
+  note_style: string;
   total: number;
   done: number;
   error: string | null;
@@ -1092,11 +1111,12 @@ export function precheckIngest(filename: string, target: string) {
  */
 export async function startIngestJob(
   files: File[],
-  options: { target: string; summaryPrompt?: string; replace?: boolean },
+  options: { target: string; noteStyle?: string; summaryPrompt?: string; replace?: boolean },
 ): Promise<string> {
   const body = new FormData();
   files.forEach((file) => body.append("files", file));
   body.append("target", options.target);
+  body.append("note_style", options.noteStyle ?? "");
   body.append("summary_prompt", options.summaryPrompt ?? "");
   body.append("replace", String(options.replace ?? false));
   const response = await apiFetch("/api/ingest/jobs", { method: "POST", body });

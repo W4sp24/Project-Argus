@@ -18,7 +18,10 @@ import type { IngestJob, IngestJobItem, IngestStage } from "@/lib/api";
 const PIPELINE: { stage: IngestStage; label: string }[] = [
   { stage: "saving", label: "save" },
   { stage: "indexing", label: "index" },
-  { stage: "summarizing", label: "summarize" },
+  // The wire stage is still `summarizing` — it lives in a CHECK constraint,
+  // and rebuilding the table to rename it would buy a label the UI can say
+  // for itself. What the user sees is what actually gets written: a note.
+  { stage: "summarizing", label: "note" },
   { stage: "done", label: "done" },
 ];
 
@@ -57,7 +60,7 @@ function detail(item: IngestJobItem): string {
   if (item.stage === "skipped") return item.error ?? "skipped";
   if (item.stage === "done") {
     const parts = [item.chunks > 0 ? `${item.chunks} chunks` : "no chunks"];
-    if (item.summary_path) parts.push("summarized");
+    if (item.summary_path) parts.push("note written");
     if (item.error) parts.push(item.error);
     return parts.join(" · ");
   }
@@ -99,7 +102,15 @@ export default function IngestJobProgress({ job }: { job: IngestJob }) {
           <li key={item.id}>
             <div className="flex items-baseline justify-between gap-3">
               <p className="min-w-0 truncate text-label text-ink">{item.filename}</p>
-              <p className={`shrink-0 font-mono text-meta ${toneClass(item)}`}>{detail(item)}</p>
+              <p
+                className={`shrink-0 font-mono text-meta ${toneClass(item)}`}
+                // The note's path is the one thing a user wants next and the
+                // row has no room for; the title carries it without pushing
+                // the filename out of the line.
+                title={item.summary_path ?? undefined}
+              >
+                {detail(item)}
+              </p>
             </div>
             <div className="mt-1.5 flex gap-px" aria-hidden>
               {PIPELINE.map((segment, index) => (
