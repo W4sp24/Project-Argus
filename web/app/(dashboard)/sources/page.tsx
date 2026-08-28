@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import PageHeader from "@/components/PageHeader";
 import Panel from "@/components/Panel";
 import IngestDialog from "@/components/sources/IngestDialog";
@@ -28,28 +29,71 @@ function fileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function SourcesPage() {
-  const [folder, setFolder] = useState<string | null>(null);
+function SourcesBrowser() {
+  const router = useRouter();
+  const params = useSearchParams();
+  // The view lives in the URL, so "sources in 15-Courses/CS201/materials" can
+  // be bookmarked and shared, and Back undoes a folder click instead of
+  // leaving the page entirely.
+  const folder = params.get("folder");
+  const setFolder = useCallback(
+    (next: string | null) => {
+      const query = new URLSearchParams(params.toString());
+      if (next === null) query.delete("folder");
+      else query.set("folder", next);
+      const search = query.toString();
+      // `push`, not `replace`: the audit's complaint was that Back left the
+      // page instead of undoing a folder click, and only a history entry
+      // fixes that.
+      router.push(search ? `/sources?${search}` : "/sources", { scroll: false });
+    },
+    [params, router],
+  );
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
 
-  const { data, error, isLoading, mutate } = useSources(folder ?? undefined);
+  // Fetched unfiltered, always, and narrowed here. The rail used to be derived
+  // from the *filtered* response, so clicking a folder deleted every sibling
+  // from the navigation that got you there -- the only way back was "All
+  // folders". A navigation control that removes its own siblings when used is
+  // a trap, not a filter.
+  const { data, error, isLoading, mutate } = useSources();
   const { data: vault } = useVault();
   const { data: job } = useIngestJob(jobId);
 
-  const sources = useMemo(() => data?.sources ?? [], [data]);
+  const all = useMemo(() => data?.sources ?? [], [data]);
+  // Prefix, matching what `GET /api/sources?folder=` does server-side. The
+  // rail counted by *exact* `source.folder` while the API filtered by
+  // subtree, so a folder with children could never agree with itself: the
+  // rail said 3 and the click produced 18.
+  const inFolder = useCallback(
+    (path: string) => folder === null || path === folder || path.startsWith(`${folder}/`),
+    [folder],
+  );
+  const sources = useMemo(
+    () => (folder === null ? all : all.filter((source) => inFolder(source.folder))),
+    [all, folder, inFolder],
+  );
   const folders = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const source of data?.sources ?? []) {
-      counts.set(source.folder, (counts.get(source.folder) ?? 0) + 1);
+    for (const source of all) {
+      // Every ancestor counts the file, so a folder's number is what clicking
+      // it will actually show.
+      const parts = source.folder ? source.folder.split("/") : [""];
+      for (let depth = 1; depth <= parts.length; depth += 1) {
+        const name = parts.slice(0, depth).join("/");
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
     }
     return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [data]);
+  }, [all]);
 
   const indexAvailable = data?.index_available ?? false;
   const indexed = sources.filter((source) => (source.chunks ?? 0) > 0);
   const chunks = indexed.reduce((total, source) => total + (source.chunks ?? 0), 0);
   const written = sources.filter((source) => source.generated !== null).length;
+  const scoped = folder !== null && sources.length !== all.length;
 
   // Refetch once a job settles: the files it wrote are new rows in this list.
   // In an effect, not during render -- `mutate` is a side effect, and clearing
@@ -70,7 +114,11 @@ export default function SourcesPage() {
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          { label: "files", value: sources.length },
+          // Labelled with the scope when one is active. These are computed
+          // over the filtered set, so CHUNKS read 6 unfiltered and 2 filtered
+          // with the label unchanged -- which a user reads as the index
+          // shrinking rather than as the view narrowing.
+          { label: scoped ? `files (of ${all.length})` : "files", value: sources.length },
           { label: "indexed", value: indexAvailable ? indexed.length : "—" },
           { label: "chunks", value: indexAvailable ? chunks : "—" },
           // "written", not "summaries": the tile counts everything Argus
@@ -229,5 +277,18 @@ export default function SourcesPage() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * `useSearchParams` suspends, and Next requires the boundary to be an
+ * ancestor rather than the component itself -- without it the whole route
+ * silently opts out of static rendering at build time.
+ */
+export default function SourcesPage() {
+  return (
+    <Suspense fallback={null}>
+      <SourcesBrowser />
+    </Suspense>
   );
 }

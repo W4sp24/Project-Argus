@@ -178,3 +178,42 @@ test("the job panel stops claiming it is ingesting once it has finished", async 
   await job.getByRole("button", { name: "dismiss" }).click();
   await expect(page.getByText(/▍INGEST(ED|ING)/)).toHaveCount(0);
 });
+
+
+test("the folder rail keeps its siblings, agrees with its counts, and is a deep link", async ({
+  page,
+}) => {
+  // Three defects in one control. The rail was derived from the *filtered*
+  // response, so clicking a folder deleted every sibling from the navigation
+  // that got you there -- the only way out was "All folders". Its counts were
+  // computed by exact `source.folder` while the API filtered by subtree, so a
+  // folder with children could never agree with itself (the audit saw 3 vs
+  // 18). And the view was component state, so it could not be linked to and
+  // Back left the page instead of undoing the click.
+  await page.goto("/sources");
+  const rail = page.locator("section").filter({ hasText: "▍FOLDERS" });
+  const list = page.locator("section").filter({ hasText: "▍SOURCES" });
+  // "All folders" is static markup, so waiting on it says nothing about the
+  // fetch. Wait for real rows before counting anything.
+  await expect(list.getByRole("listitem").first()).toBeVisible({ timeout: 15_000 });
+
+  const siblingsBefore = await rail.getByRole("button").count();
+  expect(siblingsBefore).toBeGreaterThan(2);
+
+  const target = rail.getByRole("button", { name: /^15-Courses\/CS000, / });
+  const label = (await target.getAttribute("aria-label")) ?? "";
+  const claimed = Number(/, (\d+) file/.exec(label)?.[1]);
+  expect(claimed).toBeGreaterThan(0);
+  await target.click();
+
+  // The rail is navigation, not results: it does not shrink when used.
+  await expect(rail.getByRole("button")).toHaveCount(siblingsBefore);
+
+  // The count on the button is what clicking it actually shows.
+  await expect(list.getByRole("listitem")).toHaveCount(claimed);
+
+  // The view is in the URL, and Back undoes the click rather than leaving.
+  await expect(page).toHaveURL(/[?&]folder=15-Courses%2FCS000/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/sources$/);
+});
