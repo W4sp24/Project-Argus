@@ -34,6 +34,43 @@ interface Picked {
   collision?: Collision;
 }
 
+/**
+ * The destination we can legally write to that is closest to `folder`.
+ *
+ * `folder` comes from the FOLDERS rail, so it is any vault path at all, while
+ * `options` is the taxonomy-derived list the backend serves
+ * (`GET /api/ingest/destinations`). Filtering to a course root and hitting
+ * ingest should land in that course rather than silently in the inbox, so a
+ * folder that contains a destination -- or sits inside one -- snaps to it.
+ *
+ * Everything is derived from `options`; no zone name is hard-coded here. The
+ * list is taxonomy-driven and grows with every course, so anything that
+ * assumed its length or its contents would be wrong on the next vault.
+ */
+export function nearestDestination(folder: string, options: string[]): string {
+  const clean = folder.replace(/\/+$/, "");
+  if (!clean || !options.length) return options[0] ?? "";
+  if (options.includes(clean)) return clean;
+
+  // Segment-aware, so `15-Courses/CS0` is not treated as a parent of
+  // `15-Courses/CS000`. Longest wins: the most specific legal ancestor.
+  const isUnder = (child: string, parent: string) => child.startsWith(`${parent}/`);
+  const ancestors = options.filter((option) => isUnder(clean, option));
+  if (ancestors.length) {
+    return ancestors.reduce((best, option) => (option.length > best.length ? option : best));
+  }
+
+  // Otherwise the folder may be a parent of several destinations -- a course
+  // root sits above both its `materials` and its `notes` zone. Take the first
+  // in the backend's own order, which lists a course's materials before its
+  // notes; picking the shortest instead would land lectures in `notes/`,
+  // where the Course Hub's materials listing never counts them.
+  const descendant = options.find((option) => isUnder(option, clean));
+  if (descendant) return descendant;
+
+  return options[0];
+}
+
 function collisionNote(picked: Picked, replace: boolean): string | null {
   if (!picked.collision?.exists) return null;
   if (picked.collision.identical) {
@@ -87,8 +124,28 @@ export default function IngestDialog({
   // would re-run the default-target effect on every keystroke.
   const options = useMemo(() => destinations?.destinations ?? [], [destinations]);
   useEffect(() => {
-    if (lockedTarget || target || !options.length) return;
-    setTarget(options[0]);
+    // Two ways this used to end up POSTing somewhere the user was never shown:
+    //
+    // 1. `initialTarget` is whatever folder /sources was filtered to, which is
+    //    an arbitrary vault path and usually not a registered destination. The
+    //    old guard bailed on any truthy `target`, so it was never checked
+    //    against `options`. A <select> with no matching <option> falls back to
+    //    displaying index 0 while React state keeps the unlisted value, and
+    //    nothing reconciles them -- the dialog said `00-Inbox/files` and wrote
+    //    to the course root.
+    // 2. `lockedTarget` arrives from `GET /api/study/courses`, which can
+    //    resolve *after* the dialog mounts. It only ever seeded useState, and
+    //    the guard returned early whenever it was set, so a dialog opened a
+    //    moment too early kept the default inbox, hid the picker because it
+    //    was now "locked", and ingested outside the course.
+    //
+    // So: never return without knowing `target` is a value the user can see.
+    if (lockedTarget) {
+      if (target !== lockedTarget) setTarget(lockedTarget);
+      return;
+    }
+    if (!options.length || options.includes(target)) return;
+    setTarget(nearestDestination(target, options));
   }, [lockedTarget, options, target]);
 
   // The badge is the honest half of the trust line: a hosted model means the

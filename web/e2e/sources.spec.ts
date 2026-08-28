@@ -90,3 +90,51 @@ test("the dashboard ingest panel links through to sources", async ({ page }) => 
   await expect(page).toHaveURL(/\/sources$/);
   await expect(page.getByRole("heading", { name: "Sources" })).toBeVisible();
 });
+
+/**
+ * The invariant the UX audit asked for by name: the destination the dialog
+ * *displays* is the destination it *POSTs*. The two used to diverge silently —
+ * `initialTarget` is whatever folder the rail was filtered to, it was never
+ * checked against the registered destinations, and a <select> with no matching
+ * <option> renders index 0 while React state keeps the unlisted value. Files
+ * landed in the course root: outside every zone, so invisible to the Course
+ * Hub's listing and to the notes-gap list, while the UI reported success.
+ */
+test("the destination the dialog shows is the destination it writes to", async ({ page }) => {
+  await page.goto("/sources");
+
+  // A course root is the case that broke: it is a real vault folder and it is
+  // not one of the registered ingest destinations.
+  await page.getByRole("button", { name: /^15-Courses\/CS000/ }).first().click();
+
+  await page.getByRole("button", { name: "+ Ingest" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Ingest files" });
+  await expect(dialog).toBeVisible();
+
+  // It must have snapped to a legal destination inside that course rather than
+  // holding a value with no matching option — materials, not notes, because
+  // that is where a lecture belongs and what the hub counts.
+  const select = dialog.getByLabel("Save to");
+  await expect(select).toHaveValue("15-Courses/CS000/materials");
+
+  let posted: string | null = null;
+  await page.route("**/api/ingest/jobs", async (route) => {
+    const body = route.request().postData() ?? "";
+    posted = /name="target"\r?\n\r?\n([^\r\n]*)/.exec(body)?.[1] ?? "";
+    await route.continue();
+  });
+
+  await dialog.getByLabel("Write a note from each file").selectOption("");
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "e2e-target-probe.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# Target Probe\n"),
+  });
+  const displayed = await select.inputValue();
+  await dialog.getByRole("button", { name: /^Ingest/ }).click();
+  await expect(dialog).toBeHidden();
+
+  await expect.poll(() => posted, { timeout: 15_000 }).not.toBeNull();
+  expect(posted).toBe(displayed);
+  expect(posted).toBe("15-Courses/CS000/materials");
+});
