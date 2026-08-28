@@ -16,6 +16,7 @@ import {
   latestJobOfKind,
   reindexVault,
   useIngestJob,
+  useIngestJobs,
   useSources,
   useVault,
   type SourceInfo,
@@ -80,6 +81,20 @@ function SourcesBrowser() {
   const { data, error, isLoading, mutate } = useSources();
   const { data: vault } = useVault();
   const { data: job } = useIngestJob(jobId);
+  // Adopt a job that is still running from an earlier visit. `jobId` is
+  // component state, so leaving the page and coming back lost the readout
+  // entirely -- the job carried on, the UI had simply forgotten it, and the
+  // only evidence it existed was the files appearing later. `useIngestJobs`
+  // has been built and called from nowhere since this route landed; this is
+  // what it is for.
+  const { data: history } = useIngestJobs();
+  useEffect(() => {
+    if (jobId) return;
+    const running = (history?.jobs ?? []).find(
+      (candidate) => candidate.status === "queued" || candidate.status === "running",
+    );
+    if (running) setJobId(running.id);
+  }, [history, jobId]);
 
   const all = useMemo(() => data?.sources ?? [], [data]);
   // Prefix, matching what `GET /api/sources?folder=` does server-side. The
@@ -97,6 +112,7 @@ function SourcesBrowser() {
   // hundred, so it is deliberately not here yet.
   const query = (params.get("q") ?? "").trim().toLowerCase();
   const sort = (params.get("sort") ?? "modified") as SortKey;
+  const dense = params.get("dense") === "1";
   const setParam = useCallback(
     (key: string, value: string | null) => {
       const next = new URLSearchParams(params.toString());
@@ -344,6 +360,19 @@ function SourcesBrowser() {
                 className={`${FIELD_CONTROL} h-7 min-w-0 flex-1 py-0 text-meta`}
               />
               <label className="flex items-center gap-1.5 font-mono text-meta text-ink-muted">
+                {/* The one surface that will hold hundreds of rows, so the
+                    density toggle earns its place here and nowhere else. One
+                    class swap, and it buys back the scroll cost of a large
+                    vault -- dense dark interfaces being rather the point of
+                    this aesthetic. */}
+                <button
+                  type="button"
+                  onClick={() => setParam("dense", dense ? null : "1")}
+                  aria-pressed={dense}
+                  className="border border-line px-1.5 py-0.5 uppercase tracking-[0.12em] transition-colors hover:border-lineHi hover:text-ink"
+                >
+                  {dense ? "compact" : "comfortable"}
+                </button>
                 sort
                 <select
                   value={sort}
@@ -389,7 +418,15 @@ function SourcesBrowser() {
           ) : (
             <ul className="flex flex-col divide-y divide-line">
               {sources.map((source) => (
-                <li key={source.path} className="flex items-baseline gap-3 py-2">
+                <li
+                  key={source.path}
+                  className={`flex items-baseline gap-3 ${dense ? "py-1" : "py-2"} ${
+                    // Argus's own output gets a visual class of its own. It was
+                    // indistinguishable from input in every list, which is the
+                    // visual half of "what did Argus actually do for me".
+                    source.generated !== null ? "border-l-2 border-[var(--ac)] pl-2" : ""
+                  }`}
+                >
                   <input
                     type="checkbox"
                     checked={picked.has(source.path)}
