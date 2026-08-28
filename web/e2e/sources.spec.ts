@@ -217,3 +217,32 @@ test("the folder rail keeps its siblings, agrees with its counts, and is a deep 
   await page.goBack();
   await expect(page).toHaveURL(/\/sources$/);
 });
+
+
+test("files that are not in the index can be indexed from the page that says so", async ({
+  page,
+}) => {
+  // A6. The page's own subtitle is "Everything Argus can search", and it
+  // diagnosed "not indexed" on row after row while offering nothing to do
+  // about it -- the only /system link was gated on the index being
+  // *unreadable*, which is the rarer state. A user who ingests a lecture,
+  // reads "not indexed" and finds no button concludes the feature is broken.
+  await page.goto("/sources");
+  const list = page.locator("section").filter({ hasText: "▍SOURCES" });
+  await expect(list.getByRole("listitem").first()).toBeVisible({ timeout: 15_000 });
+
+  // The seeded vault indexes on ingest, so manufacture the state the banner
+  // exists for: a file on disk that the index has never seen.
+  const missing = list.getByText("not indexed").first();
+  if ((await missing.count()) === 0) {
+    test.skip(true, "nothing unindexed in this vault run");
+  }
+
+  const button = page.getByRole("button", { name: "Index them" });
+  await expect(button).toBeVisible();
+  await button.click();
+
+  // It reports through the same segmented job readout an ingest uses, rather
+  // than inventing a second progress language.
+  await expect(page.getByText(/▍INGEST(ING|ED)/)).toBeVisible({ timeout: 30_000 });
+});

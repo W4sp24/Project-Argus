@@ -956,8 +956,25 @@ export function useIndexStatus() {
 
 /** Trigger a full vault reindex. POST /api/index/reindex — 202, runs on a
  * background thread; poll useIndexStatus() for progress/completion. */
-export function reindexVault() {
-  return mutateJSON<IndexStatus>("/api/index/reindex", undefined);
+/** Trigger a rebuild. With `paths`, only those files are re-embedded --
+ * which is what the "index these" action on /sources calls, rather than
+ * making a user rebuild a whole vault to fix fourteen files.
+ *
+ * Throws `ApiError` with status 409 when an ingest holds the index: both load
+ * the same embedding model and write the same collection, so they contend.
+ * A second *reindex* is not a conflict and still answers 202. */
+export function reindexVault(paths?: string[]) {
+  return mutateJSON<IndexStatus>("/api/index/reindex", paths ? { paths } : undefined);
+}
+
+/** Newest job of a kind, or `null`. The reindex trigger answers `IndexStatus`
+ * rather than a job id -- a shape pinned by a test and not worth changing --
+ * so the readout finds its job here instead. */
+export async function latestJobOfKind(kind: string): Promise<IngestJob | null> {
+  const response = await apiFetch(`/api/ingest/jobs?kind=${encodeURIComponent(kind)}`);
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { jobs: IngestJob[] };
+  return payload.jobs[0] ?? null;
 }
 
 

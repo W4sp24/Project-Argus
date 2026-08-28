@@ -4,11 +4,19 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import PageHeader from "@/components/PageHeader";
+import { useToast } from "@/components/Toast";
 import Panel from "@/components/Panel";
 import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress, { jobPanelLabel } from "@/components/sources/IngestJobProgress";
 import Button from "@/components/ui/Button";
-import { useIngestJob, useSources, useVault } from "@/lib/api";
+import {
+  ApiError,
+  latestJobOfKind,
+  reindexVault,
+  useIngestJob,
+  useSources,
+  useVault,
+} from "@/lib/api";
 import { obsidianUri } from "@/lib/citations";
 
 function relativeTime(iso: string): string {
@@ -50,6 +58,7 @@ function SourcesBrowser() {
     [params, router],
   );
 
+  const { show } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
 
@@ -94,6 +103,32 @@ function SourcesBrowser() {
   const chunks = indexed.reduce((total, source) => total + (source.chunks ?? 0), 0);
   const written = sources.filter((source) => source.generated !== null).length;
   const scoped = folder !== null && sources.length !== all.length;
+  const unindexed = sources.filter((source) => source.chunks === null);
+  const [indexing, setIndexing] = useState(false);
+
+  /** Re-embed exactly the files this page is reporting as missing, rather
+   * than sending the user to /system to rebuild the whole vault. */
+  async function indexMissing() {
+    setIndexing(true);
+    try {
+      await reindexVault(unindexed.map((source) => source.path));
+      // The trigger answers IndexStatus, not a job id, so the readout finds
+      // its own job -- which then renders through exactly the same segmented
+      // progress component an ingest uses.
+      const job = await latestJobOfKind("reindex");
+      if (job) setJobId(job.id);
+    } catch (indexError) {
+      const conflict = indexError instanceof ApiError && indexError.status === 409;
+      show(
+        conflict
+          ? "index :: an ingest is using the index — try again when it finishes"
+          : `index :: failed — ${indexError instanceof Error ? indexError.message : "backend offline?"}`,
+        { tone: "error" },
+      );
+    } finally {
+      setIndexing(false);
+    }
+  }
 
   // Refetch once a job settles: the files it wrote are new rows in this list.
   // In an effect, not during render -- `mutate` is a side effect, and clearing
@@ -152,6 +187,28 @@ function SourcesBrowser() {
         <Panel label={jobPanelLabel(job)} className="mb-4">
           <IngestJobProgress job={job} onDismiss={() => setJobId(null)} />
         </Panel>
+      )}
+
+      {/* The page's subtitle is "Everything Argus can search", and it used to
+          say "not indexed" on sixteen of eighteen rows while offering no way
+          to act on it. The only link to /system was behind the index being
+          *unreadable* -- the far more common state, index fine but these
+          particular files missing from it, had no affordance at all. That is
+          the finding most likely to produce the original complaint that the
+          feature "did not feel worth using": nothing was broken, it was
+          unfinished at the seam. */}
+      {indexAvailable && unindexed.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-line bg-panel px-4 py-3">
+          <p className="font-mono text-meta text-warn">
+            {unindexed.length} file{unindexed.length === 1 ? "" : "s"}{" "}
+            {unindexed.length === 1 ? "isn't" : "aren't"} in the search index yet
+            {scoped ? " in this folder" : ""} — Argus cannot answer from{" "}
+            {unindexed.length === 1 ? "it" : "them"}.
+          </p>
+          <Button size="sm" variant="primary" onClick={indexMissing} disabled={indexing}>
+            {indexing ? "Indexing…" : "Index them"}
+          </Button>
+        </div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
