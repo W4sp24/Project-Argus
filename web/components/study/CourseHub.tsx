@@ -147,6 +147,14 @@ function LinkOrAnchor({
   );
 }
 
+/** How many rows each STUDIO list shows before it offers the rest.
+ *
+ * These used to be bare `.slice(0, 8)` calls with no count and no way past
+ * them, so after one semester a course's artifacts simply disappeared from
+ * the only list that names them -- silently, which is the part that matters:
+ * the list looked complete. */
+const CAP = 8;
+
 interface GeneratedItem {
   key: string;
   label: string;
@@ -175,6 +183,8 @@ export function CourseStudio({ code }: { code: string }) {
   const { data: vault } = useVault();
   const { paths, available, refresh: refreshSelection } = useCourseSelection();
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [showAllGenerated, setShowAllGenerated] = useState(false);
+  const [showAllTopics, setShowAllTopics] = useState(false);
   const scoped = paths.length < available.length;
   // A guide or an exam built from nothing is not a request worth sending —
   // the backend refuses it, and disabling the button says so a round trip
@@ -323,7 +333,7 @@ export function CourseStudio({ code }: { code: string }) {
           <p className="text-label text-ink-faint">Nothing generated for {code} yet.</p>
         ) : (
           <ul className="space-y-1.5">
-            {generated.slice(0, 8).map((item) =>
+            {generated.slice(0, showAllGenerated ? undefined : CAP).map((item) =>
               item.href ? (
                 <li key={item.key}>
                   {/* `next/link` for an in-app route, so opening an exam no
@@ -356,18 +366,36 @@ export function CourseStudio({ code }: { code: string }) {
             )}
           </ul>
         )}
+        {generated.length > CAP && !showAllGenerated && (
+          <button
+            type="button"
+            onClick={() => setShowAllGenerated(true)}
+            className="mt-2 font-mono text-meta text-ink-muted underline underline-offset-2 transition-colors hover:text-ink"
+          >
+            {CAP} of {generated.length} · show all
+          </button>
+        )}
       </div>
 
       {weakTopics.length > 0 && (
         <div className="mt-4 border-t border-line pt-3">
           <p className="mb-2 font-mono text-meta uppercase tracking-[0.16em] text-ink-faint">weak topics</p>
           <div className="flex flex-wrap gap-1.5">
-            {weakTopics.slice(0, 8).map((topic) => (
+            {weakTopics.slice(0, showAllTopics ? undefined : CAP).map((topic) => (
               <span key={topic.topic} className="border border-line px-1.5 py-0.5 font-mono text-meta text-ink-muted">
                 {topic.topic}
               </span>
             ))}
           </div>
+          {weakTopics.length > CAP && !showAllTopics && (
+            <button
+              type="button"
+              onClick={() => setShowAllTopics(true)}
+              className="mt-2 font-mono text-meta text-ink-muted underline underline-offset-2 transition-colors hover:text-ink"
+            >
+              {CAP} of {weakTopics.length} · show all
+            </button>
+          )}
         </div>
       )}
     </Panel>

@@ -45,6 +45,8 @@ const STORAGE_PREFIX = "argus:course-sources:";
 export interface CourseSelection {
   /** Files the rail lists: the `materials` and `notes` zones. */
   available: CourseSource[];
+  /** The `study` zone: shown as context, never selectable. */
+  excluded: CourseSource[];
   /** `available` narrowed by `filter` — the rows actually on screen. */
   visible: CourseSource[];
   /** The rail's filter text, raw as typed (the panel echoes it back). */
@@ -103,6 +105,15 @@ function writeStored(code: string, paths: string[]): void {
 export function CourseSelectionProvider({ code, children }: { code: string; children: ReactNode }) {
   const { data, isLoading, mutate } = useCourseSources(code);
 
+  /** Files the rail deliberately does not offer: Argus's own generated guides
+   * and exam markdown. Surfaced rather than silently omitted -- a user who
+   * just generated a study guide looks for it in SOURCES, and the rail did
+   * not mention that a third zone existed at all. */
+  const excluded = useMemo(
+    () => (data ?? []).filter((source) => source.zone === "study"),
+    [data],
+  );
+
   const available = useMemo(
     () => (data ?? []).filter((source) => source.zone === "materials" || source.zone === "notes"),
     [data],
@@ -160,8 +171,14 @@ export function CourseSelectionProvider({ code, children }: { code: string; chil
     known.current = new Set(paths);
     setSelected((current) => {
       const next = new Set([...current].filter((path) => paths.includes(path)));
-      for (const path of paths) {
-        if (!seen.has(path)) next.add(path);
+      for (const source of available) {
+        // A file that just finished ingesting arrives selected -- that is the
+        // contract. Its *generated note* does not: ingesting one lecture with
+        // a note style adds two paths, and auto-selecting both feeds Argus's
+        // own summary back in beside the lecture it was written from. That is
+        // a milder version of the loop the `study` zone is excluded to
+        // prevent, and the user never sees it happen. They can still tick it.
+        if (!seen.has(source.path) && source.generated === null) next.add(source.path);
       }
       return next;
     });
@@ -244,6 +261,7 @@ export function CourseSelectionProvider({ code, children }: { code: string; chil
   const value = useMemo<CourseSelection>(
     () => ({
       available,
+      excluded,
       visible,
       filter,
       setFilter,
@@ -262,6 +280,7 @@ export function CourseSelectionProvider({ code, children }: { code: string; chil
     }),
     [
       available,
+      excluded,
       visible,
       filter,
       isFiltered,

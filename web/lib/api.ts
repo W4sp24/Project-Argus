@@ -289,6 +289,10 @@ export interface CourseSource {
   /** Chunks in the live index for this file, or `null` when not indexed
    * (never `0` for "unknown" — that would misreport "indexed, empty"). */
   chunks: number | null;
+  /** `"note"` / `"summary"` when Argus wrote this file, else `null`. A
+   * generated note lands in the `notes` zone, so the zone-based exclusion
+   * that keeps `study` out of the rail cannot see it. */
+  generated: "note" | "summary" | null;
 }
 
 /**

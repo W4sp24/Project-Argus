@@ -52,6 +52,7 @@ export default function CourseSourcesPanel({
   // can only mean "all of what you can't".
   const {
     available,
+    excluded,
     visible,
     filter,
     setFilter,
@@ -225,6 +226,29 @@ export default function CourseSourcesPanel({
               </div>
             );
           })
+        )}
+
+        {/* Shown as context, never selectable. The exclusion is deliberate and
+            well argued -- Argus's own guides and exams fed back in as sources
+            are a loop, not context -- but the rail simply did not mention that
+            a third zone existed, so a user who had just generated a study
+            guide looked for it here and found nothing. */}
+        {excluded.length > 0 && (
+          <div className="mt-3 border-t border-line pt-3">
+            <p className="mb-1.5 font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">
+              study · {excluded.length}
+            </p>
+            <ul className="space-y-1">
+              {excluded.map((source) => (
+                <li key={source.path} className="truncate text-meta text-ink-muted">
+                  {source.title}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1.5 font-mono text-micro text-ink-muted">
+              Argus&apos;s own output — not used as a source.
+            </p>
+          </div>
         )}
       </Panel>
 
