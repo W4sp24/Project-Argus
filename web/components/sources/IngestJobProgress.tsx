@@ -46,6 +46,19 @@ const STATUS_LABEL: Record<IngestJob["status"], string> = {
 };
 
 function segmentClass(item: IngestJobItem, index: number): string {
+  // Where it stopped, not merely that it stopped. Colouring every segment for
+  // a failure made a file that saved and indexed and lost only its note look
+  // identical to one that was never written at all -- so a user whose note
+  // failed concluded their file was gone. Segments before the break stay in
+  // the accent because those stages really did succeed.
+  if (item.failed_stage) {
+    const broke = ORDER[item.failed_stage];
+    if (index + 1 < broke) return "bg-[var(--ac)]";
+    if (index + 1 === broke) return item.stage === "skipped" ? "bg-warn" : "bg-danger";
+    return "bg-line";
+  }
+  // No recorded stage: either it is still moving, or it is an older job from
+  // before the column existed, where all we can honestly say is "stopped".
   if (item.stage === "failed") return "bg-danger";
   if (item.stage === "skipped") return "bg-warn";
   const reached = ORDER[item.stage];
@@ -54,13 +67,27 @@ function segmentClass(item: IngestJobItem, index: number): string {
   return "bg-line";
 }
 
+/** The pipeline bar is `aria-hidden`, so the stage that broke has to reach the
+ * text too — colour alone is not an accessible way to say it. */
+function stoppedAt(item: IngestJobItem): string | null {
+  const label = PIPELINE.find((step) => step.stage === item.failed_stage)?.label;
+  return label ? `while ${label === "note" ? "writing the note" : `${label}ing`}` : null;
+}
+
 /** The one line under a filename that says what actually happened to it. */
 function detail(item: IngestJobItem): string {
-  if (item.stage === "failed") return item.error ?? "failed";
+  const where = stoppedAt(item);
+  if (item.stage === "failed") {
+    const failed = where ? `failed ${where}` : "failed";
+    return item.error ? `${failed} — ${item.error}` : failed;
+  }
   if (item.stage === "skipped") return item.error ?? "skipped";
   if (item.stage === "done") {
     const parts = [item.chunks > 0 ? `${item.chunks} chunks` : "no chunks"];
-    if (item.summary_path) parts.push("note written");
+    // Saved and indexed, and only the note missing. Say both halves: the file
+    // is in the vault and searchable, which is the part the old readout hid.
+    if (item.failed_stage) parts.push(`saved and indexed, but the note failed`);
+    else if (item.summary_path) parts.push("note written");
     if (item.error) parts.push(item.error);
     return parts.join(" · ");
   }
@@ -70,6 +97,8 @@ function detail(item: IngestJobItem): string {
 function toneClass(item: IngestJobItem): string {
   if (item.stage === "failed") return "text-danger";
   if (item.stage === "skipped") return "text-warn";
+  // A partial outcome is a warning, not a failure: the file is fine.
+  if (item.failed_stage) return "text-warn";
   return "text-ink-faint";
 }
 

@@ -177,6 +177,7 @@ def _write_note(
             conn,
             item_id,
             stage="skipped",
+            failed_stage="summarizing",
             error="tagged #no-ai — note skipped, nothing was sent to the model",
         )
         return
@@ -199,6 +200,9 @@ def _write_note(
         snapshot=False,
         log=False,
     )
+    # The note's own chunk count is logged, not stored: the item's `chunks`
+    # column is about the source file the row names, and overwriting it with
+    # the note's count would make the readout describe a different file.
     chunks = index.upsert_file(settings.vault_path, written)
     logger.info("ingest: noted %s -> %s (%d chunks)", rel_path, written, chunks)
     store.advance_item(conn, item_id, stage="summarizing", summary_path=written)
@@ -319,6 +323,10 @@ def _run_one(
 ) -> str:
     """One file through save -> index -> note. Returns its terminal stage."""
     item_id = item["id"]
+    # Tracked so the `except` below can say *where* it broke. One try around
+    # both halves was why a file that failed at `indexing` and one that was
+    # never written at all reported identically.
+    reached = "saving"
     try:
         store.advance_item(conn, item_id, stage="saving")
         rel_path = save_ingest_file(
@@ -332,12 +340,15 @@ def _run_one(
             replace=replace,
         )
 
+        reached = "indexing"
         store.advance_item(conn, item_id, stage="indexing", path=rel_path)
         chunks = index.upsert_file(settings.vault_path, rel_path)
         store.advance_item(conn, item_id, stage="indexing", chunks=chunks)
     except Exception as exc:  # WriterError (bad target, I3 refusal) included
-        logger.warning("ingest: %s failed: %s", item["filename"], exc)
-        store.advance_item(conn, item_id, stage="failed", error=str(exc))
+        logger.warning("ingest: %s failed at %s: %s", item["filename"], reached, exc)
+        store.advance_item(
+            conn, item_id, stage="failed", failed_stage=reached, error=str(exc)
+        )
         return "failed"
 
     # Either half is enough to ask for a note: a style with no instruction is
@@ -362,7 +373,12 @@ def _run_one(
         # The file is already saved and indexed; a dead provider is not a
         # reason to lose it. Record why no note appeared and move on.
         logger.warning("ingest: note for %s failed: %s", rel_path, exc)
-        store.advance_item(conn, item_id, stage="done", error=str(exc))
+        # 'done' with a failed_stage: the file is in the vault and searchable,
+        # and only the note is missing. Saying so is the whole point -- the
+        # readout used to render this identically to "never written".
+        store.advance_item(
+            conn, item_id, stage="done", failed_stage="summarizing", error=str(exc)
+        )
         return "done"
 
     # _write_note marks the item 'skipped' itself when I3 refuses it, and that

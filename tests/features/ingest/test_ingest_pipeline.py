@@ -484,3 +484,104 @@ def test_an_unrecognised_stored_style_degrades_to_no_style(settings, conn, tmp_p
 
     assert len(generator.prompts) == 1
     assert "just summarise it" in generator.prompts[0]
+
+
+# --- which stage stopped it ---------------------------------------------------
+#
+# `stage` alone collapses every early exit into one word, so the progress
+# readout painted all four of a file's segments red whether it died before it
+# was ever written or lost only its note. `failed_stage` is what lets the
+# readout tell those apart -- the difference between "your file is fine, the
+# note didn't write" and "your file is gone".
+
+
+def test_a_clean_run_records_no_failed_stage(settings, conn, tmp_path) -> None:
+    job_id, _ = _run(settings, conn, tmp_path, {"a.md": b"# A\n"})
+
+    assert store.get_job(conn, job_id)["items"][0]["failed_stage"] is None
+
+
+def test_a_failure_while_indexing_says_indexing(settings, conn, tmp_path, vault) -> None:
+    """The file was written before the embed blew up, so 'saving' succeeded and
+    the readout must keep saying so."""
+    index = FakeIndex()
+    index.fail_on = {"a.md"}
+
+    job_id, _ = _run(settings, conn, tmp_path, {"a.md": b"# A\n"}, index=index)
+
+    item = store.get_job(conn, job_id)["items"][0]
+    assert item["stage"] == "failed"
+    assert item["failed_stage"] == "indexing"
+    assert (vault / "00-Inbox" / "files" / "a.md").is_file(), "it really did save"
+
+
+def test_a_failure_while_saving_says_saving(settings, conn, tmp_path) -> None:
+    job_id = store.create_job(conn, target="99-Private", summary_prompt="", filenames=["a.md"])
+    run_ingest_job(
+        job_id,
+        settings=settings,
+        index_factory=FakeIndex,
+        generator=None,
+        staging_dir=_stage(tmp_path, {"a.md": b"# A\n"}),
+    )
+
+    item = store.get_job(conn, job_id)["items"][0]
+    assert item["stage"] == "failed"
+    assert item["failed_stage"] == "saving"
+
+
+def test_a_note_failure_marks_the_note_stage_and_nothing_earlier(
+    settings, conn, tmp_path, vault
+) -> None:
+    """The audit's headline case. The file is saved, indexed and searchable;
+    only the note is missing. Reporting that as a whole-file failure is what
+    made users believe an ingested file had been lost."""
+
+    async def exploding(prompt: str, model: str | None = None) -> str:
+        raise RuntimeError("provider is down")
+
+    job_id, index = _run(
+        settings, conn, tmp_path, {"a.md": b"# A\n"}, prompt="summarise", generator=exploding
+    )
+
+    item = store.get_job(conn, job_id)["items"][0]
+    assert item["stage"] == "done", "a dead provider does not undo the ingest"
+    assert item["failed_stage"] == "summarizing"
+    assert "provider is down" in (item["error"] or "")
+    assert (vault / "00-Inbox" / "files" / "a.md").is_file()
+    assert "00-Inbox/files/a.md" in index.upserts
+
+
+def test_a_no_ai_skip_names_the_stage_it_withheld(settings, conn, tmp_path) -> None:
+    """Skipped is not failed, but it did stop somewhere, and the readout has to
+    show *where* rather than colouring the whole pipeline."""
+    job_id, _ = _run(
+        settings,
+        conn,
+        tmp_path,
+        {"private.md": b"---\ntags: [no-ai]\n---\n\n# Mine\n"},
+        prompt="summarise",
+        generator=FakeGenerator(),
+    )
+
+    item = store.get_job(conn, job_id)["items"][0]
+    assert item["stage"] == "skipped"
+    assert item["failed_stage"] == "summarizing"
+
+
+def test_a_later_stage_does_not_erase_the_recorded_failure(settings, conn, tmp_path) -> None:
+    """`advance_item` COALESCEs, which means "do not clobber with NULL" rather
+    than "write once" -- a later non-NULL value still replaces what is there.
+    What has to hold is that an advance reporting only its own news leaves the
+    recorded stage and reason standing, because `_run_one` advances an item to
+    'done' after a note failure has already been written to it."""
+    index = FakeIndex()
+    index.fail_on = {"a.md"}
+    job_id, _ = _run(settings, conn, tmp_path, {"a.md": b"# A"}, index=index)
+    item_id = store.get_job(conn, job_id)["items"][0]["id"]
+
+    store.advance_item(conn, item_id, stage="done")
+
+    item = store.get_job(conn, job_id)["items"][0]
+    assert item["failed_stage"] == "indexing", "the stage that broke survives a later advance"
+    assert "embedding exploded" in (item["error"] or "")

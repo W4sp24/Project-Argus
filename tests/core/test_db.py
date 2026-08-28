@@ -48,3 +48,31 @@ def test_suggestions_kind_is_constrained(tmp_path: Path) -> None:
             )
     finally:
         conn.close()
+
+
+def test_an_older_database_gains_the_failed_stage_column(tmp_path) -> None:
+    """There is no migration framework here: the column is added to SCHEMA for
+    fresh databases and ALTERed in for existing ones. A database written before
+    `failed_stage` existed has to survive the upgrade, because `CREATE TABLE IF
+    NOT EXISTS` will not reshape a table that is already there."""
+    from backend.core.db import connect, init_schema
+
+    conn = connect(tmp_path / "argus.db")
+    conn.execute(
+        "CREATE TABLE ingest_job_items ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  job_id TEXT NOT NULL,"
+        "  filename TEXT NOT NULL,"
+        "  path TEXT,"
+        "  stage TEXT NOT NULL,"
+        "  chunks INTEGER NOT NULL DEFAULT 0,"
+        "  summary_path TEXT,"
+        "  error TEXT)"
+    )
+    conn.commit()
+
+    init_schema(conn)
+
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingest_job_items)")}
+    assert "failed_stage" in columns
+    conn.close()

@@ -70,6 +70,7 @@ def _item_row(row: sqlite3.Row) -> dict[str, Any]:
         "chunks": row["chunks"],
         "summary_path": row["summary_path"],
         "error": row["error"],
+        "failed_stage": row["failed_stage"],
     }
 
 
@@ -111,18 +112,27 @@ def advance_item(
     chunks: int | None = None,
     summary_path: str | None = None,
     error: str | None = None,
+    failed_stage: str | None = None,
 ) -> None:
     """Move one file to its next stage, filling in whatever that stage learned.
 
     Every optional field is COALESCE'd rather than overwritten, so a later
     stage reporting only its own news does not erase the path an earlier one
     resolved.
+
+    COALESCE means "do not clobber with NULL", not "write once": a later call
+    passing a non-NULL value still replaces what is there. So ``error`` and
+    ``failed_stage`` are passed together, in the single call that records the
+    failure -- the stage an item stopped at and the reason it stopped are one
+    fact, and writing them separately would let a later call pair a reason
+    with the wrong stage, or leave either half standing alone.
     """
     conn.execute(
         "UPDATE ingest_job_items SET stage = ?, path = COALESCE(?, path), "
         "chunks = COALESCE(?, chunks), summary_path = COALESCE(?, summary_path), "
-        "error = COALESCE(?, error) WHERE id = ?",
-        (stage, path, chunks, summary_path, error, item_id),
+        "error = COALESCE(?, error), failed_stage = COALESCE(?, failed_stage) "
+        "WHERE id = ?",
+        (stage, path, chunks, summary_path, error, failed_stage, item_id),
     )
     if stage in TERMINAL_STAGES:
         # Recomputed rather than incremented: an item can only be counted once

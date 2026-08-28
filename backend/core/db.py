@@ -342,7 +342,14 @@ CREATE TABLE IF NOT EXISTS ingest_job_items (
                                   'done', 'failed', 'skipped')),
     chunks       INTEGER NOT NULL DEFAULT 0,
     summary_path TEXT,
-    error        TEXT
+    error        TEXT,
+    -- Which stage the item stopped at, when it stopped early. `stage` alone
+    -- cannot say: it collapses to 'failed' (or to 'done' when only the note
+    -- broke), so a file that saved and indexed fine and lost only its note
+    -- was indistinguishable from one that was never written at all -- and the
+    -- progress readout painted every segment red for both. NULL means the
+    -- item ran to its end with nothing withheld.
+    failed_stage TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ingest_job_items_job
     ON ingest_job_items(job_id, id);
@@ -403,6 +410,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     ingest_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingest_jobs)")}
     if "note_style" not in ingest_columns:  # migration for pre-note-style DBs
         conn.execute("ALTER TABLE ingest_jobs ADD COLUMN note_style TEXT NOT NULL DEFAULT ''")
+    item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingest_job_items)")}
+    if "failed_stage" not in item_columns:  # migration for pre-failed-stage DBs
+        conn.execute("ALTER TABLE ingest_job_items ADD COLUMN failed_stage TEXT")
 
     # Multi-instance n8n support (chunk B1): additive columns for databases
     # that reached automation_widgets/automation_runs/automation_workflows

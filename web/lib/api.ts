@@ -1049,6 +1049,9 @@ export interface IngestJobItem {
   chunks: number;
   summary_path: string | null;
   error: string | null;
+  /** Where an item stopped, when it stopped early. `stage` cannot say: it
+   * collapses to `failed`, or to `done` when only the note broke. */
+  failed_stage: IngestStage | null;
 }
 
 export type IngestJobStatus = "queued" | "running" | "ok" | "partial" | "failed";
