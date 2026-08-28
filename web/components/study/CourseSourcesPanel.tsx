@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Panel from "@/components/Panel";
 import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress from "@/components/sources/IngestJobProgress";
@@ -47,10 +47,25 @@ export default function CourseSourcesPanel({
    * frontend is the bug the configurable-taxonomy refactor fixed. */
   materialsPath?: string;
 }) {
-  const { available, selected, toggle, selectAll, selectNone, refresh, isLoading } =
-    useCourseSelection();
+  // The filter lives in the provider, not here. `ALL`/`NONE` have to mean
+  // "all of what you can see", and a bulk control that cannot read the filter
+  // can only mean "all of what you can't".
+  const {
+    available,
+    visible,
+    filter,
+    setFilter,
+    isFiltered,
+    selected,
+    toggle,
+    selectAll,
+    selectNone,
+    selectAllInCourse,
+    selectNoneInCourse,
+    refresh,
+    isLoading,
+  } = useCourseSelection();
 
-  const [filter, setFilter] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const { data: job } = useIngestJob(jobId);
@@ -63,19 +78,6 @@ export default function CourseSourcesPanel({
   useEffect(() => {
     if (status === "ok" || status === "partial" || status === "failed") refresh();
   }, [status, refresh]);
-
-  const needle = filter.trim().toLowerCase();
-  const visible = useMemo(
-    () =>
-      needle
-        ? available.filter(
-            (source) =>
-              source.title.toLowerCase().includes(needle) ||
-              source.path.toLowerCase().includes(needle),
-          )
-        : available,
-    [available, needle],
-  );
 
   const selectedCount = available.filter((source) => selected.has(source.path)).length;
 
@@ -106,12 +108,37 @@ export default function CourseSourcesPanel({
               className={`${FIELD_CONTROL} h-7 flex-1 py-0 text-meta`}
             />
             <Button size="sm" onClick={selectAll}>
-              ALL
+              {isFiltered ? `ALL (${visible.length})` : "ALL"}
             </Button>
             <Button size="sm" onClick={selectNone}>
-              NONE
+              {isFiltered ? `NONE (${visible.length})` : "NONE"}
             </Button>
           </div>
+        )}
+
+        {/* Under a filter, ALL/NONE act on what is on screen -- so the
+            whole-course action has to be reachable and named, rather than
+            being what the unqualified button silently used to do. */}
+        {isFiltered && (
+          <p className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-meta text-ink-muted">
+            <span>
+              showing {visible.length} of {available.length}
+            </span>
+            <button
+              type="button"
+              onClick={selectAllInCourse}
+              className="underline underline-offset-2 transition-colors hover:text-ink"
+            >
+              Select all {available.length} in this course
+            </button>
+            <button
+              type="button"
+              onClick={selectNoneInCourse}
+              className="underline underline-offset-2 transition-colors hover:text-ink"
+            >
+              Clear the whole course
+            </button>
+          </p>
         )}
 
         {selectedCount === 0 && available.length > 0 && (

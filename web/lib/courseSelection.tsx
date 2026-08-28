@@ -29,6 +29,12 @@ import { useCourseSources, type CourseSource } from "@/lib/api";
  * being silently excluded from the next question would be the worst possible
  * default.
  *
+ * The rail's filter box lives here too, beside the selection rather than
+ * inside the panel. `ALL`/`NONE` have to mean "all of what you can see", and
+ * a bulk control that cannot see the filter can only mean "all of what you
+ * can't" — which is how `ALL` used to tick 15 files while one row was on
+ * screen, and persist all 15.
+ *
  * `study` files are excluded on purpose: those are Argus's own output
  * (generated guides, exam markdown), and feeding them back in as sources is a
  * loop, not context.
@@ -39,12 +45,25 @@ const STORAGE_PREFIX = "argus:course-sources:";
 export interface CourseSelection {
   /** Files the rail lists: the `materials` and `notes` zones. */
   available: CourseSource[];
+  /** `available` narrowed by `filter` — the rows actually on screen. */
+  visible: CourseSource[];
+  /** The rail's filter text, raw as typed (the panel echoes it back). */
+  filter: string;
+  setFilter: (value: string) => void;
+  /** Whether `visible` is a real narrowing of `available`. */
+  isFiltered: boolean;
   selected: Set<string>;
   /** `selected`, ordered and array-shaped, for sending over the wire. */
   paths: string[];
   toggle: (path: string) => void;
+  /** Tick every *visible* row, leaving anything the filter hides alone. */
   selectAll: () => void;
+  /** Untick every *visible* row, leaving anything the filter hides alone. */
   selectNone: () => void;
+  /** The escape hatch: the whole course, filter or no filter. */
+  selectAllInCourse: () => void;
+  /** The escape hatch: clear the whole course, filter or no filter. */
+  selectNoneInCourse: () => void;
   /** Refetch the file list — the ingest panel calls this when a job lands. */
   refresh: () => void;
   isLoading: boolean;
@@ -90,69 +109,145 @@ export function CourseSelectionProvider({ code, children }: { code: string; chil
   );
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState("");
   // Tracks which paths this hook has already made a decision about. A path
   // that is present here but absent from `available` was deleted; one absent
   // from here is new and gets selected. Without it, "unticked by the user"
   // and "not yet seen" are indistinguishable, and every reconcile would
   // re-tick everything the user had just cleared.
   const known = useRef<Set<string> | null>(null);
+  // Which course `known` describes. This used to be a second effect keyed on
+  // `[code]` that reset the ref and the selection — and it raced the
+  // reconcile below, because a `setSelected` updater is *lazy*. The reconcile
+  // queued an updater; the reset then queued a plain empty set; React drained
+  // both, the updater ran first and populated `known` as a side effect, and
+  // the plain empty set replaced its result. Every later reconcile then took
+  // the "add only unseen paths" branch and found none, so a freshly opened
+  // hub was pinned at nothing selected — the exact opposite of what this
+  // module's contract promises.
+  //
+  // One effect now, and the first-reconcile branch runs in the effect *body*
+  // rather than inside an updater, so the surviving updater is pure and there
+  // is nothing left to race. Refs survive StrictMode's double-invoked
+  // effects, so the second run takes the incremental branch with `seen`
+  // already equal to every path, adds nothing, and is a no-op.
+  const initialisedFor = useRef<string | null>(null);
+  // Whether the user has deliberately changed this course's selection yet.
+  // Persistence hangs off this rather than off each mutator, so every mutator
+  // can be a pure `setSelected` updater -- which matters because a range
+  // select calls `toggle` in a loop, and a mutator that read `selected` from
+  // its own closure would drop every write but the last.
+  //
+  // It also keeps `readStored`'s contract intact: `null` (never chosen ->
+  // default to everything) and `[]` (deliberately cleared) have to stay
+  // different answers, so the default selection must NOT be written back.
+  const persist = useRef(false);
 
   useEffect(() => {
     if (!data) return;
     const paths = available.map((source) => source.path);
+
+    if (initialisedFor.current !== code) {
+      initialisedFor.current = code;
+      persist.current = false;
+      const stored = readStored(code);
+      known.current = new Set(paths);
+      setSelected(new Set(stored === null ? paths : stored.filter((path) => paths.includes(path))));
+      return;
+    }
+
+    const seen = known.current ?? new Set<string>();
+    known.current = new Set(paths);
     setSelected((current) => {
-      if (known.current === null) {
-        const stored = readStored(code);
-        known.current = new Set(paths);
-        return new Set(stored === null ? paths : stored.filter((path) => paths.includes(path)));
-      }
       const next = new Set([...current].filter((path) => paths.includes(path)));
       for (const path of paths) {
-        if (!known.current.has(path)) next.add(path);
+        if (!seen.has(path)) next.add(path);
       }
-      known.current = new Set(paths);
       return next;
     });
   }, [available, code, data]);
 
-  // Reset when the hub moves to a different course: the ref would otherwise
-  // carry the previous course's paths into the new one's first reconcile.
   useEffect(() => {
-    known.current = null;
-    setSelected(new Set());
+    if (!persist.current) return;
+    writeStored(code, [...selected]);
+  }, [code, selected]);
+
+  // Moving to a different course clears the filter: it described the previous
+  // course's file names, and carrying it over would open the new hub already
+  // hiding rows for a reason nothing on screen explains.
+  useEffect(() => {
+    setFilter("");
   }, [code]);
 
-  const update = useCallback(
-    (next: Set<string>) => {
-      setSelected(next);
-      writeStored(code, [...next]);
-    },
-    [code],
+  const needle = filter.trim().toLowerCase();
+  const visible = useMemo(
+    () =>
+      needle
+        ? available.filter(
+            (source) =>
+              source.title.toLowerCase().includes(needle) ||
+              source.path.toLowerCase().includes(needle),
+          )
+        : available,
+    [available, needle],
   );
+  const isFiltered = needle.length > 0 && visible.length < available.length;
+
+  /** Mark this a deliberate change, so the effect above writes it through. */
+  const commit = useCallback((next: (current: Set<string>) => Set<string>) => {
+    persist.current = true;
+    setSelected(next);
+  }, []);
 
   const toggle = useCallback(
     (path: string) => {
-      setSelected((current) => {
+      commit((current) => {
         const next = new Set(current);
         if (next.has(path)) next.delete(path);
         else next.add(path);
-        writeStored(code, [...next]);
         return next;
       });
     },
-    [code],
+    [commit],
   );
 
+  // Scoped to `visible`, and a union rather than a replacement: a filtered
+  // `ALL` must not silently untick the files the filter is hiding, the same
+  // way it must not silently tick them.
   const selectAll = useCallback(
-    () => update(new Set(available.map((source) => source.path))),
-    [available, update],
+    () =>
+      commit((current) => {
+        const next = new Set(current);
+        for (const source of visible) next.add(source.path);
+        return next;
+      }),
+    [commit, visible],
   );
-  const selectNone = useCallback(() => update(new Set()), [update]);
+
+  const selectNone = useCallback(
+    () =>
+      commit((current) => {
+        const next = new Set(current);
+        for (const source of visible) next.delete(source.path);
+        return next;
+      }),
+    [commit, visible],
+  );
+
+  const selectAllInCourse = useCallback(
+    () => commit(() => new Set(available.map((source) => source.path))),
+    [available, commit],
+  );
+  const selectNoneInCourse = useCallback(() => commit(() => new Set()), [commit]);
   const refresh = useCallback(() => void mutate(), [mutate]);
 
   const value = useMemo<CourseSelection>(
     () => ({
       available,
+      visible,
+      filter,
+      setFilter,
+      isFiltered,
       selected,
       // Ordered by the rail's own order rather than by insertion, so the same
       // selection always produces the same request.
@@ -160,10 +255,25 @@ export function CourseSelectionProvider({ code, children }: { code: string; chil
       toggle,
       selectAll,
       selectNone,
+      selectAllInCourse,
+      selectNoneInCourse,
       refresh,
       isLoading,
     }),
-    [available, selected, toggle, selectAll, selectNone, refresh, isLoading],
+    [
+      available,
+      visible,
+      filter,
+      isFiltered,
+      selected,
+      toggle,
+      selectAll,
+      selectNone,
+      selectAllInCourse,
+      selectNoneInCourse,
+      refresh,
+      isLoading,
+    ],
   );
 
   return <SelectionContext.Provider value={value}>{children}</SelectionContext.Provider>;

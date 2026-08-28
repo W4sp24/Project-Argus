@@ -231,3 +231,118 @@ test("selecting nothing disables the generators rather than widening them", asyn
   await sources.getByRole("button", { name: "ALL" }).click();
   await expect(studio.getByRole("button", { name: /^study guide/ })).toBeEnabled();
 });
+
+/**
+ * The two below are the assertions the UX audit named as missing: the suite
+ * exercised the plumbing thoroughly and the *agreements between components*
+ * not at all, which is how both defects shipped green.
+ */
+
+/** Put a uniquely named file in the rail, so neither test below depends on
+ * what an earlier one happened to ingest. Note style stays empty: e2e runs the
+ * real backend, so asking for a note would be a live model call. */
+async function ingestProbe(page: import("@playwright/test").Page, name: string) {
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  // Wait for the course itself to load before opening the dialog. The hub
+  // pins the destination from `GET /api/study/courses`, and a dialog opened
+  // before that resolves has no `lockedTarget` — it falls back to the default
+  // inbox and keeps it, because `target` is seeded once and the reconciling
+  // effect bails whenever `lockedTarget` is set. The dialog then *shows* the
+  // course as pinned and POSTs the inbox.
+  await expect(page.getByText("Sample Course")).toBeVisible({ timeout: 15_000 });
+  await sources.getByRole("button", { name: "+ INGEST" }).click();
+  const dialog = page.getByRole("dialog", { name: "Ingest files" });
+  await dialog.getByLabel("Write a note from each file").selectOption("");
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: `${name}.md`,
+    mimeType: "text/markdown",
+    buffer: Buffer.from(`# ${name}
+
+A fact only this file knows.
+`),
+  });
+  // Pinned to the course, so there is no picker — and the file must land in
+  // the course, not wherever the dialog defaulted to.
+  await expect(dialog.getByLabel("Save to")).toHaveCount(0);
+  await dialog.getByRole("button", { name: /^Ingest/ }).click();
+  await expect(dialog).toBeHidden();
+  await expect(sources.getByText("into 15-Courses/CS000/materials")).toBeVisible();
+  await expect(
+    sources.getByRole("checkbox", { name: new RegExp(`Use ${name} as a source`) }),
+  ).toBeVisible({ timeout: 30_000 });
+}
+
+test("a course opened for the first time has everything selected, not nothing", async ({
+  page,
+}) => {
+  // The regression this pins: the reconcile effect's `setSelected` updater is
+  // lazy, so the separate `[code]` reset effect's plain empty set replaced its
+  // result — but the updater had already populated `known` as a side effect,
+  // so every later reconcile took the "add only unseen paths" branch and found
+  // none. The selection was pinned empty permanently and every generative
+  // surface in the hub was inert on arrival, which is the exact opposite of
+  // what courseSelection.tsx's own docstring promises.
+  //
+  // It has to be asserted against a file that existed *before* the provider
+  // mounted. A newly ingested path is absent from `known`, so the broken
+  // reconcile added it anyway — which is exactly why the ingest test above
+  // passed all along and this defect still shipped. Hence: ingest, reload,
+  // then look.
+  await page.addInitScript(() => window.localStorage.clear());
+  await page.goto("/study");
+  await page.getByRole("link", { name: "HUB →" }).click();
+  await ingestProbe(page, "e2e-fresh-mount");
+
+  // Leave and come back *client-side*, so the hub remounts with SWR's cache
+  // already warm. That is the commit where the race bit: `data` present the
+  // first time both effects run, so the reset's plain empty set landed after
+  // the reconcile's lazy updater had already populated `known`. A hard reload
+  // never reproduces it — the fetch is still in flight on mount, so the reset
+  // runs harmlessly before there is any data to reconcile.
+  await page.getByRole("button", { name: "← BACK" }).click();
+  await expect(page).toHaveURL(/\/study$/);
+  await page.getByRole("link", { name: "HUB →" }).click();
+  await expect(page).toHaveURL(/\/study\/course\/CS000$/);
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const boxes = sources.getByRole("checkbox");
+  await expect(boxes.first()).toBeVisible({ timeout: 15_000 });
+
+  // Counted rather than hard-coded: the rail's contents depend on what earlier
+  // tests ingested, but "all of them" is the invariant either way.
+  const total = await boxes.count();
+  expect(total).toBeGreaterThan(0);
+  await expect(sources.getByRole("checkbox", { checked: false })).toHaveCount(0);
+  await expect(page.getByText(`SOURCES · ${total}/${total} selected`)).toBeVisible();
+});
+
+test("ALL under a filter selects what is on screen, not what the filter hides", async ({
+  page,
+}) => {
+  await page.addInitScript(() => window.localStorage.clear());
+  await page.goto("/study/course/CS000");
+  await ingestProbe(page, "e2e-filter-probe");
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const total = await sources.getByRole("checkbox").count();
+  expect(total).toBeGreaterThan(1);
+
+  // Start from nothing, so the count after ALL can only have come from ALL.
+  await sources.getByRole("button", { name: "NONE" }).click();
+  await expect(page.getByText(`SOURCES · 0/${total} selected`)).toBeVisible();
+
+  await sources.getByLabel("Filter sources").fill("e2e-filter-probe");
+  const shown = await sources.getByRole("checkbox").count();
+  expect(shown).toBeGreaterThan(0);
+  expect(shown).toBeLessThan(total);
+
+  // The defect: one row on screen, a button labelled ALL, and every file in
+  // the course silently scoped into chat and both generators — then persisted,
+  // so the reload that might have revealed it did not.
+  await sources.getByRole("button", { name: `ALL (${shown})` }).click();
+  await expect(page.getByText(`SOURCES · ${shown}/${total} selected`)).toBeVisible();
+
+  // The escape hatch is named rather than being what the plain button did.
+  await sources.getByRole("button", { name: `Select all ${total} in this course` }).click();
+  await expect(page.getByText(`SOURCES · ${total}/${total} selected`)).toBeVisible();
+});
