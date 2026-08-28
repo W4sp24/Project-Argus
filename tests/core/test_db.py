@@ -76,3 +76,52 @@ def test_an_older_database_gains_the_failed_stage_column(tmp_path) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingest_job_items)")}
     assert "failed_stage" in columns
     conn.close()
+
+
+def test_an_older_database_gains_the_kind_and_params_columns(tmp_path) -> None:
+    """The job store serves every long-running job now, not only ingestion.
+
+    Same shape of hazard as `failed_stage` above and the same fix: there is no
+    migration framework, so `kind` and `params` are added to SCHEMA for fresh
+    databases and ALTERed in for existing ones. `CREATE TABLE IF NOT EXISTS`
+    is a no-op against a table that already exists, so without the guarded
+    ALTERs an installed copy of Argus would keep its old four-column
+    `ingest_jobs` and every read through `store._job_row` -- which hand-lists
+    each field -- would fail with "no such column" on the first poll.
+
+    The row written before the upgrade must also come out the other side
+    saying what it was: `kind` defaults to 'ingest' precisely because every
+    job recorded under the old schema was one.
+    """
+    conn = connect(tmp_path / "argus.db")
+    conn.execute(
+        "CREATE TABLE ingest_jobs ("
+        "  id TEXT PRIMARY KEY,"
+        "  boot_id TEXT NOT NULL,"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
+        "  finished_at TEXT,"
+        "  status TEXT NOT NULL,"
+        "  target TEXT NOT NULL,"
+        "  summary_prompt TEXT NOT NULL DEFAULT '',"
+        "  note_style TEXT NOT NULL DEFAULT '',"
+        "  total INTEGER NOT NULL DEFAULT 0,"
+        "  done INTEGER NOT NULL DEFAULT 0,"
+        "  error TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO ingest_jobs (id, boot_id, status, target) VALUES ('old', 'boot', 'ok', 'x')"
+    )
+    conn.commit()
+
+    init_schema(conn)
+
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingest_jobs)")}
+    assert {"kind", "params"} <= columns
+
+    from backend.features.ingest import store
+
+    job = store.get_job(conn, "old")
+    assert job is not None, "the pre-upgrade row must still be readable"
+    assert job["kind"] == "ingest"
+    assert job["params"] is None
+    conn.close()

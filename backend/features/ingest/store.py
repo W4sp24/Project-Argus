@@ -1,4 +1,13 @@
-"""Persistence for ingest jobs — what happened to every file, per stage.
+"""Persistence for long-running jobs — what happened to every file, per stage.
+
+Started as the ingest job store and still lives under ``features/ingest``,
+but it is now the one durable record of every job that outlives its request:
+an ingest, a vault reindex, a study guide, a practice exam. The `kind`
+column says which; `params` carries the facts that have no column of their
+own. Keeping one table (rather than one per feature) is what lets
+:func:`running_job_id` answer "is anything already using the embedding
+model?" across features -- two independent single-flight locks against the
+same chroma directory could not.
 
 Modelled on :mod:`backend.features.automations.store`: every function takes a
 ``sqlite3.Connection`` and never opens one. That matters more here than
@@ -18,21 +27,59 @@ the rest.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from typing import Any
 
 #: Identifies *this* process. Rows carrying any other boot id belong to a job
 #: whose thread died with a previous process, and are reconciled at startup.
-#: The in-memory reindex `_State` gets this for free by resetting on restart;
-#: a table does not.
+#: The in-memory reindex `_State` this table replaced got that for free by
+#: resetting on restart; a table does not, so reconciliation buys it back.
 BOOT_ID = uuid.uuid4().hex
 
 #: Stages that mean a file is finished, one way or another.
 TERMINAL_STAGES = ("done", "failed", "skipped")
 
-#: Job statuses that still occupy the single ingest slot.
+#: Job statuses that still occupy a slot.
 ACTIVE_STATUSES = ("queued", "running")
+
+#: Every kind of work this table records. Not a CHECK constraint -- see the
+#: `kind` column's comment in :mod:`backend.core.db`: SQLite cannot alter one,
+#: so a vocabulary expected to grow does not belong in the schema.
+JOB_KINDS = ("ingest", "reindex", "guide", "exam")
+
+#: Which kinds contend for one slot, and which run unconstrained.
+#:
+#: This is a deliberate behaviour change, not a refactor artefact. Before this
+#: table was generalised, `POST /api/ingest/jobs` and `POST /api/index/reindex`
+#: held *two independent* single-flight locks -- so an ingest and a reindex
+#: could and did run at once, each loading its own copy of the bge-small
+#: embedding model and both writing the same chroma directory, while
+#: ``writer._git_snapshot`` runs git with ``check=False`` so the loser of the
+#: resulting ``.git/index.lock`` race failed silently. Putting them in one
+#: 'index' group makes them contend, which is what they should always have
+#: done.
+#:
+#: Study generation is deliberately NOT in a group. A guide or an exam is an
+#: LLM call plus a write into the course's ``study/`` folder -- the one
+#: sanctioned exception to I1, so it takes no git snapshot -- and it reads its
+#: corpus in the request handler, before the job exists. It shares no resource
+#: with an ingest, and making a user wait for one to run the other would be a
+#: restriction with nothing behind it. A kind absent from this mapping never
+#: blocks and is never blocked.
+SLOT_GROUPS: dict[str, str] = {"ingest": "index", "reindex": "index"}
+
+
+def _slot_peers(kind: str) -> tuple[str, ...]:
+    """Every kind that contends with ``kind``, including itself.
+
+    ``()`` for a kind with no group, which callers read as "no slot to hold".
+    """
+    group = SLOT_GROUPS.get(kind)
+    if group is None:
+        return ()
+    return tuple(peer for peer, name in SLOT_GROUPS.items() if name == group)
 
 
 def _in_clause(values: tuple[str, ...]) -> str:
@@ -46,12 +93,30 @@ def _in_clause(values: tuple[str, ...]) -> str:
     return "(" + ", ".join(f"'{value}'" for value in values) + ")"
 
 
+def _decode_params(raw: str | None) -> dict[str, Any] | None:
+    """``params`` as a dict, or ``None``. Never raises."""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _job_row(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "created_at": row["created_at"],
         "finished_at": row["finished_at"],
         "status": row["status"],
+        "kind": row["kind"],
+        # Decoded here rather than at every call site: `params` is a wire
+        # field, and a JSON string on one route and a dict on another is
+        # exactly the drift `_job_row` exists to prevent. A row hand-edited to
+        # something unparseable reports None rather than taking the poll
+        # endpoint down with it.
+        "params": _decode_params(row["params"]),
         "target": row["target"],
         "summary_prompt": row["summary_prompt"],
         "note_style": row["note_style"],
@@ -78,17 +143,33 @@ def create_job(
     conn: sqlite3.Connection,
     *,
     target: str,
-    summary_prompt: str,
+    summary_prompt: str = "",
     filenames: list[str],
     note_style: str = "",
+    kind: str = "ingest",
+    params: dict[str, Any] | None = None,
 ) -> str:
-    """Record a queued job and one queued item per file. Returns the job id."""
+    """Record a queued job and one queued item per file. Returns the job id.
+
+    ``filenames`` may legitimately be empty: a full reindex does not know what
+    it will touch until it has walked the vault, and records its items
+    afterwards with :func:`add_items`.
+    """
     job_id = uuid.uuid4().hex
     conn.execute(
         "INSERT INTO ingest_jobs "
-        "(id, boot_id, status, target, summary_prompt, note_style, total) "
-        "VALUES (?, ?, 'queued', ?, ?, ?, ?)",
-        (job_id, BOOT_ID, target, summary_prompt, note_style, len(filenames)),
+        "(id, boot_id, status, kind, params, target, summary_prompt, note_style, total) "
+        "VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)",
+        (
+            job_id,
+            BOOT_ID,
+            kind,
+            json.dumps(params) if params is not None else None,
+            target,
+            summary_prompt,
+            note_style,
+            len(filenames),
+        ),
     )
     conn.executemany(
         "INSERT INTO ingest_job_items (job_id, filename, stage) VALUES (?, ?, 'queued')",
@@ -96,6 +177,64 @@ def create_job(
     )
     conn.commit()
     return job_id
+
+
+def merge_params(conn: sqlite3.Connection, job_id: str, values: dict[str, Any]) -> None:
+    """Fold ``values`` into a job's ``params``, keeping what is already there.
+
+    Merged rather than replaced because ``params`` carries both halves of a
+    job's story: the request's inputs, written when the row is created, and
+    the results that have no column of their own -- an exam's ``exam_id``, a
+    generation's written ``path`` -- written when it finishes. Replacing would
+    make the finished row unable to say what was asked for.
+    """
+    row = conn.execute("SELECT params FROM ingest_jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        return
+    merged = _decode_params(row["params"]) or {}
+    merged.update(values)
+    conn.execute("UPDATE ingest_jobs SET params = ? WHERE id = ?", (json.dumps(merged), job_id))
+    conn.commit()
+
+
+def add_items(conn: sqlite3.Connection, job_id: str, items: list[dict[str, Any]]) -> None:
+    """Record files a job only learned about while running, already resolved.
+
+    The full-vault reindex path: ``VaultIndex.reindex_all`` walks the vault
+    itself and hands back per-file counts and errors in one go, so there is no
+    moment at which a 'queued' row for each file would be true. Everything
+    inserted here is therefore already at its terminal stage, and ``total``/
+    ``done`` are recomputed from the rows rather than incremented -- the same
+    reasoning as :func:`advance_item`, so calling this twice for one job
+    cannot double-count.
+    """
+    if items:
+        conn.executemany(
+            "INSERT INTO ingest_job_items "
+            "(job_id, filename, path, stage, chunks, error, failed_stage) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    job_id,
+                    item["filename"],
+                    item.get("path"),
+                    item["stage"],
+                    item.get("chunks", 0),
+                    item.get("error"),
+                    item.get("failed_stage"),
+                )
+                for item in items
+            ],
+        )
+    conn.execute(
+        "UPDATE ingest_jobs SET "
+        "  total = (SELECT COUNT(*) FROM ingest_job_items WHERE job_id = ingest_jobs.id), "
+        "  done = (SELECT COUNT(*) FROM ingest_job_items "
+        f"          WHERE job_id = ingest_jobs.id AND stage IN {_in_clause(TERMINAL_STAGES)}) "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    conn.commit()
 
 
 def start_job(conn: sqlite3.Connection, job_id: str) -> None:
@@ -173,8 +312,14 @@ def get_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
     return job
 
 
-def list_jobs(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
+def list_jobs(
+    conn: sqlite3.Connection, limit: int = 20, *, kind: str | None = None
+) -> list[dict[str, Any]]:
     """Recent jobs, newest first, without their items.
+
+    ``kind=None`` lists every kind. A caller that wants one feature's history
+    passes its kind -- the ingest history panel does, so folding reindexes and
+    study generations into this table did not change what it shows.
 
     Deliberately no per-job item fan-out: the history list shows counts, and a
     caller that wants one job's detail asks for it by id.
@@ -185,27 +330,78 @@ def list_jobs(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]
     pair arbitrary. ``rowid`` is sqlite's implicit insertion counter, so it
     breaks the tie the way ``chat_threads`` uses its AUTOINCREMENT id.
     """
+    where = "WHERE kind = ? " if kind else ""
+    params: tuple[Any, ...] = (kind, limit) if kind else (limit,)
     return [
         _job_row(row)
         for row in conn.execute(
-            "SELECT * FROM ingest_jobs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+            f"SELECT * FROM ingest_jobs {where}ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            params,
         )
     ]
 
 
-def running_job_id(conn: sqlite3.Connection) -> str | None:
-    """The job holding the ingest slot, if any.
+def latest_job(
+    conn: sqlite3.Connection, kind: str, *, finished: bool = False
+) -> dict[str, Any] | None:
+    """The newest job of one kind. ``None`` if there is none.
 
-    One at a time, deliberately: a job loads the embedding model and takes a
-    git snapshot, and two of either at once is the `.git/index.lock` race and
-    a doubled model load. Queued counts as holding it -- the row is written
-    before the thread starts.
+    This is what lets a status endpoint be a *projection* over the table
+    instead of a second, in-memory copy of the same three facts.
+
+    ``finished=True`` skips jobs still in flight, which is a different
+    question and both are asked: "is one running now?" reads the newest row of
+    any status, while "when did the last one finish, and how?" must look past
+    it or a rebuild in progress would erase the previous run's outcome from
+    the readout the moment it started.
     """
+    where = "kind = ? AND finished_at IS NOT NULL" if finished else "kind = ?"
+    row = conn.execute(
+        f"SELECT * FROM ingest_jobs WHERE {where} ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (kind,),
+    ).fetchone()
+    return _job_row(row) if row else None
+
+
+def running_job_id(conn: sqlite3.Connection, kind: str = "ingest") -> str | None:
+    """The job holding ``kind``'s slot, if any -- whatever kind that job is.
+
+    One at a time, deliberately: a job in the 'index' group loads the
+    embedding model, writes the chroma directory and takes a git snapshot, and
+    two of any of those at once is the `.git/index.lock` race and a doubled
+    model load. Queued counts as holding it -- the row is written before the
+    thread starts.
+
+    Kind-aware because the slot belongs to the *resource*, not to the route.
+    An ingest asking this question must be told about a reindex already
+    running, and vice versa; a study generation shares nothing with either and
+    gets ``None`` unconditionally. See :data:`SLOT_GROUPS`.
+    """
+    peers = _slot_peers(kind)
+    if not peers:
+        return None
     row = conn.execute(
         f"SELECT id FROM ingest_jobs WHERE status IN {_in_clause(ACTIVE_STATUSES)} "
-        "ORDER BY rowid LIMIT 1"
+        f"AND kind IN {_in_clause(peers)} ORDER BY rowid LIMIT 1"
     ).fetchone()
     return row["id"] if row else None
+
+
+def running_job(conn: sqlite3.Connection, kind: str = "ingest") -> dict[str, Any] | None:
+    """Like :func:`running_job_id`, but the whole row.
+
+    The reindex route needs the *kind* of the job in its way, not only its id:
+    a second reindex trigger is an idempotent no-op that reports the rebuild
+    already in flight, while an ingest in the way is a 409.
+    """
+    peers = _slot_peers(kind)
+    if not peers:
+        return None
+    row = conn.execute(
+        f"SELECT * FROM ingest_jobs WHERE status IN {_in_clause(ACTIVE_STATUSES)} "
+        f"AND kind IN {_in_clause(peers)} ORDER BY rowid LIMIT 1"
+    ).fetchone()
+    return _job_row(row) if row else None
 
 
 def reconcile_stale_jobs(conn: sqlite3.Connection) -> int:

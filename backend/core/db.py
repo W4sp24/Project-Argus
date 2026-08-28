@@ -292,20 +292,26 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread
     ON chat_messages(thread_id, id);
 
--- One user action ingesting N files. This exists because ingestion had no
--- record at all: `POST /api/ingest` embedded on the request thread and
--- returned a chunk count, `/api/study/upload` returned "indexing in
--- background" and nothing ever said whether it finished, and reindex status
--- was a single in-process object with three fields. None of them could say
--- which file was at which stage, so a slow or partial ingest was
--- indistinguishable from a broken one.
+-- One user action's worth of long-running work: N files ingested, a vault
+-- reindex, a study guide or practice exam generated. The table keeps the
+-- `ingest_` name it was created under rather than being renamed -- a rename
+-- costs a rebuild and buys nothing the `kind` column does not already say.
+--
+-- This exists because that work had no record at all: `POST /api/ingest`
+-- embedded on the request thread and returned a chunk count,
+-- `/api/study/upload` returned "indexing in background" and nothing ever said
+-- whether it finished, `/api/study/guide` awaited a multi-minute generation
+-- inside the request, and reindex status was a single in-process object with
+-- three fields. None of them could say what was at which stage, so slow or
+-- partial work was indistinguishable from broken work.
 --
 -- `boot_id` is what makes a restart recoverable: rows carrying a different
 -- boot id than the running process belong to a job whose thread no longer
 -- exists, so they are reconciled to 'failed' once at startup rather than
 -- polling forever. `automation_runs` has the same problem and solves it with
--- an 'unresolved' status; the in-memory reindex `_State` sidesteps it for
--- free by resetting on restart, which a table does not get.
+-- an 'unresolved' status; the in-memory reindex `_State` this table replaced
+-- sidestepped it for free by resetting on restart, which a table does not get
+-- -- so boot_id reconciliation is what buys that property back.
 CREATE TABLE IF NOT EXISTS ingest_jobs (
     id             TEXT PRIMARY KEY,
     boot_id        TEXT NOT NULL,
@@ -313,6 +319,20 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
     finished_at    TEXT,
     status         TEXT NOT NULL
                    CHECK (status IN ('queued', 'running', 'ok', 'partial', 'failed')),
+    -- Which kind of long-running work this row records. Deliberately NOT in a
+    -- CHECK constraint: SQLite cannot alter one, so every new kind would cost
+    -- a create/copy/drop/rename rebuild of a table that is already the durable
+    -- record of work in flight. The vocabulary lives in
+    -- `ingest.store.JOB_KINDS` instead, where adding to it is a one-line
+    -- change. 'ingest' is the default because every row written before this
+    -- column existed was one.
+    kind           TEXT NOT NULL DEFAULT 'ingest',
+    -- The job's own inputs and results as JSON, for the kinds whose facts have
+    -- no column of their own: a guide's `scope`, an exam's `n`/`difficulty`
+    -- and the `exam_id` it minted, a path-scoped reindex's `paths`. A column
+    -- per kind would be a column that is NULL for every other kind, and the
+    -- set of kinds is expected to grow.
+    params         TEXT,
     target         TEXT NOT NULL,
     summary_prompt TEXT NOT NULL DEFAULT '',
     -- Which of `ingest.notes.NOTE_STYLES` shaped the generated note, or ''
@@ -410,6 +430,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
     ingest_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingest_jobs)")}
     if "note_style" not in ingest_columns:  # migration for pre-note-style DBs
         conn.execute("ALTER TABLE ingest_jobs ADD COLUMN note_style TEXT NOT NULL DEFAULT ''")
+    if "kind" not in ingest_columns:  # migration for pre-generalised-job DBs
+        # Everything recorded before the job store served more than ingestion
+        # was an ingest, which is exactly what the default backfills.
+        conn.execute("ALTER TABLE ingest_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'ingest'")
+    if "params" not in ingest_columns:
+        conn.execute("ALTER TABLE ingest_jobs ADD COLUMN params TEXT")
     item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingest_job_items)")}
     if "failed_stage" not in item_columns:  # migration for pre-failed-stage DBs
         conn.execute("ALTER TABLE ingest_job_items ADD COLUMN failed_stage TEXT")

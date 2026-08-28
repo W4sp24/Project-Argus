@@ -98,6 +98,11 @@ def create_app(
     so tests run with fakes instead of the agent SDK / embedding model / a live
     provider. ``scheduler_factory`` is only passed by the module-level app
     below — test apps never start background threads.
+
+    ``ingest_job_runner`` keeps its name but is no longer ingest-only: it is
+    how *every* long-running job is scheduled (ingest, reindex, study
+    generation), because they all share one durable store and a test that
+    wants one of them deterministic wants all of them deterministic.
     """
     from contextlib import asynccontextmanager
 
@@ -228,7 +233,12 @@ def create_app(
     app.include_router(build_notes_router(resolved))
     app.include_router(build_journal_router(resolved))
     app.include_router(
-        build_study_router(resolved, generator or _default_generator("study"), index)
+        build_study_router(
+            resolved,
+            generator or _default_generator("study"),
+            index,
+            job_runner=ingest_job_runner,
+        )
     )
     app.include_router(
         build_ingest_router(
@@ -243,7 +253,7 @@ def create_app(
     app.include_router(build_flashcards_router(resolved))
     app.include_router(build_quick_links_router(resolved))
     app.include_router(build_search_router(resolved, index))
-    app.include_router(build_index_router(resolved, index))
+    app.include_router(build_index_router(resolved, index, job_runner=ingest_job_runner))
     app.include_router(build_review_router(resolved, planner or _default_planner()))
     app.include_router(build_briefing_router(resolved, briefing_composer or _default_composer()))
     app.include_router(build_insights_router(resolved))

@@ -9,13 +9,16 @@ import logging
 import re
 import sqlite3
 import threading
+from collections.abc import Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.features.ingest import store
 from backend.features.study.corpus import (
     CourseInfo,
     CourseSourceInfo,
@@ -25,6 +28,7 @@ from backend.features.study.corpus import (
 )
 from backend.features.study.deletes import delete_course, delete_exam
 from backend.features.study.grader import AttemptResult, grade_attempt, load_exam
+from backend.features.study.jobs import run_exam_job, run_guide_job
 from backend.features.study.practice_exam import (
     Generator,
     StudyError,
@@ -50,6 +54,8 @@ class GuideRequest(BaseModel):
     # sends; [] means the user unticked everything and is refused rather than
     # silently widened back to the course.
     sources: list[str] | None = None
+    # Ask for a job instead of an answer. See `BACKGROUND_NOTE`.
+    background: bool = False
 
 
 class ExamRequest(BaseModel):
@@ -59,6 +65,24 @@ class ExamRequest(BaseModel):
     difficulty: str = "medium"
     model: str | None = None
     sources: list[str] | None = None
+    background: bool = False
+
+
+# Why generation has two response shapes rather than one.
+#
+# Generating a guide or an exam takes minutes, and it used to be a bare
+# ``await`` held open inside the request: navigate away and the backend still
+# wrote the file, but nothing ever told the UI where it went. ``background:
+# true`` makes it a row in the shared job store instead — 202 with a
+# ``job_id``, polled at ``GET /api/ingest/jobs/{job_id}``, with the written
+# path on the single item's ``summary_path`` and (for an exam) the
+# ``exam_id`` in the job's ``params``.
+#
+# The synchronous shape is the default and is untouched, because ``web/``
+# still reads ``{"path": ...}`` and ``{"exam_id": ..., "path": ...}``
+# straight out of the response body. A flag rather than a sibling route so
+# the request validation — the sanitised course, the 422s about an empty or
+# unindexed selection — has exactly one implementation for both.
 
 
 class ExamSummary(BaseModel):
@@ -97,13 +121,25 @@ class ExamDeleteSummary(BaseModel):
     attempts_removed: int
 
 
+def _default_job_runner(run: Callable[[], None]) -> None:
+    """Run a job on a daemon thread. Replaced in tests by a deterministic one."""
+    threading.Thread(target=run, daemon=True).start()
+
+
 def build_study_router(
     settings: Settings,
     generator: Generator,
     index_factory: Any,
+    job_runner: Callable[[Callable[[], None]], None] | None = None,
 ) -> APIRouter:
-    """All /api/study routes. ``index_factory() -> VaultIndex-like``."""
+    """All /api/study routes. ``index_factory() -> VaultIndex-like``.
+
+    ``job_runner`` is the same injection the ingest router takes, and for the
+    same reason: a test that spawned the real daemon thread would be testing
+    ``threading``.
+    """
     router = APIRouter(prefix="/api/study")
+    run_job = job_runner or _default_job_runner
 
     def db() -> sqlite3.Connection:
         conn = connect(settings.db_path)
@@ -235,8 +271,27 @@ def build_study_router(
 
         return run
 
+    def _accept(kind: str, course: str, filename: str, params: dict[str, Any]) -> str:
+        """Write the queued job row for one generation. Returns its id.
+
+        No single-flight check: study generation shares no resource with an
+        ingest or a reindex, and nothing stops two of these from running
+        together -- see ``ingest.store.SLOT_GROUPS``.
+        """
+        conn = db()
+        try:
+            return store.create_job(
+                conn,
+                target=settings.taxonomy.course_study(course),
+                filenames=[filename],
+                kind=kind,
+                params=params,
+            )
+        finally:
+            conn.close()
+
     @router.post("/guide")
-    async def guide(request: GuideRequest) -> dict[str, str]:
+    async def guide(request: GuideRequest) -> Any:
         # Sanitised for the same reason `course_sources_route` sanitises, and
         # it was not: `course` reaches `tax.course_study(course)`, which builds
         # a filesystem path that is then mkdir'd and written to. Not reachable
@@ -244,7 +299,28 @@ def build_study_router(
         # the empty corpus 422s first -- but that is an unrelated guard
         # standing in front of a path built from unvalidated input.
         course = SAFE_NAME_RE.sub("", request.course)
+        # Read here, not in the job, on purpose: "none of the selected sources
+        # are indexed" is a 422 about *this request*, and answering it with a
+        # 202 and a job that fails a minute later is strictly worse.
         corpus = _corpus_for(course, request.sources)
+        if request.background:
+            job_id = _accept(
+                "guide",
+                course,
+                f"{course} study guide",
+                {"course": course, "scope": request.scope, "model": request.model},
+            )
+            run_job(
+                lambda: run_guide_job(
+                    job_id,
+                    settings=settings,
+                    generator=_generator_for(request.model),
+                    corpus=corpus,
+                    course=course,
+                    scope=request.scope,
+                )
+            )
+            return JSONResponse(status_code=202, content={"job_id": job_id})
         try:
             path = await generate_study_guide(
                 settings.vault_path,
@@ -259,9 +335,35 @@ def build_study_router(
         return {"path": path}
 
     @router.post("/exam")
-    async def exam(request: ExamRequest) -> dict[str, Any]:
+    async def exam(request: ExamRequest) -> Any:
         course = SAFE_NAME_RE.sub("", request.course)
         corpus = _corpus_for(course, request.sources)
+        if request.background:
+            job_id = _accept(
+                "exam",
+                course,
+                f"{course} practice exam",
+                {
+                    "course": course,
+                    "topics": request.topics,
+                    "n": request.n,
+                    "difficulty": request.difficulty,
+                    "model": request.model,
+                },
+            )
+            run_job(
+                lambda: run_exam_job(
+                    job_id,
+                    settings=settings,
+                    generator=_generator_for(request.model),
+                    corpus=corpus,
+                    course=course,
+                    topics=request.topics,
+                    n=request.n,
+                    difficulty=request.difficulty,
+                )
+            )
+            return JSONResponse(status_code=202, content={"job_id": job_id})
         conn = db()
         try:
             exam_id, built, path = await generate_practice_exam(

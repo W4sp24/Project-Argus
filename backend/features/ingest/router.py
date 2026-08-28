@@ -134,6 +134,54 @@ class JobAccepted(BaseModel):
     job_id: str
 
 
+class JobItem(BaseModel):
+    """One file inside a job, as the progress readout renders it."""
+
+    id: int
+    filename: str
+    path: str | None = None
+    stage: str
+    chunks: int
+    summary_path: str | None = None
+    error: str | None = None
+    failed_stage: str | None = None
+
+
+class JobSummary(BaseModel):
+    """One row of ``GET /api/ingest/jobs`` — no items, by design.
+
+    Declared as a model rather than left to ``dict[str, Any]`` because these
+    two routes are about to gain clients beyond the ingest panel (study
+    generations and reindexes are jobs now), and an undeclared response is a
+    contract that only exists in ``web/lib/api.ts``.
+    """
+
+    id: str
+    created_at: str
+    finished_at: str | None = None
+    status: str
+    kind: str
+    #: Inputs and results with no column of their own — a guide's ``scope``, an
+    #: exam's ``exam_id``. ``None`` for a plain ingest.
+    params: dict[str, Any] | None = None
+    target: str
+    summary_prompt: str
+    note_style: str
+    total: int
+    done: int
+    error: str | None = None
+
+
+class JobDetail(JobSummary):
+    """``GET /api/ingest/jobs/{job_id}`` — the summary plus every file."""
+
+    items: list[JobItem]
+
+
+class JobListResponse(BaseModel):
+    jobs: list[JobSummary]
+
+
 class IngestResponse(BaseModel):
     """POST /api/ingest result: where the file landed and how indexing went."""
 
@@ -527,10 +575,16 @@ def build_ingest_router(
             # One job at a time: two would mean two embedding models loaded at
             # once and two concurrent `git add -A` runs, and _git_snapshot runs
             # git with check=False, so the loser of that race fails silently.
-            if store.running_job_id(conn) is not None:
+            # Kind-aware: a reindex holds the same slot, because it loads the
+            # same embedding model and writes the same chroma directory. That
+            # is new -- the two used to hold independent locks and could run
+            # at once. See `store.SLOT_GROUPS`.
+            blocking = store.running_job(conn, "ingest")
+            if blocking is not None:
+                what = "a reindex" if blocking["kind"] == "reindex" else "an ingest"
                 raise HTTPException(
                     status_code=409,
-                    detail="an ingest is already running — wait for it to finish",
+                    detail=f"{what} is already running — wait for it to finish",
                 )
             job_id = store.create_job(
                 conn,
@@ -565,17 +619,25 @@ def build_ingest_router(
         )
         return JobAccepted(job_id=job_id)
 
-    @router.get("/ingest/jobs")
-    def list_ingest_jobs() -> dict[str, Any]:
+    @router.get("/ingest/jobs", response_model=JobListResponse)
+    def list_ingest_jobs(kind: str = "ingest") -> dict[str, Any]:
+        """Recent jobs of one ``kind``; ``kind=all`` for every kind.
+
+        Defaults to ``ingest`` rather than to everything: this table now also
+        holds reindexes and study generations, and the history panel that
+        reads this route asks for ingest history. Widening the default would
+        have changed what an untouched frontend displays.
+        """
         conn = connect(settings.db_path)
         try:
             init_schema(conn)
-            return {"jobs": store.list_jobs(conn)}
+            return {"jobs": store.list_jobs(conn, kind=None if kind == "all" else kind)}
         finally:
             conn.close()
 
-    @router.get("/ingest/jobs/{job_id}")
+    @router.get("/ingest/jobs/{job_id}", response_model=JobDetail)
     def get_ingest_job(job_id: str) -> dict[str, Any]:
+        """One job of any kind, by id — this is the poll endpoint for all of them."""
         conn = connect(settings.db_path)
         try:
             init_schema(conn)

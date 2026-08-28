@@ -414,3 +414,55 @@ def test_omitting_the_style_keeps_the_old_prompt_only_behaviour(client: TestClie
     job = client.get(f"/api/ingest/jobs/{response.json()['job_id']}").json()
     assert job["note_style"] == ""
     assert job["items"][0]["summary_path"] == "00-Inbox/files/lecture.summary.md"
+
+
+# --- the job routes have a declared contract ----------------------------------
+
+
+def test_the_job_routes_declare_their_shape(client: TestClient) -> None:
+    """These two were the only routes in this router without a `response_model`,
+    and they are about to gain clients: a reindex and a study generation are
+    rows in the same table now, polled through the same endpoint. An
+    undeclared response is a contract that exists only in `web/lib/api.ts`,
+    which is how a field gets renamed on one side and nowhere else."""
+    schema = client.get("/openapi.json").json()
+    listing = schema["paths"]["/api/ingest/jobs"]["get"]["responses"]["200"]["content"]
+    detail = schema["paths"]["/api/ingest/jobs/{job_id}"]["get"]["responses"]["200"]["content"]
+
+    assert "JobListResponse" in listing["application/json"]["schema"]["$ref"]
+    assert "JobDetail" in detail["application/json"]["schema"]["$ref"]
+
+    job_id = _upload(client, [("a.md", b"# A\n")], target="00-Inbox/files").json()["job_id"]
+    job = client.get(f"/api/ingest/jobs/{job_id}").json()
+    # The two new columns are on the wire, not just in the table: `_job_row`
+    # hand-lists every field, so a column it does not name is invisible here.
+    assert job["kind"] == "ingest"
+    assert job["params"] is None
+
+
+def test_a_job_is_refused_while_a_reindex_holds_the_index(vault: Path) -> None:
+    """The behaviour change, from the ingest side. An ingest and a reindex used
+    to hold two independent single-flight locks and could run at once against
+    the same embedding model and the same chroma directory -- with two
+    overlapping `git add -A` runs racing on `.git/index.lock`, which
+    `_git_snapshot` runs with `check=False` and so never reports losing.
+
+    409 rather than a queue: it is the idiom this router already uses for
+    "one at a time", and the message has to say which one is in the way,
+    because "wait for the ingest to finish" when the user started a reindex
+    reads as a bug."""
+    app = create_app(
+        Settings(_vault_path=vault),
+        generator=fake_generator,
+        index_factory=FakeIndex,
+        # Never actually runs the reindex, so it stays in flight.
+        ingest_job_runner=lambda run: None,
+    )
+    client = TestClient(app)
+    assert client.post("/api/index/reindex").status_code == 202
+
+    response = _upload(client, [("a.md", b"# A\n")], target="00-Inbox/files")
+
+    assert response.status_code == 409
+    assert "reindex" in response.json()["detail"]
+    assert not (vault / "00-Inbox" / "files" / "a.md").is_file()

@@ -219,3 +219,154 @@ def test_a_database_predating_note_style_is_migrated(tmp_path):
         assert store.get_job(second, job_id)["note_style"] == ""
     finally:
         second.close()
+
+
+# --- one store, several kinds of job -------------------------------------------
+
+
+def test_a_jobs_kind_and_params_survive_the_round_trip(conn: sqlite3.Connection) -> None:
+    """`_job_row` hand-lists every field, so a column it does not name is
+    invisible on the wire no matter what the schema says. These two are the
+    whole reason the store can serve more than ingestion, so they are the two
+    most worth pinning."""
+    job_id = store.create_job(
+        conn,
+        target="15-Courses/CS301/study",
+        filenames=["CS301 practice exam"],
+        kind="exam",
+        params={"course": "CS301", "n": 5},
+    )
+
+    job = store.get_job(conn, job_id)
+
+    assert job["kind"] == "exam"
+    # A dict on the way out, not the JSON string it is stored as: a route that
+    # had to json.loads this itself is a route that would eventually forget to.
+    assert job["params"] == {"course": "CS301", "n": 5}
+
+
+def test_an_ingest_job_still_defaults_to_the_ingest_kind(conn: sqlite3.Connection) -> None:
+    """Every existing caller passes no `kind` at all."""
+    job_id = store.create_job(conn, target="00-Inbox/files", filenames=["a.md"])
+
+    job = store.get_job(conn, job_id)
+    assert job["kind"] == "ingest"
+    assert job["params"] is None
+
+
+def test_merging_params_keeps_the_inputs_the_job_was_created_with(
+    conn: sqlite3.Connection,
+) -> None:
+    """A finished job has to be able to say both what was asked for and what
+    came out. Replacing rather than merging would leave a completed exam job
+    holding an `exam_id` and no memory of the difficulty it was generated at,
+    which is exactly the history the row exists to keep."""
+    job_id = store.create_job(
+        conn,
+        target="15-Courses/CS301/study",
+        filenames=["CS301 practice exam"],
+        kind="exam",
+        params={"course": "CS301", "difficulty": "hard"},
+    )
+
+    store.merge_params(conn, job_id, {"exam_id": 7, "path": "15-Courses/CS301/study/exam.md"})
+
+    assert store.get_job(conn, job_id)["params"] == {
+        "course": "CS301",
+        "difficulty": "hard",
+        "exam_id": 7,
+        "path": "15-Courses/CS301/study/exam.md",
+    }
+
+
+def test_items_can_be_added_after_the_job_started_and_the_counts_follow(
+    conn: sqlite3.Connection,
+) -> None:
+    """A full reindex does not know which files it will touch until it has
+    walked the vault, so its rows cannot exist up front. `total`/`done` are
+    recomputed from the rows rather than incremented, so recording twice
+    cannot double-count them."""
+    job_id = store.create_job(conn, target="", filenames=[], kind="reindex")
+
+    store.add_items(
+        conn,
+        job_id,
+        [
+            {"filename": "a.md", "path": "notes/a.md", "stage": "done", "chunks": 3},
+            {
+                "filename": "b.md",
+                "path": "notes/b.md",
+                "stage": "failed",
+                "error": "boom",
+                "failed_stage": "indexing",
+            },
+        ],
+    )
+
+    job = store.get_job(conn, job_id)
+    assert job["total"] == 2
+    assert job["done"] == 2, "both reached a terminal stage"
+    assert [item["chunks"] for item in job["items"]] == [3, 0]
+    assert job["items"][1]["error"] == "boom"
+
+
+# --- the single-flight slot is a property of the resource, not the route -------
+
+
+def test_an_ingest_and_a_reindex_contend_for_one_slot(conn: sqlite3.Connection) -> None:
+    """They load the same embedding model and write the same chroma directory,
+    and before the two job models were folded together they held *independent*
+    locks -- so both could run at once, and `writer._git_snapshot` runs git
+    with `check=False`, meaning the loser of the resulting `.git/index.lock`
+    race failed silently."""
+    reindex_id = store.create_job(conn, target="", filenames=[], kind="reindex")
+
+    assert store.running_job_id(conn, "ingest") == reindex_id
+    assert store.running_job_id(conn, "reindex") == reindex_id
+
+    store.finish_job(conn, reindex_id, status="ok")
+
+    assert store.running_job_id(conn, "ingest") is None
+
+
+def test_a_study_generation_neither_blocks_nor_is_blocked(conn: sqlite3.Connection) -> None:
+    """A guide is an LLM call plus a write into the course's `study/` folder --
+    the one sanctioned exception to I1, so it takes no git snapshot -- and its
+    corpus is read in the request handler before the job exists. It shares no
+    resource with an ingest, so making a user wait for one to run the other
+    would be a restriction with nothing behind it."""
+    store.create_job(conn, target="", filenames=[], kind="ingest")
+
+    assert store.running_job_id(conn, "guide") is None
+
+    guide_id = store.create_job(
+        conn, target="15-Courses/CS301/study", filenames=["g"], kind="guide"
+    )
+
+    assert store.running_job_id(conn, "guide") is None
+    assert guide_id not in (store.running_job_id(conn, "ingest"),)
+
+
+def test_the_history_can_be_asked_for_one_kind(conn: sqlite3.Connection) -> None:
+    """The ingest panel's history must not start showing reindexes just
+    because they now share a table with ingests."""
+    ingest_id = store.create_job(conn, target="00-Inbox/files", filenames=["a.md"])
+    store.create_job(conn, target="", filenames=[], kind="reindex")
+
+    assert [job["id"] for job in store.list_jobs(conn, kind="ingest")] == [ingest_id]
+    assert len(store.list_jobs(conn)) == 2, "no kind means every kind"
+
+
+def test_the_latest_finished_job_is_not_hidden_by_one_still_running(
+    conn: sqlite3.Connection,
+) -> None:
+    """`IndexStatus.last_run` is a projection over this. Reading it off the
+    newest row of any status would blank the previous run's outcome the
+    instant a new rebuild started, which is the moment a user is most likely
+    to be looking at it."""
+    first = store.create_job(conn, target="", filenames=[], kind="reindex")
+    store.finish_job(conn, first, status="ok")
+    second = store.create_job(conn, target="", filenames=[], kind="reindex")
+
+    assert store.latest_job(conn, "reindex")["id"] == second
+    assert store.latest_job(conn, "reindex", finished=True)["id"] == first

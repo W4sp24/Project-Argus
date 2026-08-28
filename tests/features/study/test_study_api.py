@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -406,6 +407,183 @@ def test_upload_dedupes_rather_than_overwriting(client: TestClient, tmp_path: Pa
 
     materials = tmp_path / "vault" / "15-Courses" / "CS201" / "materials"
     assert {path.name for path in materials.iterdir()} == {"deck.pdf", "deck-2.pdf"}
+
+
+# --- generation as a job ------------------------------------------------------
+
+
+def _blocking_runner(run) -> None:
+    """Run the job to completion before the request returns -- on a thread.
+
+    The ingest job tests use `lambda run: run()`, which works there because
+    `POST /api/ingest/jobs` is a synchronous `def` and FastAPI already runs it
+    off the event loop. `/api/study/guide` is `async def` -- it has to be, the
+    synchronous path awaits the generator inline -- so a job body calling
+    `asyncio.run` from inside it would be calling it from inside a running
+    loop. A thread is where the production runner puts the job anyway; joining
+    it is what makes the assertions here deterministic instead of a race.
+    """
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join(timeout=30)
+
+
+@pytest.fixture()
+def job_client(tmp_path: Path) -> TestClient:
+    vault = tmp_path / "vault"
+    (vault / "15-Courses" / "CS201" / "materials").mkdir(parents=True)
+    (vault / "15-Courses" / "CS201" / "course.md").write_text(
+        "---\ntitle: Algorithms\n---\n# CS201\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "init"], cwd=vault, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "init"],
+        cwd=vault,
+        capture_output=True,
+        check=True,
+    )
+    app = create_app(
+        Settings(_vault_path=vault),
+        generator=fake_generator,
+        index_factory=FakeIndex,
+        ingest_job_runner=_blocking_runner,
+    )
+    return TestClient(app)
+
+
+def test_a_background_guide_is_accepted_as_a_job(job_client: TestClient) -> None:
+    """Generation takes minutes and used to be a bare `await` held open inside
+    the request: navigating away or reloading cancelled nothing -- the backend
+    still generated the guide and still wrote it into the vault -- but the
+    browser that asked for it never learned where it landed, and nothing
+    anywhere recorded that it had happened."""
+    response = job_client.post(
+        "/api/study/guide", json={"course": "CS201", "scope": "midterm", "background": True}
+    )
+
+    assert response.status_code == 202
+    assert response.json()["job_id"]
+
+
+def test_the_written_guide_is_retrievable_from_the_finished_job(
+    job_client: TestClient, tmp_path: Path
+) -> None:
+    """The whole point of the 202: the path the synchronous shape returned in
+    its body has to still be reachable by a client that has since reloaded."""
+    job_id = job_client.post(
+        "/api/study/guide", json={"course": "CS201", "scope": "midterm", "background": True}
+    ).json()["job_id"]
+
+    job = job_client.get(f"/api/ingest/jobs/{job_id}").json()
+
+    assert job["kind"] == "guide"
+    assert job["status"] == "ok"
+    path = job["items"][0]["summary_path"]
+    assert path.startswith("15-Courses/CS201/study/")
+    assert (tmp_path / "vault" / path).is_file()
+    # Mirrored into params as well, so a caller polling for a *result* reads
+    # one place regardless of which kind of job it started.
+    assert job["params"]["path"] == path
+    assert job["params"]["scope"] == "midterm"
+
+
+def test_a_background_exam_carries_its_exam_id_in_the_jobs_params(
+    job_client: TestClient, tmp_path: Path
+) -> None:
+    """`exam_id` is the only handle the quiz UI has and it has no column
+    anywhere in the job tables -- without somewhere to put it, a finished exam
+    job could say where the markdown went but not how to sit the exam."""
+    job_id = job_client.post(
+        "/api/study/exam", json={"course": "CS201", "n": 1, "background": True}
+    ).json()["job_id"]
+
+    job = job_client.get(f"/api/ingest/jobs/{job_id}").json()
+
+    assert job["status"] == "ok"
+    exam_id = job["params"]["exam_id"]
+    assert job_client.get(f"/api/study/exams/{exam_id}").status_code == 200
+    assert (tmp_path / "vault" / job["params"]["path"]).is_file()
+    assert job["items"][0]["stage"] == "done"
+
+
+def test_the_synchronous_shape_is_untouched_by_default(job_client: TestClient) -> None:
+    """`web/` reads `{"path": ...}` and `{"exam_id": ...}` straight out of the
+    response body, and this change never touched `web/`. Omitting the flag --
+    which is all any existing client does -- must behave exactly as before."""
+    guide = job_client.post("/api/study/guide", json={"course": "CS201", "scope": "midterm"})
+    exam = job_client.post("/api/study/exam", json={"course": "CS201", "n": 1})
+
+    assert guide.status_code == 200
+    assert guide.json()["path"].startswith("15-Courses/CS201/study/")
+    assert exam.status_code == 200
+    assert set(exam.json()) == {"exam_id", "path", "questions"}
+
+
+def test_a_selection_that_matches_nothing_is_still_a_422_not_a_doomed_job(
+    job_client: TestClient,
+) -> None:
+    """The corpus is read in the request handler, before the job row exists,
+    on purpose: "none of the selected sources are indexed" is a fact about
+    *this request*, and answering it with a 202 and a job that fails a minute
+    later is strictly worse for the user."""
+    response = job_client.post(
+        "/api/study/guide",
+        json={
+            "course": "CS201",
+            "sources": ["15-Courses/CS201/materials/not-indexed.pdf"],
+            "background": True,
+        },
+    )
+
+    assert response.status_code == 422
+    assert job_client.get("/api/ingest/jobs", params={"kind": "guide"}).json()["jobs"] == []
+
+
+def test_a_generation_that_fails_records_why_on_its_own_row(tmp_path: Path) -> None:
+    """There is no status code left to return once a 202 has gone out, so the
+    reason a generation failed has to reach the user through the job or not at
+    all. It used to reach them through a 422 they were still waiting on."""
+
+    async def empty_generator(prompt: str, model: str | None = None) -> str:
+        return "   "
+
+    vault = tmp_path / "vault"
+    (vault / "15-Courses" / "CS201" / "materials").mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=vault, capture_output=True, check=True)
+    client = TestClient(
+        create_app(
+            Settings(_vault_path=vault),
+            generator=empty_generator,
+            index_factory=FakeIndex,
+            ingest_job_runner=_blocking_runner,
+        )
+    )
+
+    job_id = client.post(
+        "/api/study/guide", json={"course": "CS201", "background": True}
+    ).json()["job_id"]
+
+    job = client.get(f"/api/ingest/jobs/{job_id}").json()
+    assert job["status"] == "failed"
+    assert "empty guide" in job["error"]
+    assert job["items"][0]["stage"] == "failed"
+    assert job["items"][0]["failed_stage"] == "summarizing"
+
+
+def test_two_generations_do_not_block_each_other(job_client: TestClient) -> None:
+    """A guide shares no resource with an ingest or with another generation: no
+    embedding model, no chroma directory, and no git snapshot (study output is
+    the one sanctioned exception to I1). Putting it in the index single-flight
+    group would be a restriction with nothing behind it."""
+    first = job_client.post(
+        "/api/study/guide", json={"course": "CS201", "scope": "midterm", "background": True}
+    )
+    second = job_client.post(
+        "/api/study/exam", json={"course": "CS201", "n": 1, "background": True}
+    )
+
+    assert first.status_code == 202
+    assert second.status_code == 202
 
 
 def test_a_generated_note_is_marked_as_written_by_argus(client: TestClient, tmp_path: Path) -> None:
