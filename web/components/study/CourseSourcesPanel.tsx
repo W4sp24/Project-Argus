@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Panel from "@/components/Panel";
 import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress from "@/components/sources/IngestJobProgress";
@@ -52,6 +52,7 @@ export default function CourseSourcesPanel({
     selected,
     toggle,
     selectAll,
+    selectRange,
     selectNone,
     selectAllInCourse,
     selectNoneInCourse,
@@ -71,6 +72,32 @@ export default function CourseSourcesPanel({
   useEffect(() => {
     if (status === "ok" || status === "partial" || status === "failed") refresh();
   }, [status, refresh]);
+
+  // The rows in the order they appear, flattened across zone groups. A range
+  // has to be computed over what is on screen: doing it over `available`
+  // would tick rows the filter is hiding, which is exactly the ALL/NONE bug
+  // in a new place.
+  const ordered = useMemo(
+    () => ZONES.flatMap(({ key }) => visible.filter((source) => source.zone === key)),
+    [visible],
+  );
+  const lastToggled = useRef<string | null>(null);
+
+  function pick(path: string, event: { shiftKey: boolean }) {
+    const anchor = lastToggled.current;
+    if (event.shiftKey && anchor && anchor !== path) {
+      const from = ordered.findIndex((source) => source.path === anchor);
+      const to = ordered.findIndex((source) => source.path === path);
+      if (from !== -1 && to !== -1) {
+        const [start, end] = from < to ? [from, to] : [to, from];
+        selectRange(ordered.slice(start, end + 1).map((source) => source.path));
+        lastToggled.current = path;
+        return;
+      }
+    }
+    lastToggled.current = path;
+    toggle(path);
+  }
 
   const selectedCount = available.filter((source) => selected.has(source.path)).length;
 
@@ -134,6 +161,12 @@ export default function CourseSourcesPanel({
           </p>
         )}
 
+        {available.length > 1 && (
+          <p className="mb-2 font-mono text-micro text-ink-muted">
+            shift-click to select a run
+          </p>
+        )}
+
         {selectedCount === 0 && available.length > 0 && (
           <p className="mb-2 font-mono text-meta text-warn">
             Nothing selected — chat and STUDIO have nothing to read.
@@ -186,7 +219,7 @@ export default function CourseSourcesPanel({
                         role="checkbox"
                         aria-checked={selected.has(source.path)}
                         aria-label={`Use ${source.title} as a source`}
-                        onClick={() => toggle(source.path)}
+                        onClick={(event) => pick(source.path, event)}
                         className="flex w-full items-start gap-2 px-2.5 py-2 text-left"
                       >
                         <span

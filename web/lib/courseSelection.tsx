@@ -60,6 +60,8 @@ export interface CourseSelection {
   toggle: (path: string) => void;
   /** Tick every *visible* row, leaving anything the filter hides alone. */
   selectAll: () => void;
+  /** Tick a run of paths at once (shift-click), given in on-screen order. */
+  selectRange: (paths: string[]) => void;
   /** Untick every *visible* row, leaving anything the filter hides alone. */
   selectNone: () => void;
   /** The escape hatch: the whole course, filter or no filter. */
@@ -251,6 +253,20 @@ export function CourseSelectionProvider({ code, children }: { code: string; chil
     [commit, visible],
   );
 
+  /** Tick a contiguous run, for shift-click. The caller passes the paths it
+   * can actually see, in the order they are on screen -- computing a range
+   * over `available` instead would re-create A4 in a new place, ticking rows
+   * the filter is hiding. */
+  const selectRange = useCallback(
+    (paths: string[]) =>
+      commit((current) => {
+        const next = new Set(current);
+        for (const path of paths) next.add(path);
+        return next;
+      }),
+    [commit],
+  );
+
   const selectAllInCourse = useCallback(
     () => commit(() => new Set(available.map((source) => source.path))),
     [available, commit],
@@ -272,6 +288,7 @@ export function CourseSelectionProvider({ code, children }: { code: string; chil
       paths: available.map((source) => source.path).filter((path) => selected.has(path)),
       toggle,
       selectAll,
+      selectRange,
       selectNone,
       selectAllInCourse,
       selectNoneInCourse,
@@ -287,6 +304,7 @@ export function CourseSelectionProvider({ code, children }: { code: string; chil
       selected,
       toggle,
       selectAll,
+      selectRange,
       selectNone,
       selectAllInCourse,
       selectNoneInCourse,

@@ -396,3 +396,36 @@ test("a source row's toggle target is the whole row, not a 14px box", async ({ p
   await expect(rowBoxes).toHaveCount(1);
   await expect(rowBoxes).toHaveAttribute("aria-label", /^Use .* as a source$/);
 });
+
+test("shift-click ticks a run, and only the rows on screen", async ({ page }) => {
+  // Picking lectures 3-8 out of 40 meant eight separate clicks on a 14px box,
+  // which at the scale this feature is designed for -- its own comments talk
+  // about "3 files out of 200" -- becomes the dominant cost of using it.
+  //
+  // The hazard the audit names when adding it: a range computed over the full
+  // list rather than the visible one re-creates the ALL-under-a-filter bug in
+  // a new place. This asserts the range is bounded by what is on screen.
+  await page.addInitScript(() => window.localStorage.clear());
+  await page.goto("/study");
+  await page.getByRole("link", { name: "HUB →" }).click();
+
+  // Ingests its own rows so it does not depend on what an earlier spec left
+  // behind -- running this file alone, CS000's rail is empty.
+  for (const name of ["e2e-run-a", "e2e-run-b", "e2e-run-c"]) {
+    await ingestProbe(page, name);
+  }
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const boxes = sources.getByRole("checkbox");
+  await expect(boxes.first()).toBeVisible({ timeout: 15_000 });
+  const total = await boxes.count();
+  expect(total).toBeGreaterThanOrEqual(3);
+
+  await sources.getByRole("button", { name: "NONE" }).click();
+  await expect(page.getByText(`SOURCES · 0/${total} selected`)).toBeVisible();
+
+  await boxes.first().click();
+  await boxes.nth(2).click({ modifiers: ["Shift"] });
+
+  await expect(page.getByText(`SOURCES · 3/${total} selected`)).toBeVisible();
+});
