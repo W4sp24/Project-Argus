@@ -462,3 +462,49 @@ def test_deferring_the_snapshot_still_refuses_a_protected_zone(vault: Path) -> N
     """Skipping the snapshot must not skip the path guard (I3)."""
     with pytest.raises(WriterForbidden):
         save_ingest_file(vault, "99-Private", "leak.md", b"# No\n", snapshot=False)
+
+
+def _commit_count(vault) -> int:
+    return int(
+        subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=vault,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    )
+
+
+def test_a_batch_delete_takes_one_snapshot_not_one_each(tmp_path):
+    """One user action, one undo point. `_git_snapshot` runs git with
+    check=False, so two snapshots racing on .git/index.lock lose one of them
+    silently -- which is I2 broken with nothing to show for it. Deleting N
+    files therefore has to snapshot once, before the first unlink, the same
+    way save_ingest_file's snapshot=False does for a batch ingest."""
+    vault = _make_vault(tmp_path)
+    inbox = vault / "00-Inbox"
+    inbox.mkdir()
+    for name in ("a.md", "b.md", "c.md"):
+        (inbox / name).write_text("bye", encoding="utf-8")
+    before = _commit_count(vault)
+
+    writer.snapshot_vault(vault, "delete 3 sources")
+    for name in ("a.md", "b.md", "c.md"):
+        writer.delete_note(vault, f"00-Inbox/{name}", snapshot=False, log=False)
+
+    assert _commit_count(vault) == before + 1
+    assert not any((inbox / name).exists() for name in ("a.md", "b.md", "c.md"))
+
+
+def test_delete_note_is_not_markdown_specific(tmp_path):
+    """It is the single write path for removing a *source*, which is a PDF as
+    often as a note -- the guard and the unlink do not care about the suffix."""
+    vault = _make_vault(tmp_path)
+    (vault / "00-Inbox" / "files").mkdir(parents=True)
+    pdf = vault / "00-Inbox" / "files" / "lecture.pdf"
+    pdf.write_bytes(b"%PDF-1.4 not really")
+
+    writer.delete_note(vault, "00-Inbox/files/lecture.pdf")
+
+    assert not pdf.exists()

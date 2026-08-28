@@ -555,15 +555,36 @@ def edit_note(
     return summary
 
 
-def delete_note(vault_path: Path, rel_path: str, *, taxonomy: Taxonomy | None = None) -> None:
-    """Delete one note (user-initiated); the pre-apply snapshot is the undo."""
+def delete_note(
+    vault_path: Path,
+    rel_path: str,
+    *,
+    taxonomy: Taxonomy | None = None,
+    snapshot: bool = True,
+    log: bool = True,
+) -> None:
+    """Delete one file (user-initiated); the pre-apply snapshot is the undo.
+
+    ``snapshot=False`` is the counterpart to :func:`save_ingest_file`'s: a
+    caller deleting N files in one user action takes :func:`snapshot_vault`
+    once, before the first unlink, instead of N times inside the loop.
+    ``_git_snapshot`` runs git with ``check=False``, so two snapshots racing on
+    ``.git/index.lock`` lose one of them *silently* -- which is I2 broken with
+    nothing to show for it.
+
+    Despite the name it is not markdown-specific: it guards and unlinks any
+    path in a user-editable zone, which is what lets a source of any type be
+    deleted through the same single write path (I1).
+    """
     tax = taxonomy or active_taxonomy()
     note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     if not note.is_file():
         raise WriterMissing(f"{rel_path} does not exist")
-    _git_snapshot(vault_path, f"delete note {rel_path}")
+    if snapshot:
+        _git_snapshot(vault_path, f"delete note {rel_path}")
     note.unlink()
-    _argus_log(vault_path, f"deleted note {rel_path}", taxonomy=tax)
+    if log:
+        _argus_log(vault_path, f"deleted note {rel_path}", taxonomy=tax)
 
 
 def delete_course_tree(vault_path: Path, code: str, *, taxonomy: Taxonomy | None = None) -> None:
