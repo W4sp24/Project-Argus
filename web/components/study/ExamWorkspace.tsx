@@ -201,7 +201,7 @@ export default function ExamWorkspace() {
           <button
             onClick={() => setCurrent((v) => Math.max(0, v - 1))}
             disabled={current === 0}
-            className="border border-line px-4 py-2 font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi disabled:opacity-40"
+            className="border border-line px-4 py-2 font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi disabled:opacity-70"
           >
             ← PREV
           </button>
@@ -209,7 +209,7 @@ export default function ExamWorkspace() {
             <button
               onClick={() => setCurrent((v) => v + 1)}
               disabled={!answered}
-              className="border border-[var(--ac)] px-4 py-2 font-mono text-label uppercase tracking-wide text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-40"
+              className="border border-[var(--ac)] px-4 py-2 font-mono text-label uppercase tracking-wide text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-70"
             >
               NEXT →
             </button>
@@ -217,7 +217,7 @@ export default function ExamWorkspace() {
             <button
               onClick={submitQuiz}
               disabled={!answered}
-              className="border border-[var(--ac)] bg-[var(--ac-bg)] px-4 py-2 font-mono text-label uppercase tracking-wide text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-40"
+              className="border border-[var(--ac)] bg-[var(--ac-bg)] px-4 py-2 font-mono text-label uppercase tracking-wide text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-70"
             >
               GRADE ME
             </button>
@@ -247,7 +247,7 @@ export default function ExamWorkspace() {
         <button
           type="submit"
           disabled={!genCourse || generating}
-          className="border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+          className="border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-70"
         >
           {generating ? "GENERATING…" : "+ GENERATE EXAM"}
         </button>

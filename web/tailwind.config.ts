@@ -21,7 +21,13 @@ const config: Config = {
           DEFAULT: "#d6cdf0",
           bright: "#ece7fb",
           muted: "#9d8fc7",
-          faint: "#5a4f82",
+          // Raised from #5a4f82, which measured 2.79:1 on `void` and 2.70:1 on
+          // `panel` — under WCAG AA in both, while carrying ~370 call sites of
+          // real information (source metadata, folder counts, empty-state
+          // guidance). `panel` is the number that binds: it is lighter than the
+          // page, and the densest faint text sits inside it. Verify any change
+          // with `node scripts/check-contrast.mjs` before shipping it.
+          faint: "#8175AE", // 4.94:1 on void, 4.77:1 on panel
         },
         ok: "#34d399",
         danger: "#fb7185",

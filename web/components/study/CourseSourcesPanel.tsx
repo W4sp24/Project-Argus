@@ -169,33 +169,56 @@ export default function CourseSourcesPanel({
                   {rows.map((source) => (
                     <li
                       key={source.path}
-                      className="flex items-start gap-2 border border-line px-2.5 py-2 transition-colors hover:border-lineHi"
+                      className="border border-line transition-colors hover:border-lineHi"
                     >
+                      {/* The whole row is the control, not just the 14px box.
+                          The `<li>` already advertised itself as interactive
+                          with `hover:border-lineHi` while carrying no handler
+                          at all, and the only real target was under a third of
+                          the 44px minimum on both axes — the affordance and the
+                          target disagreed. Promoting the button to the row
+                          settles both at no layout cost: the padding and flex
+                          simply moved off the `<li>` and onto it.
+
+                          It stays a single `<button role="checkbox">` rather
+                          than a `<label>` wrapping an input, because a label
+                          would either introduce a second checkbox or fold the
+                          row's text into the accessible name. `aria-label`
+                          overrides the content here, so the name is exactly
+                          "Use <title> as a source" no matter what the row
+                          renders. The children are `<span>`s for the same
+                          reason a `<p>` cannot live inside a `<button>`:
+                          phrasing content only. */}
                       <button
                         role="checkbox"
                         aria-checked={selected.has(source.path)}
                         aria-label={`Use ${source.title} as a source`}
                         onClick={() => toggle(source.path)}
-                        className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center border transition-colors ${
-                          selected.has(source.path)
-                            ? "border-[var(--ac)] bg-[var(--ac)] text-void"
-                            : "border-line"
-                        }`}
+                        className="flex w-full items-start gap-2 px-2.5 py-2 text-left"
                       >
-                        {selected.has(source.path) && "✓"}
+                        <span
+                          aria-hidden
+                          className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center border transition-colors ${
+                            selected.has(source.path)
+                              ? "border-[var(--ac)] bg-[var(--ac)] text-void"
+                              : "border-line"
+                          }`}
+                        >
+                          {selected.has(source.path) && "✓"}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-label text-ink">{source.title}</span>
+                          <span className="mt-0.5 block font-mono text-meta text-ink-faint">
+                            {relativeTime(source.modified)}
+                            {source.chunks !== null &&
+                              ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
+                            {source.chunks === null && " · not indexed"}
+                          </span>
+                        </span>
+                        <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
+                          {source.kind}
+                        </span>
                       </button>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-label text-ink">{source.title}</p>
-                        <p className="mt-0.5 font-mono text-meta text-ink-faint">
-                          {relativeTime(source.modified)}
-                          {source.chunks !== null &&
-                            ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
-                          {source.chunks === null && " · not indexed"}
-                        </p>
-                      </div>
-                      <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
-                        {source.kind}
-                      </span>
                     </li>
                   ))}
                 </ul>

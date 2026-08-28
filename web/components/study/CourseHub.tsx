@@ -102,7 +102,7 @@ function StudioAction({
         onClick={onClick}
         disabled={disabled}
         aria-busy={running}
-        className="w-full border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+        className="w-full border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:cursor-not-allowed disabled:opacity-70"
       >
         {running ? `${runningLabel}…` : label}
       </button>

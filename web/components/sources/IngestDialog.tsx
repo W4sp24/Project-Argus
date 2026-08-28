@@ -404,7 +404,11 @@ export default function IngestDialog({
           </Field>
         </div>
 
-        <p className="mt-3 font-mono text-meta text-ink-faint">
+        {/* `text-ink-muted`, not the `text-ink-faint` the rest of this dialog's
+            chrome uses: this is the sentence a user reads to decide whether to
+            hand a file's text to a hosted model. A privacy claim must never be
+            the faintest thing on the screen it appears on. */}
+        <p className="mt-3 font-mono text-meta text-ink-muted">
           {!wantsNote || isLocal ? (
             <>Indexed on this machine — nothing leaves it.</>
           ) : (

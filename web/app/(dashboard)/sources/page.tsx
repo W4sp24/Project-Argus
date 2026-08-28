@@ -116,6 +116,7 @@ export default function SourcesPage() {
               <button
                 type="button"
                 onClick={() => setFolder(null)}
+                aria-current={folder === null ? "true" : undefined}
                 className={`w-full truncate border-l-2 py-1 pl-2 text-left text-label transition-colors ${
                   folder === null
                     ? "border-[var(--ac)] text-ink-bright"
@@ -127,9 +128,17 @@ export default function SourcesPage() {
             </li>
             {folders.map(([name, count]) => (
               <li key={name}>
+                {/* Without `aria-label` the name and the count concatenate, so
+                    "15-Courses/CS000" with one file is announced as
+                    "CS zero zero zero one" — the count reads as the last digit
+                    of the folder. `aria-current` carries the selection, which
+                    the styling otherwise conveys with colour and a left border
+                    alone. */}
                 <button
                   type="button"
                   onClick={() => setFolder(name)}
+                  aria-label={`${name || "vault root"}, ${count} ${count === 1 ? "file" : "files"}`}
+                  aria-current={folder === name ? "true" : undefined}
                   className={`flex w-full items-baseline justify-between gap-2 border-l-2 py-1 pl-2 text-left transition-colors ${
                     folder === name
                       ? "border-[var(--ac)] text-ink-bright"
@@ -195,8 +204,13 @@ export default function SourcesPage() {
                     </p>
                   </div>
                   {vault && (
+                    /* Every row renders the same "open ↗", so a screen reader
+                       listing the page's links gets N identical entries with
+                       nothing to choose between them. The visible text stays
+                       short; `aria-label` says which file it opens. */
                     <a
                       href={obsidianUri(vault.path, source.path)}
+                      aria-label={`Open ${source.title} in Obsidian`}
                       className="shrink-0 font-mono text-meta text-ink-faint transition-colors hover:text-[var(--ac)]"
                     >
                       open ↗

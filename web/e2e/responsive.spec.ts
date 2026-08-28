@@ -153,3 +153,49 @@ test("panel headers fit their panel on /system at the large UI scale", async ({ 
   await expectHeaderFits(page, "MODELS");
   await expectHeaderFits(page, "AGENT.USAGE");
 });
+
+/**
+ * Nothing may make the document scroll sideways on a phone.
+ *
+ * At 390px (iPhone 12/13/14 CSS width) the document measured 620px — 230px of
+ * overhang, which pushed the `open ↗` link off the right edge of every row on
+ * /sources: present in the DOM, unreachable with a thumb. The cause was the
+ * top bar, not the pages: six mode tabs plus the logo plus the utility cluster
+ * cannot fit 390px, and every one of them was a flex item with the default
+ * `min-width: auto`, so the strip grew the header instead of yielding.
+ *
+ * Everything here is asserted from a single page load, deliberately. The top
+ * bar is the same component on every route, so extra routes would re-prove one
+ * fact — and this suite shares one backend with a real vault, where each extra
+ * navigation is measurable contention: an earlier draft that swept three
+ * routes pushed `POST /api/ingest/jobs` in sources.spec past its five-second
+ * expect while SQLite was locked by the dashboard's `refresh_cache`.
+ */
+test("the app does not scroll horizontally at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  // /sources rather than /dashboard: it is the route where the clipped
+  // `open ↗` was actually reported, and the cheapest of the two to serve.
+  await page.goto("/sources");
+  // Waited on rather than the static heading: "All folders" only renders once
+  // `GET /api/sources` has come back, so the vault scan is finished before
+  // this test ends. Tearing the page down mid-scan leaves the shared backend
+  // still working, and the next spec's ingest POST then queues behind it.
+  await expect(page.getByRole("button", { name: "All folders" })).toBeVisible();
+
+  const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(scrollWidth, `the document overflows 390px by ${scrollWidth - 390}px`)
+    .toBeLessThanOrEqual(390);
+
+  // The fix works by letting the tab strip scroll inside itself, so all six
+  // modes must still be there — a fix that simply dropped tabs would satisfy
+  // the assertion above and lose a third of the app's navigation.
+  const tabs = page.getByRole("tablist", { name: "Mode" }).getByRole("tab");
+  await expect(tabs).toHaveCount(6);
+
+  // ...and each is named in full at every width. The tab renders "GE" below
+  // `md` and "GENERAL" above it; before `aria-label` the accessible name was
+  // whichever one the breakpoint left standing, so a phone user heard "GE".
+  for (const name of ["GENERAL", "STUDY", "RESEARCH", "CODE", "SYSTEM", "AUTO"]) {
+    await expect(page.getByRole("tab", { name, exact: true })).toHaveCount(1);
+  }
+});

@@ -331,21 +331,21 @@ export default function CoursesPanel() {
                   <button
                     onClick={() => fileInputs.current[course.code]?.click()}
                     disabled={busyAction !== null}
-                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
                   >
                     {busyAction === `upload-${course.code}` ? "UPLOADING…" : "+ FILES"}
                   </button>
                   <button
                     onClick={() => generate("guide", course.code)}
                     disabled={busyAction !== null || course.materials === 0}
-                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
                   >
                     {busyAction === `guide-${course.code}` ? "WRITING…" : "GUIDE"}
                   </button>
                   <button
                     onClick={() => generate("exam", course.code)}
                     disabled={busyAction !== null || course.materials === 0}
-                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-40"
+                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
                   >
                     {busyAction === `exam-${course.code}` ? "GENERATING…" : "+ EXAM"}
                   </button>

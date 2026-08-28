@@ -87,7 +87,7 @@ export default function BriefingCard() {
             <button
               onClick={generateBriefing}
               disabled={generating}
-              className="text-[var(--ac)] underline-offset-2 hover:underline disabled:opacity-40"
+              className="text-[var(--ac)] underline-offset-2 hover:underline disabled:opacity-70"
             >
               {generating ? "composing…" : "run again"}
             </button>
@@ -101,7 +101,7 @@ export default function BriefingCard() {
           <button
             onClick={generateBriefing}
             disabled={generating}
-            className="shrink-0 border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+            className="shrink-0 border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-70"
           >
             {generating ? "Composing…" : "Generate now"}
           </button>

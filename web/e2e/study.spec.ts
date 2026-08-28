@@ -357,3 +357,42 @@ test("ALL under a filter selects what is on screen, not what the filter hides", 
   await sources.getByRole("button", { name: `Select all ${total} in this course` }).click();
   await expect(page.getByText(`SOURCES · ${total}/${total} selected`)).toBeVisible();
 });
+
+/**
+ * The source row used to be a 58px `<li>` carrying `hover:border-lineHi` — an
+ * interactive-looking row with no handler on it at all — whose only real
+ * target was a 14x14px checkbox, under a third of the 44px minimum on both
+ * axes. The whole row is the control now, so the target and the affordance
+ * finally describe the same element.
+ *
+ * Asserted on the element that exposes `role=checkbox`, deliberately: the fix
+ * is only worth anything if the enlarged target is the *same* node assistive
+ * technology and the rest of this file address. Two checkboxes per row, or a
+ * label wrapper that swallows the row text into the accessible name, would
+ * pass a naive "row is clickable" check and still be a regression.
+ */
+test("a source row's toggle target is the whole row, not a 14px box", async ({ page }) => {
+  await page.goto("/study/course/CS000");
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const box = sources.getByRole("checkbox").first();
+  await expect(box).toBeVisible({ timeout: 15_000 });
+
+  const target = await box.boundingBox();
+  expect(target).not.toBeNull();
+  expect(target!.width, "toggle target is narrower than 44px").toBeGreaterThanOrEqual(44);
+  expect(target!.height, "toggle target is shorter than 44px").toBeGreaterThanOrEqual(44);
+
+  // Clicking the row's *text* — the part that was inert before — toggles it.
+  // `force`, because the title span is not itself the click target; the point
+  // is that the press lands on the checkbox anyway.
+  const before = await box.getAttribute("aria-checked");
+  await box.locator("span.truncate").first().click({ force: true });
+  await expect(box).toHaveAttribute("aria-checked", before === "true" ? "false" : "true");
+
+  // Exactly one checkbox per row, and its name is still the source, not the
+  // whole row's text.
+  const rowBoxes = sources.locator("li").first().getByRole("checkbox");
+  await expect(rowBoxes).toHaveCount(1);
+  await expect(rowBoxes).toHaveAttribute("aria-label", /^Use .* as a source$/);
+});

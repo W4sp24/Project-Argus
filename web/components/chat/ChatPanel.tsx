@@ -236,7 +236,11 @@ export default function ChatPanel({
             <div key={message.key} className="animate-msg-in group flex gap-3">
               <Orb />
               <div className="min-w-0 flex-1 space-y-2">
-                <p className="font-mono text-meta uppercase tracking-[0.14em] text-ink-faint">
+                {/* `text-ink-muted` rather than `text-ink-faint`: this line
+                    names which model answered and whether the answer is being
+                    kept. Both are facts a user acts on, so it cannot be the
+                    faintest text in the transcript. */}
+                <p className="font-mono text-meta uppercase tracking-[0.14em] text-ink-muted">
                   ARGUS · {model}
                   {message.local && <span className="ml-2 normal-case">· not saved to this thread</span>}
                 </p>

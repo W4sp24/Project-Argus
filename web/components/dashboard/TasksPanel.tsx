@@ -390,7 +390,7 @@ export default function TasksPanel() {
                           : undefined
                       }
                       onClick={() => (closable ? completeExternal(task, key) : toggle(task, key))}
-                      className={`flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full border-2 text-meta leading-none transition-colors disabled:opacity-40 ${
+                      className={`flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full border-2 text-meta leading-none transition-colors disabled:opacity-70 ${
                         task.done
                           ? "border-ok bg-ok text-void"
                           : (prio?.colorClass ?? "border-line") + " hover:border-lineHi"

@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "e2e": "playwright test",
-    "perf:budget": "node scripts/check-bundles.mjs"
+    "perf:budget": "node scripts/check-bundles.mjs",
+    "a11y:contrast": "node scripts/check-contrast.mjs"
   },
   "dependencies": {
     "katex": "^0.18.4",

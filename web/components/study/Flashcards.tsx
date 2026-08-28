@@ -119,7 +119,7 @@ export default function Flashcards() {
           <button
             type="submit"
             disabled={!genCourse || generating}
-            className="border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+            className="border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-70"
           >
             {generating ? "PARSING…" : "+ GENERATE DECK"}
           </button>
@@ -225,7 +225,7 @@ export default function Flashcards() {
                   type="button"
                   disabled={grading}
                   onClick={() => grade(g)}
-                  className={`border border-line py-2 text-ink-muted transition-colors disabled:opacity-40 ${GRADE_STYLE[g]}`}
+                  className={`border border-line py-2 text-ink-muted transition-colors disabled:opacity-70 ${GRADE_STYLE[g]}`}
                 >
                   {GRADE_LABEL[g]}
                 </button>

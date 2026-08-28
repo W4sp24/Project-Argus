@@ -13,6 +13,13 @@ import { forwardRef, type ButtonHTMLAttributes } from "react";
  *    that is how the command palette input ended up with no focus ring at all.
  *  - `type="button"` by default. Several buttons in the app omit it, which is
  *    harmless until the day one of them lands inside a <form>.
+ *  - Disabled buttons fade to 70%, not 40%. At 40% the accent-on-accent-bg
+ *    primary CTA measured 2.0–2.6:1 depending on mode — legible enough to see
+ *    that something is there, not enough to read *why* it is off, which is the
+ *    only information a disabled CTA carries. WCAG exempts inactive controls,
+ *    so this is a usability call rather than a violation; 70% keeps the
+ *    "unavailable" signal (reinforced by `cursor-not-allowed`) while putting
+ *    the label back in reach.
  */
 
 export type ButtonVariant = "primary" | "secondary" | "quiet" | "ghost" | "danger";
@@ -46,7 +53,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElem
     <button
       ref={ref}
       type={type}
-      className={`inline-flex items-center justify-center gap-1.5 font-mono uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${VARIANTS[variant]} ${SIZES[size]} ${className}`}
+      className={`inline-flex items-center justify-center gap-1.5 font-mono uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${VARIANTS[variant]} ${SIZES[size]} ${className}`}
       {...rest}
     />
   );
