@@ -128,19 +128,30 @@ test("uploading through the shared ingest panel lands in materials/ and unlocks 
   await expect(guideButton).toBeDisabled();
 
   await page.getByLabel("upload target").selectOption("CS000");
-  // Two file inputs exist on this page: CS000's own row-level "+ FILES"
-  // input (CoursesPanel) and the shared ingest dropzone's — this is the
-  // latter, the one actually driven by the "upload target" selector above.
-  await page.locator('input[type="file"]').last().setInputFiles({
+
+  // The dropzone opens the shared dialog now rather than posting to the
+  // single-file `POST /api/ingest` with no destination choice, no note style
+  // and no progress. Pinned to the selected course, so there is no picker.
+  await page.getByRole("button", { name: /drop a file, or click to choose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Ingest files" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Save to")).toHaveCount(0);
+
+  await dialog.getByLabel("Write a note from each file").selectOption("");
+  await dialog.locator('input[type="file"]').setInputFiles({
     name: "syllabus.pdf",
     mimeType: "application/pdf",
     buffer: Buffer.from("%PDF-1.4 fake pdf bytes"),
   });
+  await dialog.getByRole("button", { name: /^Ingest/ }).click();
+  await expect(dialog).toBeHidden();
 
-  await expect(page.getByText(/done :: syllabus\.pdf indexed|saved/)).toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(guideButton).toBeEnabled();
+  // Per-file progress in the panel, where the old flow had one status line.
+  await expect(page.getByText("syllabus.pdf")).toBeVisible({ timeout: 30_000 });
+
+  // The generators unlock only once the job settles -- the parent is told
+  // then, not when the upload was accepted.
+  await expect(guideButton).toBeEnabled({ timeout: 30_000 });
   await expect(page.getByRole("button", { name: "+ EXAM" })).toBeEnabled();
 });
 

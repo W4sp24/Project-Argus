@@ -184,6 +184,18 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     hint: "/automations",
     run: (ctx) => ctx.push("/automations"),
   },
+  {
+    // /sources had exactly one link in the whole app: lowercase, in the
+    // lowest-contrast colour in the palette, inside a panel loaded with
+    // ssr:false so it was absent from the server-rendered HTML entirely. The
+    // branch's flagship surface had no front door. An interface that reads as
+    // keyboard-driven and cannot reach its own corpus browser is a broken
+    // promise, so it belongs here.
+    kind: "SOURCES",
+    label: "browse sources",
+    hint: "/sources",
+    run: (ctx) => ctx.push("/sources"),
+  },
 ];
 
 /** Debounce delay (ms) before `search vault` mode fires GET /api/search. */

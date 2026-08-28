@@ -85,6 +85,7 @@ export default function IngestDialog({
   initialTarget,
   lockedTarget,
   defaultNoteStyle,
+  initialFiles,
 }: {
   onClose: () => void;
   /** Handed the new job id so the page can start polling it. */
@@ -102,6 +103,9 @@ export default function IngestDialog({
    * because ingesting a lecture in order to get notes from it is the reason
    * that entry point exists at all. */
   defaultNoteStyle?: string;
+  /** Files to open with, so a drop on a dropzone elsewhere carries straight
+   * into the dialog instead of being discarded and re-asked for. */
+  initialFiles?: File[];
 }) {
   const { data: destinations } = useIngestDestinations();
   const { data: noteStyles } = useIngestNoteStyles();
@@ -109,7 +113,13 @@ export default function IngestDialog({
   const modelName = useSelectedModel();
   const { confirm, confirmDialog } = useConfirm();
 
-  const [picked, setPicked] = useState<Picked[]>([]);
+  // Seeded rather than added through `add()`: a drop on a dropzone elsewhere
+  // has already chosen the files, and the collision precheck for them runs
+  // once the destination settles rather than at mount, when `options` may not
+  // have arrived yet.
+  const [picked, setPicked] = useState<Picked[]>(() =>
+    (initialFiles ?? []).map((file) => ({ file })),
+  );
   const [target, setTarget] = useState(lockedTarget ?? initialTarget ?? "");
   const [style, setStyle] = useState(defaultNoteStyle ?? NO_NOTE);
   const [prompt, setPrompt] = useState("");

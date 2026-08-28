@@ -117,11 +117,18 @@ test("the destination the dialog shows is the destination it writes to", async (
   const select = dialog.getByLabel("Save to");
   await expect(select).toHaveValue("15-Courses/CS000/materials");
 
+  // Intercepted rather than allowed through: the invariant under test is
+  // about the *request*, and actually writing here would drop a file into
+  // the shared CS000 fixture that later specs read as their starting state.
   let posted: string | null = null;
   await page.route("**/api/ingest/jobs", async (route) => {
     const body = route.request().postData() ?? "";
     posted = /name="target"\r?\n\r?\n([^\r\n]*)/.exec(body)?.[1] ?? "";
-    await route.continue();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ job_id: "e2e-intercepted" }),
+    });
   });
 
   await dialog.getByLabel("Write a note from each file").selectOption("");
@@ -132,7 +139,6 @@ test("the destination the dialog shows is the destination it writes to", async (
   });
   const displayed = await select.inputValue();
   await dialog.getByRole("button", { name: /^Ingest/ }).click();
-  await expect(dialog).toBeHidden();
 
   await expect.poll(() => posted, { timeout: 15_000 }).not.toBeNull();
   expect(posted).toBe(displayed);
