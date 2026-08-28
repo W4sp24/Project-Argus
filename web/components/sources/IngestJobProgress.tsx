@@ -1,6 +1,7 @@
 "use client";
 
-import type { IngestJob, IngestJobItem, IngestStage } from "@/lib/api";
+import { useVault, type IngestJob, type IngestJobItem, type IngestStage } from "@/lib/api";
+import { obsidianUri } from "@/lib/citations";
 
 /**
  * What an ingest is doing, per file.
@@ -128,6 +129,7 @@ export default function IngestJobProgress({
 }) {
   const settled = job.status === "ok" || job.status === "partial" || job.status === "failed";
   const items = job.items ?? [];
+  const { data: vault } = useVault();
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
@@ -164,16 +166,25 @@ export default function IngestJobProgress({
           <li key={item.id}>
             <div className="flex items-baseline justify-between gap-3">
               <p className="min-w-0 truncate text-label text-ink">{item.filename}</p>
-              <p
-                className={`shrink-0 font-mono text-meta ${toneClass(item)}`}
-                // The note's path is the one thing a user wants next and the
-                // row has no room for; the title carries it without pushing
-                // the filename out of the line.
-                title={item.summary_path ?? undefined}
-              >
+              <p className={`shrink-0 font-mono text-meta ${toneClass(item)}`}>
                 {detail(item)}
               </p>
             </div>
+            {/* The note is what the whole feature exists to produce, and its
+                path used to live in a `title` attribute -- hover-only,
+                unreachable by keyboard, invisible on touch, and not announced
+                by a screen reader. /sources already renders obsidian links for
+                its rows; the capability was three files away and unused for
+                the one artifact that matters most. */}
+            {item.summary_path && vault && (
+              <a
+                href={obsidianUri(vault.path, item.summary_path)}
+                aria-label={`Open the note written for ${item.filename} in Obsidian`}
+                className="mt-0.5 inline-block max-w-full truncate font-mono text-meta text-ink-muted underline underline-offset-2 transition-colors hover:text-[var(--ac)]"
+              >
+                {item.summary_path} ↗
+              </a>
+            )}
             <div className="mt-1.5 flex gap-px" aria-hidden>
               {PIPELINE.map((segment, index) => (
                 <span

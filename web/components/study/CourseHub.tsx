@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import ChatPanel from "@/components/chat/ChatPanel";
@@ -10,8 +11,10 @@ import {
   useCourseSources,
   useFlashcardDecks,
   useStudyExams,
+  useVault,
 } from "@/lib/api";
 import { ChatProvider } from "@/lib/chat";
+import { obsidianUri } from "@/lib/citations";
 import { useCourseSelection } from "@/lib/courseSelection";
 import { selectedModel, useSelectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
@@ -118,12 +121,40 @@ function StudioAction({
   );
 }
 
+/** An in-app route goes through `next/link`; an `obsidian://` target cannot. */
+function LinkOrAnchor({
+  href,
+  external,
+  className,
+  children,
+}: {
+  href: string;
+  external?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (external) {
+    return (
+      <a href={href} className={className}>
+        {children}
+      </a>
+    );
+  }
+  return (
+    <Link href={href} className={className}>
+      {children}
+    </Link>
+  );
+}
+
 interface GeneratedItem {
   key: string;
   label: string;
   date: string;
   kind: "GUIDE" | "EXAM" | "DECK";
   href?: string;
+  /** An obsidian:// target, which `next/link` must not try to route. */
+  external?: boolean;
 }
 
 /**
@@ -141,6 +172,7 @@ export function CourseStudio({ code }: { code: string }) {
   const { data: exams, mutate: refreshExams } = useStudyExams(code);
   const { data: decks, mutate: refreshDecks } = useFlashcardDecks(code);
   const { data: sources, mutate: refreshSources } = useCourseSources(code);
+  const { data: vault } = useVault();
   const { paths, available, refresh: refreshSelection } = useCourseSelection();
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const scoped = paths.length < available.length;
@@ -159,20 +191,29 @@ export function CourseStudio({ code }: { code: string }) {
       label: exam.title,
       date: exam.created_at,
       kind: "EXAM" as const,
-      href: "/study/exam",
+      // Carries its id. Every EXAM row used to point at the bare route, so
+      // clicking "EXAM · Midterm review" opened whatever exam the page
+      // happened to load rather than that one.
+      href: `/study/exam?id=${exam.id}`,
     })),
     ...(decks ?? []).map((deck) => ({
       key: `deck-${deck.id}`,
       label: deck.title,
       date: deck.created_at,
       kind: "DECK" as const,
-      href: "/study/flashcards",
+      href: `/study/flashcards?deck=${deck.id}`,
     })),
+    // A guide that took minutes to write used to render as unclickable text,
+    // with its path announced only in a toast that had since auto-dismissed.
+    // It is a real file in the vault, so the obsidian link is the honest
+    // destination -- there is no in-app reader for it.
     ...guides.map((guide) => ({
       key: guide.path,
       label: guide.title,
       date: guide.modified,
       kind: "GUIDE" as const,
+      href: vault ? obsidianUri(vault.path, guide.path) : undefined,
+      external: true,
     })),
   ].sort((a, b) => (a.date < b.date ? 1 : -1));
 
@@ -191,7 +232,9 @@ export function CourseStudio({ code }: { code: string }) {
       refreshSources();
       refreshSelection();
     } catch (error) {
-      show(`study guide failed: ${error instanceof Error ? error.message : "backend offline?"}`);
+      show(`study guide failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
     } finally {
       setBusyAction(null);
     }
@@ -212,7 +255,9 @@ export function CourseStudio({ code }: { code: string }) {
       refreshSources();
       refreshSelection();
     } catch (error) {
-      show(`exam generation failed: ${error instanceof Error ? error.message : "backend offline?"}`);
+      show(`exam generation failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
     } finally {
       setBusyAction(null);
     }
@@ -225,7 +270,9 @@ export function CourseStudio({ code }: { code: string }) {
       show(`deck ready :: ${deck.course} — ${deck.cards} cards`);
       refreshDecks();
     } catch (error) {
-      show(`deck generation failed: ${error instanceof Error ? error.message : "backend offline?"}`);
+      show(`deck generation failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
     } finally {
       setBusyAction(null);
     }
@@ -279,8 +326,13 @@ export function CourseStudio({ code }: { code: string }) {
             {generated.slice(0, 8).map((item) =>
               item.href ? (
                 <li key={item.key}>
-                  <a
+                  {/* `next/link` for an in-app route, so opening an exam no
+                      longer costs a full page load that discards the course
+                      chat thread; a plain anchor for `obsidian://`, which the
+                      router must not try to handle. */}
+                  <LinkOrAnchor
                     href={item.href}
+                    external={item.external}
                     className="flex items-center justify-between gap-2 text-label transition-colors hover:text-[var(--ac)]"
                   >
                     <span className="min-w-0 truncate text-ink-muted">
@@ -289,7 +341,7 @@ export function CourseStudio({ code }: { code: string }) {
                     <span className="shrink-0 font-mono text-meta text-ink-faint">
                       {item.date.slice(0, 10)}
                     </span>
-                  </a>
+                  </LinkOrAnchor>
                 </li>
               ) : (
                 <li key={item.key} className="flex items-center justify-between gap-2 text-label">
