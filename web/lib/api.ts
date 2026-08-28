@@ -1125,6 +1125,34 @@ export function useIngestJobs() {
   return useSWR<{ jobs: IngestJob[] }>("/api/ingest/jobs", fetcher);
 }
 
+export interface SourceDeleteSummary {
+  files_removed: number;
+  notes_removed: number;
+  chunks_removed: number;
+  /** Every path that is now gone, sources first then companions, so a list
+   * can be filtered without a refetch. */
+  removed: string[];
+}
+
+/**
+ * `DELETE /api/sources` — remove files from the vault *and* the index.
+ *
+ * All-or-nothing: one protected path refuses the whole batch with a 403
+ * naming it, and nothing is touched. The backend takes a single git snapshot
+ * before the first unlink, which is the only undo — there is no trash.
+ *
+ * `includeGenerated` also removes the note Argus wrote from each source,
+ * but only where that note's own frontmatter claims the source being
+ * deleted; a note that does not is somebody else's and is left alone.
+ */
+export function deleteSources(paths: string[], includeGenerated: boolean) {
+  return mutateJSON<SourceDeleteSummary>(
+    "/api/sources",
+    { paths, include_generated: includeGenerated },
+    "DELETE",
+  );
+}
+
 export interface IngestPrecheck {
   exists: boolean;
   path: string | null;

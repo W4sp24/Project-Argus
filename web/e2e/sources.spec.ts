@@ -481,3 +481,57 @@ test("choosing not to write a note turns the instruction field off", async ({ pa
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
 });
+
+test("deleting a source removes it from the vault and stops it being searchable", async ({
+  page,
+}) => {
+  // The feature this adds, and the pre-existing bug underneath it: nothing
+  // called VaultIndex.delete_file when a file was deleted, so a removed note
+  // kept being retrieved and cited in chat. The chunk count in the summary is
+  // what proves the index half actually happened.
+  await page.goto("/sources");
+
+  await page.getByRole("button", { name: "+ Ingest" }).first().click();
+  const ingest = page.getByRole("dialog", { name: "Ingest files" });
+  await ingest.getByLabel("Write a note from each file").selectOption("");
+  await ingest.locator('input[type="file"]').setInputFiles({
+    name: "e2e-delete-me.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# Delete Me"),
+  });
+  await ingest.getByLabel("Save to").selectOption("00-Inbox/files");
+  await ingest.getByRole("button", { name: /^Ingest/ }).click();
+  await expect(ingest).toBeHidden();
+
+  const list = page.locator("section").filter({ hasText: "▍SOURCES" });
+  await expect(list.getByText("e2e-delete-me", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  await page.getByRole("button", { name: "Delete e2e-delete-me" }).click();
+  const confirm = page.getByRole("dialog", { name: "Delete source" });
+  await expect(confirm).toBeVisible();
+  // The undo story is stated, because git is the only one there is.
+  await expect(confirm.getByText(/git snapshot/)).toBeVisible();
+  await confirm.getByRole("button", { name: "DELETE" }).click();
+
+  await expect(confirm).toBeHidden({ timeout: 15_000 });
+  await expect(list.getByText("e2e-delete-me", { exact: true })).toHaveCount(0);
+
+  // Gone for good, not just filtered out of a stale client list.
+  await page.reload();
+  await expect(list.getByText("e2e-delete-me", { exact: true })).toHaveCount(0, {
+    timeout: 15_000,
+  });
+});
+
+test("a protected path refuses the whole batch rather than half-applying it", async ({ page }) => {
+  // All-or-nothing is the contract: a batch naming one file inside a
+  // protected zone must leave every sibling on disk, not delete the ones it
+  // got to first.
+  await page.goto("/sources");
+  const response = await page.request.delete("/api/sources", {
+    data: { paths: ["99-Private/secret.md"], include_generated: false },
+  });
+
+  expect(response.status()).toBe(403);
+  expect(await response.text()).toContain("99-Private");
+});

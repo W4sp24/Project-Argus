@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import PageHeader from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
 import Panel from "@/components/Panel";
+import DeleteSourcesDialog from "@/components/sources/DeleteSourcesDialog";
 import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress, { jobPanelLabel } from "@/components/sources/IngestJobProgress";
 import Button from "@/components/ui/Button";
@@ -64,6 +65,11 @@ function SourcesBrowser() {
 
   const { show } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Paths, not indices: the list re-sorts and re-filters underneath a
+  // selection, and an index-based one would silently come to mean different
+  // rows. Anything no longer on screen is dropped when the delete runs.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState<SourceInfo[] | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
 
   // Fetched unfiltered, always, and narrowed here. The rail used to be derived
@@ -135,6 +141,28 @@ function SourcesBrowser() {
   const written = sources.filter((source) => source.generated !== null).length;
   const scoped = folder !== null && sources.length !== all.length;
   const unindexed = sources.filter((source) => source.chunks === null);
+  const selected = sources.filter((source) => picked.has(source.path));
+
+  function togglePick(path: string) {
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  function afterDelete(summary: { files: number; notes: number; chunks: number }) {
+    setDeleting(null);
+    setPicked(new Set());
+    void mutate();
+    const parts = [`${summary.files} file${summary.files === 1 ? "" : "s"}`];
+    if (summary.notes) parts.push(`${summary.notes} generated note${summary.notes === 1 ? "" : "s"}`);
+    parts.push(`${summary.chunks} chunk${summary.chunks === 1 ? "" : "s"}`);
+    // Says what actually went, from the server's own counts -- a delete that
+    // reports more than it did is worse than one that reports nothing.
+    show(`deleted :: ${parts.join(" · ")}`);
+  }
   const [indexing, setIndexing] = useState(false);
 
   /** Re-embed exactly the files this page is reporting as missing, rather
@@ -289,9 +317,20 @@ function SourcesBrowser() {
         <Panel
           label={folder ? `SOURCES · ${folder}` : "SOURCES"}
           headerRight={
-            <Button variant="primary" size="sm" onClick={() => setDialogOpen(true)}>
-              + Ingest
-            </Button>
+            <div className="flex items-center gap-2">
+              {selected.length > 0 && (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => setDeleting(selected)}
+                >
+                  Delete {selected.length}
+                </Button>
+              )}
+              <Button variant="primary" size="sm" onClick={() => setDialogOpen(true)}>
+                + Ingest
+              </Button>
+            </div>
           }
         >
           {all.length > 0 && (
@@ -351,6 +390,13 @@ function SourcesBrowser() {
             <ul className="flex flex-col divide-y divide-line">
               {sources.map((source) => (
                 <li key={source.path} className="flex items-baseline gap-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={picked.has(source.path)}
+                    onChange={() => togglePick(source.path)}
+                    aria-label={`Select ${source.title}`}
+                    className="shrink-0 accent-[var(--ac)]"
+                  />
                   <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
                     {source.kind}
                   </span>
@@ -371,6 +417,14 @@ function SourcesBrowser() {
                       {source.chunks === null && indexAvailable && " · not indexed"}
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setDeleting([source])}
+                    aria-label={`Delete ${source.title}`}
+                    className="shrink-0 font-mono text-meta text-ink-muted transition-colors hover:text-danger"
+                  >
+                    delete
+                  </button>
                   {vault && (
                     /* Every row renders the same "open ↗", so a screen reader
                        listing the page's links gets N identical entries with
@@ -390,6 +444,14 @@ function SourcesBrowser() {
           )}
         </Panel>
       </div>
+
+      {deleting && (
+        <DeleteSourcesDialog
+          sources={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={afterDelete}
+        />
+      )}
 
       {dialogOpen && (
         <IngestDialog
