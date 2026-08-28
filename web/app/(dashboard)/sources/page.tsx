@@ -7,7 +7,7 @@ import Panel from "@/components/Panel";
 import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress from "@/components/sources/IngestJobProgress";
 import Button from "@/components/ui/Button";
-import { useIngestJob, useSources, useVault, type SourceInfo } from "@/lib/api";
+import { useIngestJob, useSources, useVault } from "@/lib/api";
 import { obsidianUri } from "@/lib/citations";
 
 function relativeTime(iso: string): string {
@@ -26,11 +26,6 @@ function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/** A summary Argus wrote is named for its source; pair them in the listing. */
-function isSummary(source: SourceInfo): boolean {
-  return source.path.endsWith(".summary.md");
 }
 
 export default function SourcesPage() {
@@ -54,7 +49,7 @@ export default function SourcesPage() {
   const indexAvailable = data?.index_available ?? false;
   const indexed = sources.filter((source) => (source.chunks ?? 0) > 0);
   const chunks = indexed.reduce((total, source) => total + (source.chunks ?? 0), 0);
-  const summaries = sources.filter(isSummary).length;
+  const written = sources.filter((source) => source.generated !== null).length;
 
   // Refetch once a job settles: the files it wrote are new rows in this list.
   // In an effect, not during render -- `mutate` is a side effect, and clearing
@@ -78,7 +73,9 @@ export default function SourcesPage() {
           { label: "files", value: sources.length },
           { label: "indexed", value: indexAvailable ? indexed.length : "—" },
           { label: "chunks", value: indexAvailable ? chunks : "—" },
-          { label: "summaries", value: summaries },
+          // "written", not "summaries": the tile counts everything Argus
+          // produced, and course notes are the larger half of that.
+          { label: "written", value: indexAvailable ? written : "—" },
         ].map((tile) => (
           <div
             key={tile.label}
@@ -190,16 +187,17 @@ export default function SourcesPage() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-label text-ink">
                       {source.title}
-                      {isSummary(source) && (
+                      {source.generated !== null && (
                         <span className="ml-2 font-mono text-micro uppercase tracking-[0.16em] text-[var(--ac)]">
-                          summary
+                          {source.generated}
                         </span>
                       )}
                     </p>
                     <p className="mt-0.5 truncate font-mono text-meta text-ink-faint">
                       {source.folder || "vault root"} · {relativeTime(source.modified)} ·{" "}
                       {fileSize(source.size)}
-                      {source.chunks !== null && ` · ${source.chunks} chunks`}
+                      {source.chunks !== null &&
+                        ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
                       {source.chunks === null && indexAvailable && " · not indexed"}
                     </p>
                   </div>

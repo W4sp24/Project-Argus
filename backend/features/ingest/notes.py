@@ -24,6 +24,8 @@ import frontmatter
 
 from backend.agent.formatting import compose, math_contract, note_quality
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.vault.sources import COURSE_NOTE_SUFFIX as _COURSE_NOTE_SUFFIX
+from backend.vault.sources import SUMMARY_SUFFIX as _SUMMARY_SUFFIX
 
 #: How much of a file's text is handed to the model. Matches the email
 #: extractor's budget -- large enough for a lecture, small enough that a
@@ -148,10 +150,13 @@ NOTE_STYLES: dict[str, NoteStyle] = {style.key: style for style in _STYLES}
 #: one the user wrote.
 GENERATED_BY = "argus"
 
-#: Suffix for a note generated from a course material. Distinct from the
-#: ``.summary.md`` used outside a course so the two are told apart on sight
-#: -- and by ``notes_gap_list`` -- without parsing frontmatter.
-COURSE_NOTE_SUFFIX = ".notes.md"
+#: The two suffixes live in :mod:`backend.vault.sources` and are re-exported
+#: here, where callers already expect them. The writer below and every reader
+#: -- the study guide's gap list, /sources, the Course Hub rail -- have to
+#: agree on them, and `.summary.md` used to be a bare literal in this file
+#: with no constant at all while `.notes.md` had one.
+COURSE_NOTE_SUFFIX = _COURSE_NOTE_SUFFIX
+SUMMARY_SUFFIX = _SUMMARY_SUFFIX
 
 #: Everything about the note that is true whatever style was picked. The
 #: notation and note-quality halves come from
@@ -249,7 +254,7 @@ def note_destination(rel_path: str, *, taxonomy: Taxonomy | None = None) -> str:
     code = course_of(rel_path, taxonomy=tax)
     if code is not None:
         return f"{tax.course_notes(code)}/{source.stem}{COURSE_NOTE_SUFFIX}"
-    return source.with_name(f"{source.stem}.summary.md").as_posix()
+    return source.with_name(f"{source.stem}{SUMMARY_SUFFIX}").as_posix()
 
 
 def note_markdown(

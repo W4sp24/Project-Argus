@@ -24,12 +24,40 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import frontmatter
 from pydantic import BaseModel
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.vault.privacy import is_no_ai, is_private_path
+
+#: Suffix for a note Argus generated from a course material, and for one
+#: generated beside a file outside a course. Defined here rather than in
+#: ``features/ingest/notes.py``, which writes them, because every reader needs
+#: the same two strings: the note writer, the study guide's gap list (a note
+#: Argus wrote must never count as one the user wrote), and both source
+#: listers. A second copy of a naming convention is how a listing ends up
+#: reporting "Argus has written nothing" about a folder full of its own output.
+COURSE_NOTE_SUFFIX = ".notes.md"
+SUMMARY_SUFFIX = ".summary.md"
+
+#: What the frontend renders as a WRITTEN badge.
+GeneratedKind = Literal["note", "summary"]
+
+
+def generated_kind(rel_path: str) -> GeneratedKind | None:
+    """Did Argus write this file, and as which kind -- or is it the user's?
+
+    Matched on the suffix rather than on frontmatter because chunk metadata
+    carries no ``generated_by`` field, which is exactly why the suffixes are
+    distinct in the first place.
+    """
+    if rel_path.endswith(COURSE_NOTE_SUFFIX):
+        return "note"
+    if rel_path.endswith(SUMMARY_SUFFIX):
+        return "summary"
+    return None
 
 
 class SourceInfo(BaseModel):
@@ -56,6 +84,12 @@ class SourceInfo(BaseModel):
     #: would be indistinguishable from a file that genuinely produced no
     #: chunks, and the UI hides the count rather than asserting one.
     chunks: int | None = None
+    #: ``"note"`` / ``"summary"`` when Argus wrote this file, else ``None``.
+    #: On the wire so the frontend stops pattern-matching filenames: /sources
+    #: had its own `.summary.md` check, was never told about `.notes.md`, and
+    #: so reported SUMMARIES 0 for a course whose notes/ folder Argus had just
+    #: filled. One definition of the convention, on the side that owns it.
+    generated: GeneratedKind | None = None
 
 
 def _title_of(file_path: Path) -> str:
@@ -137,6 +171,7 @@ def list_sources(
                 modified=datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
                 size=stat.st_size,
                 chunks=(chunk_counts or {}).get(rel) if chunk_counts is not None else None,
+                generated=generated_kind(rel),
             )
         )
     found.sort(key=lambda item: item.modified, reverse=True)

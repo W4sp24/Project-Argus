@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.index import VaultIndex
-from backend.vault.sources import list_sources
+from backend.vault.sources import GeneratedKind, list_sources
 
 # Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
 # settings.taxonomy.courses / active_taxonomy().courses.
@@ -102,6 +102,12 @@ class CourseSourceInfo(BaseModel):
     # None (not 0) when no index was supplied — a still-cold index reporting
     # "0 chunks" would be indistinguishable from "genuinely not indexed yet".
     chunks: int | None = None
+    #: ``"note"`` / ``"summary"`` when Argus wrote this file, else ``None``.
+    #: The rail needs it to mark its own output: a generated note lands in the
+    #: `notes` zone, so the zone-based exclusion that keeps `study` out cannot
+    #: see it, and it was being fed back to the generators as a source
+    #: alongside the lecture it was written from.
+    generated: GeneratedKind | None = None
 
 
 def course_sources(
@@ -151,6 +157,7 @@ def course_sources(
                     kind=source.kind,
                     modified=source.modified,
                     chunks=source.chunks,
+                    generated=source.generated,
                 )
             )
     found.sort(key=lambda item: item.modified, reverse=True)

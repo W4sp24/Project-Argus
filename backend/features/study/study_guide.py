@@ -9,13 +9,13 @@ from typing import Any
 
 from backend.agent.formatting import compose, math_contract, note_quality
 from backend.core.taxonomy import Taxonomy, active_taxonomy
-from backend.features.ingest.notes import COURSE_NOTE_SUFFIX
 from backend.features.study.practice_exam import (
     MAX_PROMPT_CHARS,
     Generator,
     StudyError,
     unique_base,
 )
+from backend.vault.sources import generated_kind
 
 #: A reply that is *entirely* one fenced block, and nothing else. Small models
 #: habitually wrap a whole markdown answer in ```` ```markdown ````, so
@@ -35,7 +35,7 @@ def _is_generated(rel_path: str) -> bool:
     chunk metadata carries no ``generated_by`` field -- which is exactly why
     the suffix is distinct in the first place.
     """
-    return rel_path.endswith(COURSE_NOTE_SUFFIX)
+    return generated_kind(rel_path) is not None
 
 
 def notes_gap_list(corpus: list[dict[str, Any]]) -> list[str]:

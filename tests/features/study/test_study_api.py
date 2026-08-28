@@ -213,7 +213,19 @@ def test_course_sources_shape_is_unchanged(client: TestClient) -> None:
 
     assert sources, "fixture course must have at least one file"
     for item in sources:
-        assert set(item) == {"path", "title", "zone", "kind", "modified", "chunks"}
+        assert set(item) == {
+            "path",
+            "title",
+            "zone",
+            "kind",
+            "modified",
+            "chunks",
+            # Added deliberately: the rail has to mark Argus's own output, and
+            # a generated note lands in the `notes` zone where the zone-based
+            # exclusion cannot see it. Widen this set only for a field you
+            # meant to add.
+            "generated",
+        }
         assert item["zone"] in {"materials", "notes", "study"}
 
 
@@ -394,3 +406,21 @@ def test_upload_dedupes_rather_than_overwriting(client: TestClient, tmp_path: Pa
 
     materials = tmp_path / "vault" / "15-Courses" / "CS201" / "materials"
     assert {path.name for path in materials.iterdir()} == {"deck.pdf", "deck-2.pdf"}
+
+
+def test_a_generated_note_is_marked_as_written_by_argus(client: TestClient, tmp_path: Path) -> None:
+    """The frontend used to decide this itself, with its own `.summary.md`
+    check that was never told about `.notes.md` -- so /sources reported
+    SUMMARIES 0 for a course whose notes/ folder Argus had just filled. The
+    discriminator belongs on the wire, defined once on the side that writes
+    the files."""
+    course = tmp_path / "vault" / "15-Courses" / "CS201"
+    (course / "notes").mkdir(parents=True, exist_ok=True)
+    (course / "notes" / "lecture-01.notes.md").write_text("# Note", encoding="utf-8")
+    (course / "notes" / "my-own-thoughts.md").write_text("# Mine", encoding="utf-8")
+
+    sources = client.get("/api/study/courses/CS201/sources").json()
+    by_path = {item["path"]: item["generated"] for item in sources}
+
+    assert by_path["15-Courses/CS201/notes/lecture-01.notes.md"] == "note"
+    assert by_path["15-Courses/CS201/notes/my-own-thoughts.md"] is None

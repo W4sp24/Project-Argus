@@ -993,6 +993,15 @@ export interface SourceInfo {
    * nothing for this file, or there is no index to ask. Never `0`; see
    * `index_available` for telling those two apart. */
   chunks: number | null;
+  /** `"note"` / `"summary"` when Argus wrote this file, else `null`.
+   *
+   * On the wire rather than derived here. This page used to pattern-match
+   * `.summary.md` itself and had never been told about `.notes.md`, so a
+   * course whose notes/ folder Argus had just filled still reported that it
+   * had written nothing. The suffix convention is a backend invariant; a
+   * second copy of it in the frontend is exactly the drift this branch's
+   * formatting-contract work exists to prevent. */
+  generated: "note" | "summary" | null;
 }
 
 export interface SourcesResponse {
