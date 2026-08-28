@@ -10,8 +10,36 @@ from backend.core.config import Settings
 from backend.main import create_app
 
 
+class FakeIndex:
+    """Records what a route de-indexes, and reports counts like the real one.
+
+    Injected rather than left to the default factory so these tests never
+    construct a real chroma client — and so the delete route's de-index is
+    observable at all.
+    """
+
+    def __init__(self, counts: dict[str, int] | None = None) -> None:
+        self.counts: dict[str, int] = dict(counts or {})
+        self.deleted: list[str] = []
+
+    def chunk_counts(self) -> dict[str, int]:
+        return dict(self.counts)
+
+    def delete_file(self, rel_path: str) -> None:
+        self.deleted.append(rel_path)
+        self.counts.pop(rel_path, None)
+
+    def upsert_file(self, vault_path: Path, rel_path: str) -> int:
+        return 0
+
+
 @pytest.fixture()
-def client(tmp_path: Path) -> tuple[TestClient, Path]:
+def index() -> FakeIndex:
+    return FakeIndex({"00-Inbox/note.md": 5})
+
+
+@pytest.fixture()
+def client(tmp_path: Path, index: FakeIndex) -> tuple[TestClient, Path]:
     vault = tmp_path / "vault"
     vault.mkdir()
     subprocess.run(["git", "init"], cwd=vault, capture_output=True, check=True)
@@ -22,7 +50,8 @@ def client(tmp_path: Path) -> tuple[TestClient, Path]:
     (vault / "20-Projects").mkdir()
     (vault / "20-Projects" / "p.md").write_text("- [ ] task one 📅 2026-07-20\n", encoding="utf-8")
     settings = Settings(_vault_path=vault)
-    return TestClient(create_app(settings, chat_runner=lambda m: iter(()))), vault
+    app = create_app(settings, chat_runner=lambda m: iter(()), index_factory=lambda: index)
+    return TestClient(app), vault
 
 
 def test_get_note_content(client):
@@ -89,6 +118,24 @@ def test_delete_note(client):
     response = api.request("DELETE", "/api/note", params={"path": "00-Inbox/note.md"})
     assert response.status_code == 200
     assert not (vault / "00-Inbox" / "note.md").exists()
+
+
+def test_deleting_a_note_removes_its_chunks_too(client, index):
+    """The unlink was the only half this route ever did.
+
+    ``VaultIndex.delete_file``'s one production caller was ``upsert_file``'s
+    internal delete-then-add, so nothing dropped a deleted note's chunks:
+    search and chat went on retrieving and citing a note that no longer
+    existed, and a full ``reindex_all`` could not repair it — it walks the
+    files that exist, so a path that is gone is never visited.
+    """
+    api, vault = client
+
+    response = api.request("DELETE", "/api/note", params={"path": "00-Inbox/note.md"})
+
+    assert not (vault / "00-Inbox" / "note.md").exists()
+    assert index.deleted == ["00-Inbox/note.md"]
+    assert response.json()["chunks_removed"] == 5
 
 
 def test_toggle_update_delete_task_line(client):

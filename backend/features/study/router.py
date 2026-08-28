@@ -114,6 +114,9 @@ class CourseDeleteSummary(BaseModel):
     attempts_removed: int
     decks_removed: int
     reviews_removed: int
+    #: Index chunks dropped with the folder. A purge that left these behind is
+    #: how a deleted course went on being cited in chat.
+    chunks_removed: int = 0
 
 
 class ExamDeleteSummary(BaseModel):
@@ -178,7 +181,12 @@ def build_study_router(
         conn = db()
         try:
             result = delete_course(
-                conn, settings.vault_path, code, purge=purge, taxonomy=settings.taxonomy
+                conn,
+                settings.vault_path,
+                code,
+                purge=purge,
+                taxonomy=settings.taxonomy,
+                index_factory=index_factory,
             )
         except WriterError as exc:
             raise_http(exc)
@@ -191,6 +199,7 @@ def build_study_router(
             attempts_removed=result.attempts_removed,
             decks_removed=result.decks_removed,
             reviews_removed=result.reviews_removed,
+            chunks_removed=result.chunks_removed,
         )
 
     @router.post("/upload")

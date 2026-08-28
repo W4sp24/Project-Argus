@@ -18,11 +18,14 @@ are always deleted before parents: ``attempts`` before ``exams``,
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.study.practice_exam import StudyError
+from backend.rag.deindex import forget_tree
 from backend.vault.writer import WriterMissing, delete_course_tree
 
 
@@ -35,6 +38,10 @@ class CourseDeleteResult:
     decks_removed: int
     reviews_removed: int
     folder_removed: bool
+    #: Chunks dropped from the RAG index for files that were under the course
+    #: folder. Zero when nothing was purged, and zero (not an error) when
+    #: there is no index to ask.
+    chunks_removed: int = 0
 
 
 def delete_exam(conn: sqlite3.Connection, exam_id: int) -> int:
@@ -55,6 +62,7 @@ def delete_course(
     *,
     purge: bool,
     taxonomy: Taxonomy | None = None,
+    index_factory: Callable[[], Any] | None = None,
 ) -> CourseDeleteResult:
     """Remove a course's exam/flashcard rows, and — when ``purge`` — its vault folder.
 
@@ -67,10 +75,18 @@ def delete_course(
     ``purge=False`` is for a course whose folder the user already deleted by
     hand (e.g. in Obsidian) — this only cleans up the orphaned DB rows that
     left behind.
+
+    A purge also drops the course's chunks from the RAG index. It used to
+    ``rmtree`` a whole course and leave every chunk of every file in it
+    behind, so a deleted course's materials went on being retrieved and cited
+    in chat — and a full ``reindex_all`` could not repair it, because it only
+    walks files that still exist. The de-index runs *after* the ``rmtree``
+    and can never fail the delete; see :mod:`backend.rag.deindex`.
     """
     tax = taxonomy or active_taxonomy()
 
     folder_removed = False
+    chunks_removed = 0
     if purge:
         try:
             delete_course_tree(vault_path, code, taxonomy=tax)
@@ -79,6 +95,10 @@ def delete_course(
             # Already gone from the vault — exactly the case purge=False
             # exists to clean up after, not an error here either.
             folder_removed = False
+        # Whether or not the folder was still there: a course the user
+        # removed by hand leaves exactly the same orphaned chunks behind, and
+        # this is the request that asked for them to go.
+        chunks_removed = forget_tree(index_factory, tax.course_dir(code))
 
     exam_ids = [row["id"] for row in conn.execute("SELECT id FROM exams WHERE course = ?", (code,))]
     attempts_removed = 0
@@ -107,4 +127,5 @@ def delete_course(
         decks_removed=decks_removed,
         reviews_removed=reviews_removed,
         folder_removed=folder_removed,
+        chunks_removed=chunks_removed,
     )

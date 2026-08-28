@@ -230,7 +230,7 @@ def create_app(
 
     index = index_factory or _default_index_factory
 
-    app.include_router(build_notes_router(resolved))
+    app.include_router(build_notes_router(resolved, index))
     app.include_router(build_journal_router(resolved))
     app.include_router(
         build_study_router(

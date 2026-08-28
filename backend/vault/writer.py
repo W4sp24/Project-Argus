@@ -247,6 +247,18 @@ def snapshot_vault(vault_path: Path, reason: str) -> None:
     _git_snapshot(vault_path, reason)
 
 
+def log_action(vault_path: Path, line: str, *, taxonomy: Taxonomy | None = None) -> None:
+    """Write the one daily-note audit line for a batch (I2's paper trail).
+
+    The counterpart to ``log=False`` on the per-file writers, and the exact
+    analogue of :func:`snapshot_vault`: a caller doing one user action over N
+    files wants one line saying what it did, not N lines and not — as the
+    ingest job currently settles for — none at all. The line itself is the
+    only record a delete leaves in the vault, since the file it names is gone.
+    """
+    _argus_log(vault_path, line, taxonomy=taxonomy)
+
+
 def save_ingest_file(
     vault_path: Path,
     target_dir: str,

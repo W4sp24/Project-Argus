@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any
 
+import frontmatter
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
@@ -27,16 +28,23 @@ from backend.core.db import connect, init_schema
 from backend.features.ingest import notes as note_styles
 from backend.features.ingest import store
 from backend.features.ingest.pipeline import run_ingest_job
+from backend.rag.deindex import forget_paths
 from backend.rag.email import parse_email
 from backend.vault import suggestions as queue
-from backend.vault.sources import SourceInfo, list_sources
+from backend.vault.errors import raise_http
+from backend.vault.privacy import is_private_path
+from backend.vault.sources import SourceInfo, generated_kind, list_sources
 from backend.vault.writer import (
     SAFE_NAME_RE,
     WriterError,
     WriterForbidden,
+    WriterMissing,
     archive_email,
+    delete_note,
     guard_user_path,
+    log_action,
     save_ingest_file,
+    snapshot_vault,
 )
 
 logger = logging.getLogger("argus.rag")
@@ -80,6 +88,36 @@ class SourcesResponse(BaseModel):
 
     sources: list[SourceInfo]
     index_available: bool
+
+
+class SourceDeleteRequest(BaseModel):
+    """``DELETE /api/sources``: which files to remove from the vault.
+
+    ``include_generated`` also removes the note Argus wrote *from* each file
+    (its ``.notes.md`` / ``.summary.md`` companion), which is off by default:
+    a user re-uploading a corrected PDF may well want to keep the notes they
+    have since annotated.
+    """
+
+    paths: list[str]
+    include_generated: bool = False
+
+
+class SourceDeleteSummary(BaseModel):
+    """A truthful report of what a source delete actually removed.
+
+    Same shape of promise as
+    :class:`backend.features.study.router.CourseDeleteSummary`: real counts of
+    what went, not an echo of what was asked for. ``chunks_removed`` is 0 when
+    the index was unavailable — the files are still gone.
+    """
+
+    files_removed: int
+    notes_removed: int
+    chunks_removed: int
+    #: Exactly which vault paths no longer exist, sources and companion notes
+    #: together, so the caller can drop those rows without re-fetching.
+    removed: list[str]
 
 
 class DestinationsResponse(BaseModel):
@@ -366,6 +404,71 @@ def _stage_uploads(staging_dir: Path, files: list[UploadFile]) -> None:
                 handle.write(chunk)
 
 
+def _guard_deletable(settings: Settings, rel_path: str) -> Path:
+    """Both halves of the path check, before a single file is unlinked.
+
+    ``guard_user_path`` is the write guard (I3) and judges ``parts[0]`` only,
+    so ``15-Courses/CS301/99-Private/x.pdf`` passes it while
+    :func:`~backend.vault.privacy.is_private_path` — which checks *every*
+    segment — refuses it. The two disagree, and a delete endpoint taking
+    caller-supplied paths must satisfy both: ``/sources`` never lists such a
+    file, so the disagreement is not reachable through the UI today, but this
+    route is reachable by anything that can speak to the API.
+
+    Existence is checked here too, so a batch naming a file that is already
+    gone 404s before the snapshot rather than after two of its siblings have
+    been unlinked.
+    """
+    tax = settings.taxonomy
+    try:
+        resolved = guard_user_path(settings.vault_path, rel_path, taxonomy=tax)
+    except WriterError as exc:
+        raise_http(exc)
+    if is_private_path(rel_path, taxonomy=tax):
+        raise HTTPException(
+            status_code=403,
+            detail=f"{rel_path} is inside a protected zone and cannot be deleted",
+        )
+    if not resolved.is_file():
+        raise_http(WriterMissing(f"{rel_path} does not exist"))
+    return resolved
+
+
+def _companion_note(settings: Settings, rel_path: str) -> str | None:
+    """The note Argus generated *from* this source, when both halves agree.
+
+    Provenance is recorded, not guessed: the note writer puts the exact
+    vault-relative source path into the generated note's ``source``
+    frontmatter. So the resolution is two steps that must both hold:
+
+    1. compute the candidate with the same :func:`note_destination` rule that
+       wrote it — O(1), and correct across ``_dedupe``'s renames because both
+       sides derive from the deduped stem;
+    2. read that file's frontmatter and confirm its ``source`` is this exact
+       path.
+
+    A note that does not claim this source is somebody else's note and is left
+    alone, whatever its name. A source that is itself a generated note has no
+    companion of its own — asked via ``generated_kind``, the one definition of
+    that convention.
+    """
+    if generated_kind(rel_path) is not None:
+        return None
+    candidate = note_styles.note_destination(rel_path, taxonomy=settings.taxonomy)
+    note = settings.vault_path / candidate
+    if not note.is_file():
+        return None
+    try:
+        claimed = frontmatter.load(note).metadata.get("source")
+    except Exception as exc:
+        logger.warning("sources: could not read the frontmatter of %s: %s", candidate, exc)
+        return None
+    if claimed != rel_path:
+        logger.info("sources: %s does not claim %s as its source — leaving it", candidate, rel_path)
+        return None
+    return candidate
+
+
 def _reconcile_on_boot(settings: Settings) -> None:
     """Fail jobs orphaned by a previous process, and drop their staging dirs."""
     try:
@@ -520,6 +623,92 @@ def build_ingest_router(
                 suffixes=settings.taxonomy.indexable_suffixes,
             ),
             index_available=counts is not None,
+        )
+
+    @router.delete("/sources", response_model=SourceDeleteSummary)
+    def delete_sources(request: SourceDeleteRequest) -> SourceDeleteSummary:
+        """Remove files from the vault **and** from the index, together.
+
+        A file removed from Obsidian that still answers chat questions is the
+        worst half-state this feature can produce, so the two halves are one
+        request. The order is deliberate:
+
+        1. **guard every path first, all-or-nothing.** A batch containing one
+           protected path is refused whole, naming the offender — the same
+           precedent ``_validate_batch`` sets for uploads, for the same
+           reason: a half-applied delete leaves the user guessing which files
+           survived, which is worse than a refusal.
+        2. **one snapshot for the whole batch.** Never one per file:
+           ``_git_snapshot`` runs git with ``check=False``, so two snapshots
+           race on ``.git/index.lock`` and the loser fails *silently* — I2
+           broken with nothing to show for it.
+        3. **unlink**, through the single writer (I1). ``delete_note`` is not
+           markdown-specific; it guards and unlinks any path in a
+           user-editable zone.
+        4. **de-index last.** A crash after the snapshot leaves a recoverable
+           vault. A crash after de-indexing but before the unlink would leave
+           a file that exists and is silently unsearchable; this way round the
+           worst case is a file that is gone but still indexed, which any
+           future re-index of that path repairs.
+
+        There is no trash and no soft-delete anywhere in this app: the
+        pre-delete git commit is the undo, which is what every confirm dialog
+        already promises.
+        """
+        paths = list(dict.fromkeys(path.strip() for path in request.paths if path.strip()))
+        if not paths:
+            raise HTTPException(status_code=422, detail="no paths were given")
+
+        for rel_path in paths:
+            _guard_deletable(settings, rel_path)
+
+        companions: list[str] = []
+        if request.include_generated:
+            companions = [
+                companion
+                for rel_path in paths
+                if (companion := _companion_note(settings, rel_path)) is not None
+                and companion not in paths
+            ]
+        targets = paths + list(dict.fromkeys(companions))
+
+        # The reason describes the *intent*, which is what a pre-apply
+        # snapshot is a point before; the audit line below reports what
+        # actually went, which is not the same thing if the loop breaks.
+        intent = f"{len(paths)} source(s)"
+        if len(targets) > len(paths):
+            intent += f" and {len(targets) - len(paths)} generated note(s)"
+        snapshot_vault(settings.vault_path, f"delete {intent}")
+        removed: list[str] = []
+        try:
+            for rel_path in targets:
+                # snapshot/log off: one undo point and one audit line for one
+                # user action, taken around the loop rather than inside it.
+                delete_note(
+                    settings.vault_path,
+                    rel_path,
+                    taxonomy=settings.taxonomy,
+                    snapshot=False,
+                    log=False,
+                )
+                removed.append(rel_path)
+        except WriterError as exc:
+            raise_http(exc)
+        finally:
+            if removed:
+                log_action(
+                    settings.vault_path,
+                    f"deleted {len(removed)} file(s): {', '.join(removed)}",
+                    taxonomy=settings.taxonomy,
+                )
+
+        asked_for = set(paths)
+        sources_removed = sum(1 for rel_path in removed if rel_path in asked_for)
+        return SourceDeleteSummary(
+            files_removed=sources_removed,
+            notes_removed=len(removed) - sources_removed,
+            chunks_removed=forget_paths(index_factory, removed),
+            removed=removed,
         )
 
     @router.get("/ingest/destinations", response_model=DestinationsResponse)

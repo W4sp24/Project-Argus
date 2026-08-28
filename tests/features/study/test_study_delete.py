@@ -70,6 +70,31 @@ def _seed_deck_and_review(conn, course: str = "CS201") -> tuple[int, int]:
     return deck_id, int(cursor.lastrowid)
 
 
+class FakeIndex:
+    """Records what a purge de-indexes; counts come from ``chunk_counts``."""
+
+    def __init__(self, counts: dict[str, int] | None = None) -> None:
+        self.counts: dict[str, int] = dict(counts or {})
+        self.deleted: list[str] = []
+
+    def chunk_counts(self) -> dict[str, int]:
+        return dict(self.counts)
+
+    def delete_file(self, rel_path: str) -> None:
+        self.deleted.append(rel_path)
+        self.counts.pop(rel_path, None)
+
+
+class UnavailableIndex:
+    """No ``[rag]`` extras — a purge must still purge."""
+
+    def chunk_counts(self) -> dict[str, int]:
+        raise ImportError("No module named 'chromadb'")
+
+    def delete_file(self, rel_path: str) -> None:
+        raise ImportError("No module named 'chromadb'")
+
+
 # --- delete_course --------------------------------------------------------
 
 
@@ -104,6 +129,54 @@ def test_delete_course_purge_true_removes_folder_with_a_prior_snapshot(conn, vau
     ).stdout
     assert log.count("\n") == before + 1, "I2 violation: no pre-apply commit before the rmtree"
     assert "delete course CS201" in log
+
+
+def test_delete_course_purge_removes_every_chunk_under_the_course(conn, vault: Path) -> None:
+    """The purge rmtree'd a whole course and left every chunk of every file in
+    it behind, so a deleted course's materials went on being retrieved and
+    cited in chat. ``reindex_all`` could not repair it either: it walks the
+    files that exist, and these no longer do.
+
+    Driven off what the index holds rather than a filesystem walk, because by
+    the time this runs the directory is gone.
+    """
+    index = FakeIndex(
+        {
+            "15-Courses/CS201/materials/wk1.pdf": 6,
+            "15-Courses/CS201/notes/wk1.notes.md": 3,
+            "15-Courses/CS999/materials/other.pdf": 4,
+            "00-Inbox/files/unrelated.md": 2,
+        }
+    )
+
+    result = delete_course(conn, vault, "CS201", purge=True, index_factory=lambda: index)
+
+    assert sorted(index.deleted) == [
+        "15-Courses/CS201/materials/wk1.pdf",
+        "15-Courses/CS201/notes/wk1.notes.md",
+    ], "a prefix match must not reach CS999 or the rest of the vault"
+    assert result.chunks_removed == 9
+
+
+def test_delete_course_purge_survives_an_index_that_cannot_load(conn, vault: Path) -> None:
+    """The folder being gone is the user's intent; a missing [rag] extra is
+    not a reason to fail the request halfway through it."""
+    result = delete_course(conn, vault, "CS201", purge=True, index_factory=UnavailableIndex)
+
+    assert result.folder_removed is True
+    assert result.chunks_removed == 0
+    assert not (vault / "15-Courses" / "CS201").exists()
+
+
+def test_delete_course_without_purge_leaves_the_index_alone(conn, vault: Path) -> None:
+    """purge=False is a DB-only cleanup; the files are still there and still
+    have to answer questions."""
+    index = FakeIndex({"15-Courses/CS201/materials/wk1.pdf": 6})
+
+    result = delete_course(conn, vault, "CS201", purge=False, index_factory=lambda: index)
+
+    assert index.deleted == []
+    assert result.chunks_removed == 0
 
 
 def test_delete_course_purge_false_leaves_the_folder_alone(conn, vault: Path) -> None:
