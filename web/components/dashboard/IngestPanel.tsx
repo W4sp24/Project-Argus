@@ -138,7 +138,7 @@ export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
       </button>
       {job && (
         <div className="mt-3 border border-line px-3 py-2">
-          <IngestJobProgress job={job} />
+          <IngestJobProgress job={job} onDismiss={() => setJobId(null)} />
         </div>
       )}
 

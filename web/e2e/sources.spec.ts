@@ -40,7 +40,9 @@ test("ingesting a file reports every stage and leaves it in the list", async ({ 
   // the file is named, and its outcome is reported, not just "uploading…".
   // Scoped to the job panel: the source rows below carry chunk counts too.
   await expect(dialog).toBeHidden();
-  const job = page.locator("section").filter({ hasText: "▍INGESTING" });
+  // Matches the whole family: the header is driven by job.status now, so it
+  // reads INGESTING while it runs and INGESTED once it settles.
+  const job = page.locator("section").filter({ hasText: /▍INGEST/ });
   await expect(job).toBeVisible();
   await expect(job.getByText("e2e-lecture.md")).toBeVisible();
   await expect(job.getByText(/\d+ chunks|no chunks/)).toBeVisible({ timeout: 30_000 });
@@ -70,7 +72,9 @@ test("re-ingesting the same name warns before it writes a second copy", async ({
   const first = await upload("# First\n");
   await first.getByRole("button", { name: /^Ingest/ }).click();
   await expect(first).toBeHidden();
-  const job = page.locator("section").filter({ hasText: "▍INGESTING" });
+  // Matches the whole family: the header is driven by job.status now, so it
+  // reads INGESTING while it runs and INGESTED once it settles.
+  const job = page.locator("section").filter({ hasText: /▍INGEST/ });
   await expect(job.getByText(/\d+ chunks|no chunks/)).toBeVisible({ timeout: 30_000 });
 
   // Second time round the precheck has something to find, so the collision is
@@ -143,4 +147,34 @@ test("the destination the dialog shows is the destination it writes to", async (
   await expect.poll(() => posted, { timeout: 15_000 }).not.toBeNull();
   expect(posted).toBe(displayed);
   expect(posted).toBe("15-Courses/CS000/materials");
+});
+
+
+test("the job panel stops claiming it is ingesting once it has finished", async ({ page }) => {
+  // It used to read "▍INGESTING" over a job whose own status line said "done",
+  // and there was no way to clear it: `jobId` was only ever set, so the panel
+  // sat there until navigation and a second ingest silently replaced the first
+  // job's report. The completion summary is the receipt, so it is dismissed
+  // deliberately rather than auto-hidden.
+  await page.goto("/sources");
+
+  await page.getByRole("button", { name: "+ Ingest" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Ingest files" });
+  await dialog.getByLabel("Write a note from each file").selectOption("");
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "e2e-dismiss-probe.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# Dismiss Probe"),
+  });
+  await dialog.getByLabel("Save to").selectOption("00-Inbox/files");
+  await dialog.getByRole("button", { name: /^Ingest/ }).click();
+  await expect(dialog).toBeHidden();
+
+  const job = page.locator("section").filter({ hasText: /▍INGEST/ });
+  await expect(job.getByText("done", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("▍INGESTED", { exact: true })).toBeVisible();
+  await expect(page.getByText("▍INGESTING", { exact: true })).toHaveCount(0);
+
+  await job.getByRole("button", { name: "dismiss" }).click();
+  await expect(page.getByText(/▍INGEST(ED|ING)/)).toHaveCount(0);
 });

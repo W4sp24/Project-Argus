@@ -5,7 +5,7 @@ import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import Panel from "@/components/Panel";
 import IngestDialog from "@/components/sources/IngestDialog";
-import IngestJobProgress from "@/components/sources/IngestJobProgress";
+import IngestJobProgress, { jobPanelLabel } from "@/components/sources/IngestJobProgress";
 import Button from "@/components/ui/Button";
 import { useIngestJob, useSources, useVault } from "@/lib/api";
 import { obsidianUri } from "@/lib/citations";
@@ -101,8 +101,8 @@ export default function SourcesPage() {
       )}
 
       {job && (
-        <Panel label="INGESTING" className="mb-4">
-          <IngestJobProgress job={job} />
+        <Panel label={jobPanelLabel(job)} className="mb-4">
+          <IngestJobProgress job={job} onDismiss={() => setJobId(null)} />
         </Panel>
       )}
 

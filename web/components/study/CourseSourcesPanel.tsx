@@ -93,7 +93,7 @@ export default function CourseSourcesPanel({
       >
         {job && (
           <div className="mb-3 border border-line px-3 py-2">
-            <IngestJobProgress job={job} />
+            <IngestJobProgress job={job} onDismiss={() => setJobId(null)} />
           </div>
         )}
 

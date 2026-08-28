@@ -45,6 +45,19 @@ const STATUS_LABEL: Record<IngestJob["status"], string> = {
   failed: "failed",
 };
 
+/** What the panel *around* this readout should call itself.
+ *
+ * The header used to be the literal string "INGESTING" and nothing ever
+ * changed it, so a finished job sat under a heading claiming it was still
+ * running while the status beside it read "done". Exported so the label and
+ * the status come from one place rather than drifting apart again. */
+export function jobPanelLabel(job: IngestJob): string {
+  if (job.status === "queued" || job.status === "running") return "INGESTING";
+  if (job.status === "partial") return "INGESTED WITH ERRORS";
+  if (job.status === "failed") return "INGEST FAILED";
+  return "INGESTED";
+}
+
 function segmentClass(item: IngestJobItem, index: number): string {
   // Where it stopped, not merely that it stopped. Colouring every segment for
   // a failure made a file that saved and indexed and lost only its note look
@@ -102,7 +115,18 @@ function toneClass(item: IngestJobItem): string {
   return "text-ink-faint";
 }
 
-export default function IngestJobProgress({ job }: { job: IngestJob }) {
+export default function IngestJobProgress({
+  job,
+  onDismiss,
+}: {
+  job: IngestJob;
+  /** Clears the readout. Deliberately not automatic: the completion summary
+   * is the receipt, and it carries the link to what was written. Without one
+   * of these the panel simply never went away -- `jobId` was only ever set,
+   * so a second ingest silently replaced the first job's report. */
+  onDismiss?: () => void;
+}) {
+  const settled = job.status === "ok" || job.status === "partial" || job.status === "failed";
   const items = job.items ?? [];
   return (
     <div>
@@ -124,6 +148,15 @@ export default function IngestJobProgress({ job }: { job: IngestJob }) {
         >
           {STATUS_LABEL[job.status]}
         </p>
+        {settled && onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="font-mono text-meta uppercase tracking-[0.16em] text-ink-muted underline underline-offset-2 transition-colors hover:text-ink"
+          >
+            dismiss
+          </button>
+        )}
       </div>
 
       <ul className="flex flex-col gap-3">
