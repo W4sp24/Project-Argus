@@ -10,7 +10,50 @@
 | Active phase | — (roadmap P0–P5 complete; terminal-HUD redesign A–H complete) |
 | Status | REDESIGN INTEGRATED — `feat/redesign-h-integration` merges the full frontend chain (a-foundation→…→f-chat) + e-modes + g-backend, wires all preview panels to the real backend (usage/doctor/models/ingest/email/note-create), purges the legacy design-token aliases, and adds the gcal import guard + `[gcal]` extra (D-038..D-043) 2026-07-15/16; Task 15 (vault cleanup) still BLOCKED pending Ethan's per-item confirmation |
 | Last green commit | feat/redesign-h-integration head (full pytest + web lint + build + perf:budget green; see Phase H evidence below) |
-| Next action | Ethan: review/merge PR for `feat/redesign-h-integration` (supersedes the per-phase redesign branches); approve or reject Task 15 vault-cleanup candidates; optional: gcal/Todoist credentials + setup.ps1; `/code-review ultra` follow-up |
+| Next action | Ethan: review `feature/sources-ingest` (26 commits acting on the 2026-08-29 UX audit — all 25 findings, all 10 predicted-friction items, plus source deletion) and push it; the branch has never met `main`'s required checks. Then: review/merge PR for `feat/redesign-h-integration`; approve or reject Task 15 vault-cleanup candidates |
+
+## Measured 2026-08-29 (`feature/sources-ingest`, after the UX-audit pass)
+
+Twenty-six commits acting on `~/Desktop/ARGUS-UX-AUDIT-sources-ingest.md`:
+all 25 tagged findings, all 10 predicted-friction items, and source deletion
+as a new feature. Every regression test was verified to **fail** against the
+code it fixes before being accepted -- the audit's own closing point was that
+this suite asserted plumbing and never the agreements between components.
+
+```
+.venv/Scripts/python -m ruff check .   -> All checks passed!
+.venv/Scripts/python -m pytest         -> 1540 passed          (was 1475)
+desktop/tests/smoke_backend.py         -> All 29 checks passed
+node desktop/scripts/check-versions.mjs-> versions agree: 0.3.0
+cd web: tsc --noEmit / next lint / next build -> clean
+npm run perf:budget -> Perf budget OK
+  heaviest: /dashboard 127 kB, /system 132 kB, /code 123 kB, /sources 119 kB
+  CSS: 44.8 kB render-blocking (budget 60 kB), 25.5 kB lazy
+npx playwright test -> 85 passed / 2 failed   (was 67 / 2)
+```
+
+**The two e2e failures still pre-date the branch point** and are unchanged:
+`system.spec.ts:42` (also fails on `main`) and `dashboard.spec.ts:91` (fails
+at `2696d06`).
+
+**A third, `chat.spec.ts:92`, fails intermittently under a full-suite run and
+passes in isolation and in a two-file run.** It is the server-death problem
+below, not an assertion. This machine is now at **98% disk, 5.5 GB free** --
+worse than the 6.4 GB recorded on 08-28 -- and clearing `.next`,
+`test-results`, `playwright-report` and `e2e/.workdir` reclaimed nothing
+because they were already clear. Three consecutive full runs gave 85/2, 85/2
+and 84/3; one earlier run cascaded from `study.spec.ts` onward with uniform
+`ERR_CONNECTION_REFUSED`, which is the signature, not a regression.
+
+**Worth knowing when writing e2e against this branch:** the job store allows
+one ingest at a time and answers 409 otherwise, and ingest now contends with
+reindex for the same slot because both load the embedding model and write the
+same chroma collection. A spec that fires several `+ INGEST` cycles back to
+back gets its second and third refused, and the failure surfaces as a missing
+row rather than as an error -- one dialog with several files is both the fix
+and what a user actually does.
+
+## Bundle budget — measured 2026-08-28 (`feature/sources-ingest`)
 
 ## Bundle budget — measured 2026-08-28 (`feature/sources-ingest`)
 
