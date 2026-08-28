@@ -246,3 +246,35 @@ test("files that are not in the index can be indexed from the page that says so"
   // than inventing a second progress language.
   await expect(page.getByText(/▍INGEST(ING|ED)/)).toBeVisible({ timeout: 30_000 });
 });
+
+
+test("the corpus page can be searched and sorted, and says so in the URL", async ({ page }) => {
+  // The Course Hub rail has had a filter all along; /sources -- whose entire
+  // job is browsing the corpus -- had none, so past a certain count it stopped
+  // being a list and became a scroll with no way in.
+  await page.goto("/sources");
+  const list = page.locator("section").filter({ hasText: "▍SOURCES" });
+  await expect(list.getByRole("listitem").first()).toBeVisible({ timeout: 15_000 });
+  const total = await list.getByRole("listitem").count();
+  expect(total).toBeGreaterThan(1);
+
+  const first = await list.getByRole("listitem").first().innerText();
+  await list.getByLabel("Search sources").fill("course");
+  await expect(list.getByRole("listitem")).not.toHaveCount(total);
+  await expect(page).toHaveURL(/[?&]q=course/);
+
+  // A search matching nothing is not an empty vault, and must not offer to
+  // ingest as though it were.
+  await list.getByLabel("Search sources").fill("zzz-no-such-source");
+  await expect(list.getByText(/Nothing matches/)).toBeVisible();
+  await expect(list.getByText("No sources yet.")).toHaveCount(0);
+
+  await list.getByLabel("Search sources").fill("");
+  await expect(list.getByRole("listitem")).toHaveCount(total);
+
+  // Sorting reorders rather than filtering, and is shareable too.
+  await list.getByLabel("Sort sources").selectOption("name");
+  await expect(page).toHaveURL(/[?&]sort=name/);
+  await expect(list.getByRole("listitem")).toHaveCount(total);
+  expect(await list.getByRole("listitem").first().innerText()).not.toBe(first);
+});

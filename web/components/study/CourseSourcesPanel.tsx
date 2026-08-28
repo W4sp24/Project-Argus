@@ -8,20 +8,12 @@ import Button from "@/components/ui/Button";
 import { FIELD_CONTROL } from "@/components/ui/Field";
 import { useIngestJob, type CourseSource } from "@/lib/api";
 import { useCourseSelection } from "@/lib/courseSelection";
+import { formatRelativeTime } from "@/lib/relativeTime";
 
 const ZONES: { key: CourseSource["zone"]; label: string }[] = [
   { key: "materials", label: "materials" },
   { key: "notes", label: "notes" },
 ];
-
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  const days = Math.floor((Date.now() - then) / 86_400_000);
-  if (days <= 0) return "today";
-  if (days === 1) return "1d ago";
-  if (days < 30) return `${days}d ago`;
-  return `${Math.floor(days / 30)}mo ago`;
-}
 
 /**
  * SOURCES rail (§4 Course Hub, left 300px) — what the course is made of, and
@@ -210,7 +202,7 @@ export default function CourseSourcesPanel({
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-label text-ink">{source.title}</span>
                           <span className="mt-0.5 block font-mono text-meta text-ink-faint">
-                            {relativeTime(source.modified)}
+                            {formatRelativeTime(source.modified)}
                             {source.chunks !== null &&
                               ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
                             {source.chunks === null && " · not indexed"}

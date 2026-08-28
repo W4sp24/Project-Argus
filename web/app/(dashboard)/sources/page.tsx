@@ -9,6 +9,7 @@ import Panel from "@/components/Panel";
 import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress, { jobPanelLabel } from "@/components/sources/IngestJobProgress";
 import Button from "@/components/ui/Button";
+import { FIELD_CONTROL } from "@/components/ui/Field";
 import {
   ApiError,
   latestJobOfKind,
@@ -16,26 +17,29 @@ import {
   useIngestJob,
   useSources,
   useVault,
+  type SourceInfo,
 } from "@/lib/api";
 import { obsidianUri } from "@/lib/citations";
-
-function relativeTime(iso: string): string {
-  const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 90) return "just now";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
+import { formatRelativeTime } from "@/lib/relativeTime";
 
 function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+type SortKey = "modified" | "name" | "size" | "chunks";
+
+/** Newest-first by default, matching what the API already returns. */
+const SORTS: Record<SortKey, (a: SourceInfo, b: SourceInfo) => number> = {
+  modified: (a, b) => b.modified.localeCompare(a.modified),
+  name: (a, b) => a.title.localeCompare(b.title),
+  size: (a, b) => b.size - a.size,
+  // Unindexed files sort last rather than as zero: "not in the index" and
+  // "in the index with nothing in it" are different answers, and `chunks` is
+  // null for the first precisely so they stay distinguishable.
+  chunks: (a, b) => (b.chunks ?? -1) - (a.chunks ?? -1),
+};
 
 function SourcesBrowser() {
   const router = useRouter();
@@ -80,10 +84,37 @@ function SourcesBrowser() {
     (path: string) => folder === null || path === folder || path.startsWith(`${folder}/`),
     [folder],
   );
-  const sources = useMemo(
-    () => (folder === null ? all : all.filter((source) => inFolder(source.folder))),
-    [all, folder, inFolder],
+  // Search and sort, which this page has never had. The Course Hub rail has a
+  // filter; /sources -- whose entire job is browsing the corpus -- had none,
+  // so past a certain count it stopped being a list and became a scroll. The
+  // missing search hurts at 60 files; virtualisation not until several
+  // hundred, so it is deliberately not here yet.
+  const query = (params.get("q") ?? "").trim().toLowerCase();
+  const sort = (params.get("sort") ?? "modified") as SortKey;
+  const setParam = useCallback(
+    (key: string, value: string | null) => {
+      const next = new URLSearchParams(params.toString());
+      if (value === null || value === "") next.delete(key);
+      else next.set(key, value);
+      const search = next.toString();
+      router.replace(search ? `/sources?${search}` : "/sources", { scroll: false });
+    },
+    [params, router],
   );
+
+  const sources = useMemo(() => {
+    const scopedRows = folder === null ? all : all.filter((source) => inFolder(source.folder));
+    const matched = query
+      ? scopedRows.filter(
+          (source) =>
+            source.title.toLowerCase().includes(query) ||
+            source.path.toLowerCase().includes(query),
+        )
+      : scopedRows;
+    // Copied before sorting: `all` is SWR's cached array and sorting in place
+    // would mutate what every other reader of this key sees.
+    return [...matched].sort(SORTS[sort] ?? SORTS.modified);
+  }, [all, folder, inFolder, query, sort]);
   const folders = useMemo(() => {
     const counts = new Map<string, number>();
     for (const source of all) {
@@ -263,12 +294,46 @@ function SourcesBrowser() {
             </Button>
           }
         >
+          {all.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <input
+                type="search"
+                defaultValue={query}
+                onChange={(event) => setParam("q", event.target.value)}
+                placeholder="search this corpus"
+                aria-label="Search sources"
+                className={`${FIELD_CONTROL} h-7 min-w-0 flex-1 py-0 text-meta`}
+              />
+              <label className="flex items-center gap-1.5 font-mono text-meta text-ink-muted">
+                sort
+                <select
+                  value={sort}
+                  onChange={(event) => setParam("sort", event.target.value)}
+                  aria-label="Sort sources"
+                  className={`${FIELD_CONTROL} h-7 py-0 text-meta`}
+                >
+                  <option value="modified">modified</option>
+                  <option value="name">name</option>
+                  <option value="size">size</option>
+                  <option value="chunks">chunks</option>
+                </select>
+              </label>
+            </div>
+          )}
           {error ? (
             <p className="py-8 text-center text-label text-ink-muted">
               Couldn&apos;t reach Argus. Is the backend running?
             </p>
           ) : isLoading ? (
             <p className="py-8 text-center text-label text-ink-faint">Reading your vault…</p>
+          ) : sources.length === 0 && query ? (
+            // A search that matches nothing is not an empty vault, and
+            // offering "+ Ingest" for it would be answering a question the
+            // user did not ask.
+            <p className="py-10 text-center text-label text-ink-muted">
+              Nothing matches &ldquo;{query}&rdquo;
+              {folder ? " in this folder" : ""}.
+            </p>
           ) : sources.length === 0 ? (
             <div className="py-10 text-center">
               <p className="text-label text-ink-muted">
@@ -299,7 +364,7 @@ function SourcesBrowser() {
                       )}
                     </p>
                     <p className="mt-0.5 truncate font-mono text-meta text-ink-faint">
-                      {source.folder || "vault root"} · {relativeTime(source.modified)} ·{" "}
+                      {source.folder || "vault root"} · {formatRelativeTime(source.modified)} ·{" "}
                       {fileSize(source.size)}
                       {source.chunks !== null &&
                         ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
