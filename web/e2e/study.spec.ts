@@ -410,10 +410,24 @@ test("shift-click ticks a run, and only the rows on screen", async ({ page }) =>
   await page.getByRole("link", { name: "HUB →" }).click();
 
   // Ingests its own rows so it does not depend on what an earlier spec left
-  // behind -- running this file alone, CS000's rail is empty.
-  for (const name of ["e2e-run-a", "e2e-run-b", "e2e-run-c"]) {
-    await ingestProbe(page, name);
-  }
+  // behind -- running this file alone, CS000's rail is empty. One job, not
+  // three: the store deliberately allows a single ingest at a time, so
+  // firing them back to back makes the second and third 409.
+  await expect(page.getByText("Sample Course")).toBeVisible({ timeout: 15_000 });
+  await page.locator("section").filter({ hasText: "▍SOURCES" })
+    .getByRole("button", { name: "+ INGEST" })
+    .click();
+  const batch = page.getByRole("dialog", { name: "Ingest files" });
+  await batch.getByLabel("Write a note from each file").selectOption("");
+  await batch.locator('input[type="file"]').setInputFiles(
+    ["e2e-run-a", "e2e-run-b", "e2e-run-c"].map((name) => ({
+      name: `${name}.md`,
+      mimeType: "text/markdown",
+      buffer: Buffer.from(`# ${name}`),
+    })),
+  );
+  await batch.getByRole("button", { name: /^Ingest/ }).click();
+  await expect(batch).toBeHidden();
 
   const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
   const boxes = sources.getByRole("checkbox");
