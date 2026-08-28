@@ -8,13 +8,10 @@ import { useConfirm } from "@/components/ui/useConfirm";
 import {
   ApiError,
   HASH_MAX_BYTES,
-  INGEST_ACCEPT,
-  INGEST_MAX_FILES,
-  INGEST_MAX_FILE_BYTES,
-  INGEST_SUFFIXES,
   formatBytes,
   hashFile,
   ingestRejection,
+  useIngestLimits,
   pooledEach,
   precheckIngest,
   startIngestJob,
@@ -173,6 +170,9 @@ export default function IngestDialog({
   const { data: models } = useModels();
   const modelName = useSelectedModel();
   const { confirm, confirmDialog } = useConfirm();
+  // Served by the backend that enforces them; the mirrored constants in
+  // lib/api.ts are only the fallback until this answers.
+  const limits = useIngestLimits();
 
   // Seeded rather than added through `add()`: a drop on a dropzone elsewhere
   // has already chosen the files, and the collision precheck for them runs
@@ -310,12 +310,12 @@ export default function IngestDialog({
     // Both paths validate here, not just the picker: `accept` constrains the
     // file dialog and nothing else, so a dropped `.zip` was queued, hashed,
     // uploaded and only rejected server-side after the wait.
-    const room = INGEST_MAX_FILES - picked.length;
+    const room = limits.max_files - picked.length;
     const accepted: File[] = [];
     const refused: string[] = [];
     let overflow = 0;
     for (const file of incoming) {
-      const rejection = ingestRejection(file);
+      const rejection = ingestRejection(file, limits);
       if (rejection) {
         refused.push(rejection);
         continue;
@@ -332,7 +332,7 @@ export default function IngestDialog({
     if (overflow) {
       refused.push(
         `${overflow} more file${overflow === 1 ? " was" : "s were"} not added — ` +
-          `${INGEST_MAX_FILES} at once is the limit`,
+          `${limits.max_files} at once is the limit`,
       );
     }
 
@@ -460,15 +460,15 @@ export default function IngestDialog({
           {/* The size limit is on the caption because it was nowhere at all:
               the only way to learn about it was a 413 after the upload. */}
           <span className="mt-1 block font-mono text-meta text-ink-faint">
-            {INGEST_SUFFIXES.join(" ")} · up to {INGEST_MAX_FILES} at once ·{" "}
-            {formatBytes(INGEST_MAX_FILE_BYTES)} each
+            {limits.suffixes.join(" ")} · up to {limits.max_files} at once ·{" "}
+            {formatBytes(limits.max_file_bytes)} each
           </span>
         </button>
         <input
           ref={inputRef}
           type="file"
           multiple
-          accept={INGEST_ACCEPT}
+          accept={limits.suffixes.join(",")}
           aria-hidden
           tabIndex={-1}
           className="hidden"

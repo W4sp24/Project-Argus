@@ -131,6 +131,22 @@ class DestinationsResponse(BaseModel):
     destinations: list[str]
 
 
+class LimitsResponse(BaseModel):
+    """``GET /api/ingest/limits`` — what the server will actually accept.
+
+    The frontend mirrors these so it can reject a 400 MB `.zip` in no time at
+    all rather than after the upload, but a mirrored constant is a second copy
+    of a rule and goes stale the day this set changes. Served for the same
+    reason destinations and note styles are: the definition lives on the side
+    that enforces it, and the client asks.
+    """
+
+    #: Lowercased, dot-prefixed, sorted so the list is stable to diff.
+    suffixes: list[str]
+    max_files: int
+    max_file_bytes: int
+
+
 class NoteStyleInfo(BaseModel):
     """One entry of ``GET /api/ingest/note-styles``.
 
@@ -714,6 +730,14 @@ def build_ingest_router(
     @router.get("/ingest/destinations", response_model=DestinationsResponse)
     def destinations() -> DestinationsResponse:
         return DestinationsResponse(destinations=_destinations(settings))
+
+    @router.get("/ingest/limits", response_model=LimitsResponse)
+    def limits() -> LimitsResponse:
+        return LimitsResponse(
+            suffixes=sorted(ALLOWED_SUFFIXES),
+            max_files=MAX_BATCH_FILES,
+            max_file_bytes=MAX_FILE_BYTES,
+        )
 
     @router.get("/ingest/note-styles", response_model=NoteStylesResponse)
     def note_style_options() -> NoteStylesResponse:

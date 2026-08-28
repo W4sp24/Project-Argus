@@ -1180,16 +1180,37 @@ export function precheckIngest(filename: string, target: string) {
  * only — the drop handler knew nothing, so a dropped `.zip` was queued,
  * hashed and uploaded before anything objected. One copy per side of the wire.
  *
- * The drift-proof version of this is `GET /api/ingest/limits`, served the same
- * way `/ingest/destinations` and `/ingest/note-styles` already serve
- * taxonomy-derived config; a mirrored constant is still free to go stale the
- * day the backend accepts `.txt`. That endpoint does not exist yet.
+ * These are the FALLBACK only. `GET /api/ingest/limits` is the authority --
+ * served the same way `/ingest/destinations` and `/ingest/note-styles` serve
+ * their config, so the rule lives on the side that enforces it. These values
+ * cover the first render and a backend that cannot be reached; the moment the
+ * real ones arrive they win, so this copy cannot go stale in a way that
+ * matters.
  */
 export const INGEST_SUFFIXES: readonly string[] = [".pdf", ".pptx", ".docx", ".md", ".eml"];
 export const INGEST_MAX_FILES = 50;
 export const INGEST_MAX_FILE_BYTES = 100 * 1024 * 1024;
 /** `accept` for a file input picking ingestible files. */
 export const INGEST_ACCEPT = INGEST_SUFFIXES.join(",");
+
+export interface IngestLimits {
+  suffixes: string[];
+  max_files: number;
+  max_file_bytes: number;
+}
+
+/** What the server will actually accept, falling back to the mirror above
+ * until it answers. */
+export function useIngestLimits(): IngestLimits {
+  const { data } = useSWR<IngestLimits>("/api/ingest/limits", fetcher);
+  return (
+    data ?? {
+      suffixes: [...INGEST_SUFFIXES],
+      max_files: INGEST_MAX_FILES,
+      max_file_bytes: INGEST_MAX_FILE_BYTES,
+    }
+  );
+}
 
 /** Sizes as a person reads them, for limits and for the file that broke one. */
 export function formatBytes(bytes: number): string {
@@ -1211,15 +1232,15 @@ export function ingestSuffix(name: string): string {
  * and the reason ("deck.zip — .zip isn't supported"), because a batch of forty
  * with one generic failure is a puzzle, not a message.
  */
-export function ingestRejection(file: File): string | null {
+export function ingestRejection(file: File, limits: IngestLimits): string | null {
   const suffix = ingestSuffix(file.name);
-  if (!INGEST_SUFFIXES.includes(suffix)) {
+  if (!limits.suffixes.includes(suffix)) {
     const named = suffix ? `${suffix} isn't supported` : "no file extension";
     return `${file.name} — ${named}`;
   }
-  if (file.size > INGEST_MAX_FILE_BYTES) {
+  if (file.size > limits.max_file_bytes) {
     return `${file.name} — ${formatBytes(file.size)}, over the ${formatBytes(
-      INGEST_MAX_FILE_BYTES,
+      limits.max_file_bytes,
     )} limit`;
   }
   return null;
