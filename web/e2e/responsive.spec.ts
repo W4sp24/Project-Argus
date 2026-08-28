@@ -199,3 +199,28 @@ test("the app does not scroll horizontally at 390px", async ({ page }) => {
     await expect(page.getByRole("tab", { name, exact: true })).toHaveCount(1);
   }
 });
+
+test("the course hub shows one pane at a time on a narrow screen", async ({ page }) => {
+  // Below `lg` the three panes stacked inside a fixed-height column, so each
+  // got about a third of the viewport with its own scrollbar nested inside
+  // the page scroll. Tabs give whichever pane you are using the whole height.
+  await page.setViewportSize({ width: 820, height: 900 });
+  await page.goto("/study/course/CS000");
+
+  const tabs = page.getByRole("tablist", { name: "Course hub pane" });
+  await expect(tabs).toBeVisible();
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
+  await expect(sources).toBeHidden();
+
+  await tabs.getByRole("tab", { name: "sources" }).click();
+  await expect(sources).toBeVisible();
+  await expect(studio).toBeHidden();
+
+  // Wide again: all three are back side by side, no tabs.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(tabs).toBeHidden();
+  await expect(sources).toBeVisible();
+  await expect(studio).toBeVisible();
+});
