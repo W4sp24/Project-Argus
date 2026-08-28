@@ -1139,12 +1139,83 @@ export function precheckIngest(filename: string, target: string) {
 }
 
 /**
+ * What the backend will accept, on this side of the wire.
+ *
+ * These mirror `ALLOWED_SUFFIXES`, `MAX_BATCH_FILES` and `MAX_FILE_BYTES` in
+ * `backend/features/ingest/router.py`, which stays the enforcing copy — every
+ * one of them is re-checked there. Validating here is a courtesy, so a `.zip`
+ * is refused in 0ms instead of after a 100MB upload and a server-side 422; it
+ * is never the guard.
+ *
+ * They live here rather than in IngestDialog because the dialog's own `ACCEPT`
+ * string was already the frontend's copy, and it constrained the file *picker*
+ * only — the drop handler knew nothing, so a dropped `.zip` was queued,
+ * hashed and uploaded before anything objected. One copy per side of the wire.
+ *
+ * The drift-proof version of this is `GET /api/ingest/limits`, served the same
+ * way `/ingest/destinations` and `/ingest/note-styles` already serve
+ * taxonomy-derived config; a mirrored constant is still free to go stale the
+ * day the backend accepts `.txt`. That endpoint does not exist yet.
+ */
+export const INGEST_SUFFIXES: readonly string[] = [".pdf", ".pptx", ".docx", ".md", ".eml"];
+export const INGEST_MAX_FILES = 50;
+export const INGEST_MAX_FILE_BYTES = 100 * 1024 * 1024;
+/** `accept` for a file input picking ingestible files. */
+export const INGEST_ACCEPT = INGEST_SUFFIXES.join(",");
+
+/** Sizes as a person reads them, for limits and for the file that broke one. */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+/** The extension the backend will judge, derived exactly the way it derives it. */
+export function ingestSuffix(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "" : name.slice(dot).toLowerCase();
+}
+
+/**
+ * Why this file cannot be ingested, or `null` when it can.
+ *
+ * Returns the sentence rather than a code: a rejection has to name the file
+ * and the reason ("deck.zip — .zip isn't supported"), because a batch of forty
+ * with one generic failure is a puzzle, not a message.
+ */
+export function ingestRejection(file: File): string | null {
+  const suffix = ingestSuffix(file.name);
+  if (!INGEST_SUFFIXES.includes(suffix)) {
+    const named = suffix ? `${suffix} isn't supported` : "no file extension";
+    return `${file.name} — ${named}`;
+  }
+  if (file.size > INGEST_MAX_FILE_BYTES) {
+    return `${file.name} — ${formatBytes(file.size)}, over the ${formatBytes(
+      INGEST_MAX_FILE_BYTES,
+    )} limit`;
+  }
+  return null;
+}
+
+/**
  * Start a batch ingest. Returns immediately with a job id; poll
  * `useIngestJob` for per-file progress.
+ *
+ * `XMLHttpRequest`, not `fetch`, for one reason: `upload.onprogress`. This is
+ * a multipart POST of up to fifty files and the 202 does not come back until
+ * every byte has arrived, so on a large batch the button sat on "Starting…"
+ * for tens of seconds with nothing else moving. The *job* was beautifully
+ * instrumented and the *upload* was not. `fetch` still has no upload progress
+ * in any shipping browser (request streams are Chromium-only and HTTP/2-only),
+ * so the older API is the only one that can answer "how far along is this".
+ *
+ * `onProgress` receives a 0..1 fraction, or `null` when the browser will not
+ * say how big the body is — an unknowable fraction must not be rendered as 0%.
  */
 export async function startIngestJob(
   files: File[],
   options: { target: string; noteStyle?: string; summaryPrompt?: string; replace?: boolean },
+  onProgress?: (fraction: number | null) => void,
 ): Promise<string> {
   const body = new FormData();
   files.forEach((file) => body.append("files", file));
@@ -1152,32 +1223,116 @@ export async function startIngestJob(
   body.append("note_style", options.noteStyle ?? "");
   body.append("summary_prompt", options.summaryPrompt ?? "");
   body.append("replace", String(options.replace ?? false));
-  const response = await apiFetch("/api/ingest/jobs", { method: "POST", body });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      payload,
-      typeof payload.detail === "string" ? payload.detail : `ingest failed (${response.status})`,
-    );
-  }
-  return (payload as { job_id: string }).job_id;
+
+  return new Promise<string>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `${apiBase()}/api/ingest/jobs`);
+    request.upload.onprogress = (event) => {
+      onProgress?.(event.lengthComputable ? event.loaded / event.total : null);
+    };
+    // The bytes are gone but the job has not been created yet; saying 100%
+    // and then waiting is honest, saying 99% forever is not.
+    request.upload.onload = () => onProgress?.(1);
+    request.onload = () => {
+      let payload: unknown = {};
+      try {
+        payload = JSON.parse(request.responseText) as unknown;
+      } catch {
+        // A non-JSON body (a proxy's HTML error page) still has a status.
+      }
+      if (request.status < 200 || request.status >= 300) {
+        const detail = (payload as { detail?: unknown }).detail;
+        reject(
+          new ApiError(
+            request.status,
+            payload,
+            typeof detail === "string" ? detail : `ingest failed (${request.status})`,
+          ),
+        );
+        return;
+      }
+      resolve((payload as { job_id: string }).job_id);
+    };
+    // Not an ApiError: there was no response to carry a status or a detail,
+    // and callers tell the two apart to decide whether to blame the backend
+    // being down rather than the request.
+    request.onerror = () => reject(new Error("the ingest request never reached Argus"));
+    request.onabort = () => reject(new Error("the ingest request was aborted"));
+    request.send(body);
+  });
+}
+
+/**
+ * Run `worker` over `items` with at most `limit` in flight.
+ *
+ * Exists because hashing a batch under `Promise.all` reads every file into
+ * memory at once: fifty 30MB lecture PDFs is ~1.5GB resident, on the main
+ * thread, before a single byte has been uploaded.
+ */
+export async function pooledEach<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+/**
+ * Above this, a file is compared by name alone. `crypto.subtle.digest` has no
+ * streaming form, so hashing means holding the whole file in memory — and the
+ * answer only ever decides the wording of a warning.
+ */
+export const HASH_MAX_BYTES = 32 * 1024 * 1024;
+
+/** Why a file has no digest, when it has none. */
+export type HashSkip =
+  /** Bigger than `HASH_MAX_BYTES`. */
+  | "too-large"
+  /** `crypto.subtle` is undefined — this page is not on a secure origin. */
+  | "insecure-context"
+  /** It threw. Unread file, revoked blob, out of memory. */
+  | "unavailable";
+
+export interface HashResult {
+  digest: string | null;
+  /** `null` exactly when `digest` is a real hash. */
+  skipped: HashSkip | null;
 }
 
 /**
  * SHA-256 of a picked file, hex, matching the backend's digest of whatever is
- * already at that path. `crypto.subtle` needs a secure context, which
- * localhost is; it returns null rather than throwing if that ever fails, and
- * the caller then treats the collision as "changed" and offers Replace.
+ * already at that path.
+ *
+ * Never throws, and says *why* it has no answer, which the old
+ * `Promise<string | null>` could not. That mattered: `crypto.subtle` is
+ * undefined outside a secure context — fine on localhost, undefined over plain
+ * HTTP at a LAN address — so the whole comparison silently degraded and every
+ * re-ingest of a byte-identical file reported "saved alongside as a second
+ * copy". A degraded comparison has to be visible, not inferred from a `null`.
  */
-export async function hashFile(file: File): Promise<string | null> {
+export async function hashFile(file: File): Promise<HashResult> {
+  if (file.size > HASH_MAX_BYTES) return { digest: null, skipped: "too-large" };
+  if (typeof crypto === "undefined" || !crypto.subtle) {
+    return { digest: null, skipped: "insecure-context" };
+  }
   try {
     const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-    return Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    return {
+      digest: Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(""),
+      skipped: null,
+    };
   } catch {
-    return null;
+    return { digest: null, skipped: "unavailable" };
   }
 }
 
