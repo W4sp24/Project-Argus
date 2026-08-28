@@ -14,6 +14,7 @@ from backend.features.study.practice_exam import (
     MAX_PROMPT_CHARS,
     Generator,
     StudyError,
+    unique_base,
 )
 
 #: A reply that is *entirely* one fenced block, and nothing else. Small models
@@ -149,6 +150,10 @@ async def generate_study_guide(
     study_dir = vault_path / tax.course_study(course)
     study_dir.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "-", scope.lower()).strip("-")[:40] or "guide"
-    name = f"guide-{slug}-{date.today().isoformat()}.md"
+    # Counted past a collision rather than written over. The name is course +
+    # scope + day by construction, so generating a guide twice in one day --
+    # which is exactly what re-running after tweaking the selection does --
+    # silently destroyed the first one. The exam path has always done this.
+    name = f"{unique_base(study_dir, f'guide-{slug}-{date.today().isoformat()}')}.md"
     (study_dir / name).write_text(body + "\n", encoding="utf-8")
     return f"{tax.course_study(course)}/{name}"

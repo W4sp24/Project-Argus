@@ -222,6 +222,22 @@ def build_exam(course: str, raw: str, corpus: list[dict[str, Any]]) -> tuple[Exa
     ), dropped
 
 
+def unique_base(directory: Path, base: str) -> str:
+    """A filename stem in `directory` that no `<stem>.md` already uses.
+
+    Generated study output is named after the course, the day and the shape of
+    the request, so two runs on the same day collide by construction. The exam
+    path has always counted past a collision; the guide used to write straight
+    over the earlier file, which is why this lives here rather than inline.
+    """
+    if not (directory / f"{base}.md").exists():
+        return base
+    suffix = 1
+    while (directory / f"{base}-{suffix}.md").exists():
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
 def render_exam_md(exam: Exam) -> str:
     lines = [f"# {exam.title}", "", f"Course: {exam.course} · {len(exam.questions)} questions", ""]
     for number, question in enumerate(exam.questions, start=1):
@@ -344,11 +360,7 @@ async def generate_practice_exam(
     study_dir = vault_path / tax.course_study(course)
     study_dir.mkdir(parents=True, exist_ok=True)
     stamp = date.today().isoformat()
-    base = f"exam-{stamp}-{len(exam.questions)}q"
-    suffix = 0
-    while (study_dir / f"{base}{'-' + str(suffix) if suffix else ''}.md").exists():
-        suffix += 1
-    base = f"{base}{'-' + str(suffix) if suffix else ''}"
+    base = unique_base(study_dir, f"exam-{stamp}-{len(exam.questions)}q")
     (study_dir / f"{base}.md").write_text(render_exam_md(exam), encoding="utf-8")
     (study_dir / f"{base}-key.md").write_text(render_key_md(exam), encoding="utf-8")
 

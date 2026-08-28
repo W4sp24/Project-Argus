@@ -91,3 +91,39 @@ def test_a_reply_wrapped_entirely_in_one_fence_is_unwrapped(tmp_path: Path) -> N
 def test_an_empty_reply_is_an_error_not_an_empty_note(tmp_path: Path) -> None:
     with pytest.raises(StudyError):
         _write(tmp_path, "   \n", scope="empty")
+
+
+# --- not writing over the last one --------------------------------------------
+
+
+def _write_path(tmp_path: Path, reply: str, scope: str = "binary search") -> str:
+    """Same as `_write`, but returns where it landed rather than what it says."""
+
+    async def generate(prompt: str, model: str | None = None) -> str:
+        return reply
+
+    return asyncio.run(generate_study_guide(tmp_path, generate, CORPUS, "CS201", scope=scope))
+
+
+def test_a_second_guide_the_same_day_does_not_replace_the_first(tmp_path: Path) -> None:
+    """The name is course + scope + day by construction, so two runs collide by
+    construction too -- and re-running after tweaking the source selection is
+    exactly the workflow the Course Hub encourages. The first guide used to be
+    silently written over; the exam path has always counted past a collision."""
+    first = _write_path(tmp_path, "The first guide.")
+    second = _write_path(tmp_path, "The second guide.")
+
+    assert first != second
+    assert (tmp_path / first).read_text(encoding="utf-8").startswith("The first guide.")
+    assert (tmp_path / second).read_text(encoding="utf-8").startswith("The second guide.")
+
+
+def test_a_guide_is_written_inside_its_own_course(tmp_path: Path) -> None:
+    """`course` reaches `tax.course_study(course)`, which is mkdir'd and written
+    to. The route sanitises it now; this pins the property that matters -- the
+    file lands under the course, not somewhere a name could steer it."""
+    written = _write_path(tmp_path, "Contained.")
+
+    assert written.startswith("15-Courses/CS201/")
+    assert ".." not in written
+    assert (tmp_path / written).resolve().is_relative_to(tmp_path.resolve())

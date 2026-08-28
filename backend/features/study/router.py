@@ -237,13 +237,20 @@ def build_study_router(
 
     @router.post("/guide")
     async def guide(request: GuideRequest) -> dict[str, str]:
-        corpus = _corpus_for(request.course, request.sources)
+        # Sanitised for the same reason `course_sources_route` sanitises, and
+        # it was not: `course` reaches `tax.course_study(course)`, which builds
+        # a filesystem path that is then mkdir'd and written to. Not reachable
+        # today -- a course name that escapes the vault matches no chunk, so
+        # the empty corpus 422s first -- but that is an unrelated guard
+        # standing in front of a path built from unvalidated input.
+        course = SAFE_NAME_RE.sub("", request.course)
+        corpus = _corpus_for(course, request.sources)
         try:
             path = await generate_study_guide(
                 settings.vault_path,
                 _generator_for(request.model),
                 corpus,
-                request.course,
+                course,
                 request.scope,
                 taxonomy=settings.taxonomy,
             )
@@ -253,7 +260,8 @@ def build_study_router(
 
     @router.post("/exam")
     async def exam(request: ExamRequest) -> dict[str, Any]:
-        corpus = _corpus_for(request.course, request.sources)
+        course = SAFE_NAME_RE.sub("", request.course)
+        corpus = _corpus_for(course, request.sources)
         conn = db()
         try:
             exam_id, built, path = await generate_practice_exam(
@@ -261,7 +269,7 @@ def build_study_router(
                 conn,
                 _generator_for(request.model),
                 corpus,
-                request.course,
+                course,
                 request.topics,
                 request.n,
                 request.difficulty,
