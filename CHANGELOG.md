@@ -6,6 +6,87 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Argus is currently pre-1.0 (0.x releases).
 
+## [0.3.1]
+
+Sixty-one commits since v0.3.0. Argus gains a corpus you can see and steer:
+`/sources` lists every real file in the vault, ingest is one path with a
+destination you choose, and long work runs on a durable job model that survives
+a restart. Generated study material renders mathematics. The last stretch of
+this release acted on a full UX audit of the ingest surface — every finding
+closed, with each regression test verified to fail against the code it fixes.
+
+### Added
+
+#### Sources and ingest
+
+- **`/sources` — see the corpus and steer what enters it.** A folder rail, a
+  searchable and sortable file list, and a view that lives in the URL. Files
+  Argus wrote say so on the wire rather than by filename guess, "not indexed" is
+  something you can act on, and a running job survives navigating away.
+- **Sources can be deleted**, one at a time or in a batch, and a deletion removes
+  the file from the vault *and* its chunks from the index in the same operation.
+  A deleted note stops being retrieved and cited.
+- **One ingest path with a destination you choose.** The batch job saves, indexes
+  and summarises a set of files, records what it did to every one of them, and
+  reports where a file stopped when it stopped early. The dialog's destination is
+  the destination it writes to, and the limits it shows are the limits the server
+  enforces.
+- **A file tagged `#no-ai` is never sent to a model to be summarised.**
+- **Four note shapes**, built on how people actually learn, chosen before ingest
+  and recorded on the job; a course note lands in `notes/`.
+
+#### Jobs
+
+- **One durable job model for every piece of long work.** `ingest`, `reindex`,
+  `guide` and `exam` share a job store with a `kind` and its parameters. Work is
+  visible while it runs, survives navigation, and contends by group: ingest and
+  reindex share one slot because both load the embedding model and write the same
+  collection. `POST /api/index/reindex` takes optional paths for a scoped rebuild.
+
+#### Study
+
+- **Generate from the sources you picked.** The Course Hub's checkboxes decide
+  what gets read, retrieval can be pinned to a hand-picked set of files, and every
+  artifact Argus writes is reachable the moment it is written.
+- Shift-click ticks a run of sources; the hub shows one pane at a time on a narrow
+  screen.
+
+#### Mathematics
+
+- **Mathematics renders**, behind one markdown boundary and one prose stylesheet.
+  Exam and flashcard surfaces render notation accessibly, and the exam writes
+  notation where notation is safe and nowhere else.
+- One output-format contract wherever a model writes prose.
+
+### Changed
+
+- `list_files` lists every real file, not just markdown; course sources are one
+  zone-stamped filter rather than a second walker.
+- A batch of writes takes one undo point instead of one per file, and
+  `delete_note` can take its snapshot once for a batch — concurrent git snapshots
+  race on `.git/index.lock` and the loser fails silently.
+- The embedding model is loaded once, not once per request, and chunk counts are
+  read without fetching the chunks' text.
+- `/dashboard` is back inside the first-load budget.
+
+### Fixed
+
+- **A second guide the same day no longer destroys the first**, and a guide
+  containing a code fence is no longer replaced by it.
+- **The Course Hub opens with its sources selected**, and ALL means what you can
+  see. A late-arriving locked target is applied rather than silently ingesting
+  outside the course.
+- The job panel stops claiming it is still ingesting; the folder rail stops
+  deleting its own siblings; the ingest dialog stops promising things it does not
+  do; STUDIO stops hiding its own output and Argus stops re-reading itself.
+- LaTeX in a generated exam survives JSON parsing, a display equation is one
+  chunk, a `#` inside a fence is not a heading, grading reads notation as
+  notation, and a half-streamed equation no longer flashes red.
+- Stripping a citation marker no longer flattens the answer, and the briefing
+  prompt stays out of notation it cannot render.
+- The faintest tier of the palette clears AA against `panel` — not only against
+  the page background — and a row is a real touch target.
+
 ## [0.3.0]
 
 A feature release: 170 commits since v0.2.1. Argus stops being a Claude
