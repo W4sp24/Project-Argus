@@ -119,7 +119,7 @@ export default function IconPicker({ value, onChange, onError }: IconPickerProps
           onClick={handleUploadClick}
           disabled={uploading}
           aria-label="Upload icon image"
-          className="shrink-0 border border-line px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint transition-colors hover:border-lineHi hover:text-[var(--ac)] disabled:opacity-40"
+          className="shrink-0 border border-line px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint transition-colors hover:border-lineHi hover:text-[var(--ac)] disabled:opacity-70"
         >
           {uploading ? "…" : "upload"}
         </button>

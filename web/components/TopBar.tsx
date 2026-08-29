@@ -51,7 +51,7 @@ function Clock() {
  * This is where they go instead.
  */
 function OverflowMenu() {
-  const { setNoteOpen, toggleDrawer, startFocus } = useUi();
+  const { setNoteOpen, toggleDrawer, startFocus, setPaletteOpen } = useUi();
   const onChatPage = usePathname() === "/chat";
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -77,6 +77,11 @@ function OverflowMenu() {
     // See the CHAT control in TopBar for why this drops out on /chat.
     ...(onChatPage ? [] : [{ label: "CHAT", run: toggleDrawer }]),
     { label: "◔ FOCUS", run: startFocus },
+    // The [⌘K] chip is one of the things that made this bar 230px too wide at
+    // 390px, and it is the easiest to relocate: it advertises a keyboard
+    // shortcut, on the widths least likely to have a keyboard. It moves here
+    // rather than disappearing — same rule as + NOTE and CHAT.
+    { label: "⌘K PALETTE", run: () => setPaletteOpen(true) },
   ];
 
   return (
@@ -183,10 +188,18 @@ export default function TopBar() {
           </span>
         </Link>
 
+        {/* `min-w-0` + `overflow-x-auto` is what keeps the document from
+            scrolling sideways on a phone. Six tabs plus the logo plus the
+            utility cluster cannot fit 390px at any padding, and a flex item
+            defaults to `min-width: auto` — so the strip refused to shrink and
+            pushed the document to 620px instead, clipping the `open ↗` link
+            off every source row. Letting the strip scroll inside itself
+            keeps all six modes reachable and confines the overflow to the one
+            element that can afford it. */}
         <div
           role="tablist"
           aria-label="Mode"
-          className="flex border border-line font-mono text-label uppercase tracking-[0.14em]"
+          className="flex min-w-0 overflow-x-auto border border-line font-mono text-label uppercase tracking-[0.14em]"
         >
           {TABS.map(({ mode: tabMode, label, short }, index) => {
             const active = mode === tabMode;
@@ -198,11 +211,18 @@ export default function TopBar() {
                 }}
                 type="button"
                 role="tab"
+                // The tab renders two labels and lets the breakpoint choose
+                // between them, so the accessible name was whichever one the
+                // viewport happened to leave visible — the bare "GE"/"ST"
+                // abbreviation on a phone, and both together for any tool that
+                // reads the subtree rather than honouring `display: none`.
+                // Naming the tab explicitly makes it "GENERAL" at every width.
+                aria-label={label}
                 aria-selected={active}
                 tabIndex={active ? 0 : -1}
                 onClick={() => setMode(tabMode)}
                 onKeyDown={(event) => onTabKeyDown(event, index)}
-                className={`border-r border-line px-2.5 py-1.5 transition-colors last:border-r-0 md:px-3 ${
+                className={`shrink-0 border-r border-line px-2 py-1.5 transition-colors last:border-r-0 sm:px-2.5 md:px-3 ${
                   active
                     ? "bg-[var(--ac-bg)] text-[var(--ac)] shadow-[inset_0_-2px_0_var(--ac)]"
                     : "text-ink-faint hover:text-ink-muted"
@@ -215,7 +235,9 @@ export default function TopBar() {
           })}
         </div>
 
-        <div className="ml-auto flex items-center gap-2 font-mono text-label text-ink-faint">
+        {/* `shrink-0`: this cluster keeps its width and the tab strip above
+            gives way, rather than both squashing into illegibility. */}
+        <div className="ml-auto flex shrink-0 items-center gap-2 font-mono text-label text-ink-faint">
           <div className="hidden items-center gap-2 md:flex">
             <Button variant="quiet" onClick={() => setNoteOpen(true)}>
               + NOTE
@@ -234,11 +256,14 @@ export default function TopBar() {
               collapses — the model in use is not something to hide at a
               breakpoint. */}
           <EngineTrigger />
+          {/* Below `md` this lives in the overflow menu instead — see
+              OverflowMenu's items. A keyboard-shortcut chip is the wrong thing
+              to spend 58px of a 390px bar on. */}
           <Button
             variant="quiet"
             aria-label="Command palette"
             onClick={() => setPaletteOpen(true)}
-            className="normal-case tracking-normal"
+            className="hidden normal-case tracking-normal md:inline-flex"
           >
             [⌘K]
           </Button>

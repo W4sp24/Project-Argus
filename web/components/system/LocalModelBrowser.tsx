@@ -157,7 +157,7 @@ export default function LocalModelBrowser() {
                         ? entry.reason
                         : `Download ${entry.label} through Ollama`
                     }
-                    className="shrink-0 border border-line px-2 py-0.5 font-mono text-meta uppercase tracking-[0.1em] text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+                    className="shrink-0 border border-line px-2 py-0.5 font-mono text-meta uppercase tracking-[0.1em] text-ink transition-colors hover:border-lineHi disabled:opacity-70"
                   >
                     DOWNLOAD
                   </button>

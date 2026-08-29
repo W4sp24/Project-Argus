@@ -163,7 +163,7 @@ export default function QuickLinks() {
           <button
             type="submit"
             disabled={adding}
-            className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-40"
+            className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-[var(--ac)] transition-colors hover:border-lineHi disabled:opacity-70"
           >
             ADD
           </button>
@@ -206,7 +206,7 @@ export default function QuickLinks() {
                       <button
                         type="submit"
                         disabled={savingEdit}
-                        className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-[var(--ac)] disabled:opacity-40"
+                        className="shrink-0 border border-line bg-[var(--ac-bg)] px-2 py-1 font-mono text-meta uppercase tracking-[0.12em] text-[var(--ac)] disabled:opacity-70"
                       >
                         SAVE
                       </button>

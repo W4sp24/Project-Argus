@@ -103,52 +103,6 @@ body {
   color: var(--ac);
 }
 
-/* Rendered markdown inside journal/detail panes — square corners, line/panel tokens */
-.prose-journal h1,
-.prose-journal h2,
-.prose-journal h3 {
-  @apply mb-2 mt-5 font-body font-medium text-ink-bright first:mt-0;
-}
-.prose-journal h1 {
-  @apply text-xl;
-}
-.prose-journal h2 {
-  @apply text-lg;
-}
-.prose-journal h3 {
-  @apply text-base;
-}
-.prose-journal p {
-  @apply mb-3;
-}
-.prose-journal ul,
-.prose-journal ol {
-  @apply mb-3 ml-5 list-disc space-y-1;
-}
-.prose-journal ol {
-  @apply list-decimal;
-}
-.prose-journal code {
-  @apply border border-line bg-sunken px-1.5 py-0.5 font-mono text-[0.85em];
-  color: var(--ac);
-}
-.prose-journal pre {
-  @apply mb-3 overflow-x-auto border border-line bg-sunken p-4;
-}
-.prose-journal pre code {
-  @apply border-0 bg-transparent p-0 text-ink-muted;
-}
-.prose-journal a {
-  @apply underline underline-offset-2;
-  color: var(--ac);
-}
-.prose-journal blockquote {
-  @apply mb-3 border-l-2 border-lineHi pl-4 italic text-ink-faint;
-}
-.prose-journal hr {
-  @apply my-4 border-line;
-}
-
 /* Flashcard flip (§5, /study/flashcards [PREVIEW]): transform-only 3D flip.
    Reduced-motion just removes the transition — rotateY still applies, so the
    face swap is instant instead of animated (no separate JS branch needed). */
@@ -195,60 +149,65 @@ body {
   border-radius: 0;
 }
 
-/* Chat markdown (web/components/chat/MarkdownImpl.tsx). Same idiom as
-   .prose-journal above — square corners, the shared border/surface tokens,
-   var(--ac) for the one accent color — plus what a chat answer needs that a
-   journal entry doesn't: GFM tables and task-list checkboxes. */
-.prose-chat h1,
-.prose-chat h2,
-.prose-chat h3 {
+/* Rendered markdown, everywhere (web/components/MarkdownImpl.tsx).
+   Square corners, the shared border/surface tokens, var(--ac) for the one
+   accent color, GFM tables and task-list checkboxes.
+
+   This was two near-identical blocks, .prose-chat and .prose-journal, because
+   there were two renderers. The journal's had no table rules and no highlight
+   rules, so a note containing a table rendered in the journal as a paragraph
+   full of pipes — a defect nobody had to introduce, just the cost of the
+   second copy existing. One renderer, one stylesheet. */
+.prose-md h1,
+.prose-md h2,
+.prose-md h3 {
   @apply mb-2 mt-5 font-body font-medium text-ink-bright first:mt-0;
 }
-.prose-chat h1 {
+.prose-md h1 {
   @apply text-xl;
 }
-.prose-chat h2 {
+.prose-md h2 {
   @apply text-lg;
 }
-.prose-chat h3 {
+.prose-md h3 {
   @apply text-base;
 }
-.prose-chat p {
+.prose-md p {
   @apply mb-3;
 }
-.prose-chat ul,
-.prose-chat ol {
+.prose-md ul,
+.prose-md ol {
   @apply mb-3 ml-5 list-disc space-y-1;
 }
-.prose-chat ol {
+.prose-md ol {
   @apply list-decimal;
 }
 /* GFM task lists render as a <ul> whose <li> carries a checkbox input; drop
    the disc marker in favour of the checkbox itself. */
-.prose-chat ul:has(> li > input[type="checkbox"]) {
+.prose-md ul:has(> li > input[type="checkbox"]) {
   @apply ml-0 list-none;
 }
-.prose-chat li > input[type="checkbox"] {
+.prose-md li > input[type="checkbox"] {
   @apply mr-1.5 -translate-y-px accent-[var(--ac)];
 }
-.prose-chat code {
+.prose-md code {
   @apply border border-line bg-sunken px-1.5 py-0.5 font-mono text-[0.85em];
   color: var(--ac);
 }
-.prose-chat pre {
+.prose-md pre {
   @apply relative mb-3 overflow-x-auto border border-line bg-sunken p-4 pt-8;
 }
-.prose-chat pre code {
+.prose-md pre code {
   @apply border-0 bg-transparent p-0 text-ink-muted;
 }
-.prose-chat a {
+.prose-md a {
   @apply underline underline-offset-2;
   color: var(--ac);
 }
-.prose-chat blockquote {
+.prose-md blockquote {
   @apply mb-3 border-l-2 border-lineHi pl-4 italic text-ink-faint;
 }
-.prose-chat hr {
+.prose-md hr {
   @apply my-4 border-line;
 }
 /* GFM tables: bordered cells on the shared line token, header row lifted
@@ -256,47 +215,86 @@ body {
 /* `display: block` so a table wider than the reading column scrolls inside
    itself instead of stretching the message bubble and, with it, the whole
    transcript. This is the same trick GitHub uses on rendered GFM tables. */
-.prose-chat table {
+.prose-md table {
   @apply mb-3 block w-full max-w-full overflow-x-auto border-collapse border border-line text-left;
 }
-.prose-chat th,
-.prose-chat td {
+.prose-md th,
+.prose-md td {
   @apply border border-line px-2.5 py-1.5;
 }
-.prose-chat thead th {
+.prose-md thead th {
   @apply bg-sunken font-body font-medium text-ink-bright;
 }
-.prose-chat tbody tr:nth-child(even) {
+.prose-md tbody tr:nth-child(even) {
   @apply bg-sunken/40;
 }
 
 /* highlight.js tokens (rehype-highlight), mapped onto existing tokens only —
    no highlight.js theme stylesheet, no new hex colors. Kept to the classes
    the curated language subset in MarkdownImpl.tsx actually emits. */
-.prose-chat .hljs-keyword,
-.prose-chat .hljs-selector-tag {
+.prose-md .hljs-keyword,
+.prose-md .hljs-selector-tag {
   color: var(--ac);
 }
-.prose-chat .hljs-string {
+.prose-md .hljs-string {
   @apply text-ok;
 }
-.prose-chat .hljs-number {
+.prose-md .hljs-number {
   @apply text-warn;
 }
-.prose-chat .hljs-comment {
+.prose-md .hljs-comment {
   @apply text-ink-faint italic;
 }
-.prose-chat .hljs-title,
-.prose-chat .hljs-title.function_ {
+.prose-md .hljs-title,
+.prose-md .hljs-title.function_ {
   @apply text-ink-bright;
 }
-.prose-chat .hljs-attr,
-.prose-chat .hljs-attribute {
+.prose-md .hljs-attr,
+.prose-md .hljs-attribute {
   @apply text-ink-muted;
 }
-.prose-chat .hljs-built_in {
+.prose-md .hljs-built_in {
   color: var(--ac);
 }
-.prose-chat .hljs-literal {
+.prose-md .hljs-literal {
   @apply text-danger;
+}
+
+/* KaTeX (remark-math + rehype-katex, wired in web/components/MarkdownImpl.tsx).
+   katex.min.css does the typesetting; these rules only fit it to the surface
+   it lands on — no new colors, no font overrides that would break the metrics
+   KaTeX computes against its own fonts. */
+
+/* A long equation is the same failure mode as a wide table, and gets the same
+   answer as `.prose-md table` above: scroll inside your own box rather than
+   stretching the message bubble and, with it, the whole transcript. The
+   vertical hidden matters too — KaTeX's fraction bars and radicals overhang
+   their line box, and an `overflow-x: auto` alone makes that overhang produce
+   a permanent vertical scrollbar. */
+.prose-md .katex-display {
+  @apply my-4 overflow-x-auto overflow-y-hidden;
+  padding: 0.25rem 0;
+}
+
+/* Inherit the surrounding ink rather than KaTeX's own black. `1.05em` because
+   maths set at exactly the prose size reads a little small next to it, and
+   anything larger starts to reflow the line. */
+.prose-md .katex {
+  color: inherit;
+  font-size: 1.05em;
+}
+
+/* An expression KaTeX could not parse. `throwOnError: false` renders the
+   source in place of the maths and marks it up with this class, so the reader
+   sees which expression failed instead of a message that lost its position. */
+.prose-md .katex-error {
+  @apply border-b border-dotted border-danger text-danger;
+}
+
+/* Maths inside a heading, a table cell or a blockquote must not drag the
+   accent color and monospace border of `.prose-md code` along with it. */
+.prose-md .katex .mord,
+.prose-md .katex .mrel,
+.prose-md .katex .mbin {
+  color: inherit;
 }

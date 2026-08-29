@@ -1,13 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
+import IngestDialog from "@/components/sources/IngestDialog";
+import IngestJobProgress from "@/components/sources/IngestJobProgress";
 import Button from "@/components/ui/Button";
-import { ApiError, apiFetch, mutateJSON } from "@/lib/api";
-import { useTypewriter } from "@/lib/useTypewriter";
-
-const ACCEPT = ".pdf,.pptx,.docx,.md,.eml";
+import { ApiError, apiFetch, mutateJSON, useIngestJob } from "@/lib/api";
 
 interface IngestPanelProps {
   /** Vault-relative target folder for uploads (e.g. a course's materials
@@ -27,64 +27,34 @@ interface IngestPanelProps {
 }
 
 /**
- * INGEST panel (§11, §4 General) — real dropzone wired to `POST /api/ingest`
- * (multipart `file` + optional `target`), manual capture (`POST /api/capture`,
- * unchanged), and EMAIL.CAPTURE wired to `POST /api/ingest/email`
- * (flags.emailCapture: enabled) — extractions land in the Review queue, never
- * a direct write.
+ * INGEST panel (§11, §4 General) — the dropzone opens the shared
+ * `IngestDialog`, manual capture posts to `POST /api/capture` (unchanged), and
+ * EMAIL.CAPTURE to `POST /api/ingest/email` (flags.emailCapture: enabled),
+ * whose extractions land in the Review queue rather than as a direct write.
+ *
+ * The dropzone used to post to the single-file synchronous `POST /api/ingest`
+ * with a `target` the dashboard never supplied, so every hand-dropped file
+ * landed in the inbox with no destination choice, no note style and no
+ * progress. Two ingest paths sat inches apart with very different
+ * capabilities and the worse one was the discoverable one. There is one now;
+ * the legacy endpoint stays for API callers, but no UI reaches it.
  */
 export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
   const { show } = useToast();
   const [dragOver, setDragOver] = useState(false);
-  const [status, setStatus] = useState("");
-  const [busy, setBusy] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const { output, done: typingDone } = useTypewriter(status);
 
-  async function upload(file: File) {
-    setBusy(true);
-    setStatus(`ingesting ${file.name} :: extract → chunk → embed (local)`);
-    const body = new FormData();
-    body.append("file", file);
-    if (target) body.append("target", target);
-    try {
-      const response = await apiFetch("/api/ingest", { method: "POST", body });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(
-          typeof payload.detail === "string" ? payload.detail : `upload failed (${response.status})`,
-        );
-      }
-      const { chunks, indexed, index_error } = payload as {
-        chunks: number;
-        indexed: boolean;
-        index_error: string | null;
-      };
-      if (indexed) {
-        setStatus(`done :: ${file.name} indexed · ${chunks} chunks`);
-      } else if (index_error) {
-        // A real failure (broken index), not just "no [rag] extras installed".
-        setStatus(`saved — indexing failed: ${index_error}`);
-      } else {
-        setStatus("saved — indexing unavailable");
-      }
-      onUploaded?.();
-    } catch (error) {
-      setStatus("");
-      show(`ingest :: failed — ${error instanceof Error ? error.message : "backend offline?"}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function pickFile(picked: File | null | undefined) {
-    if (!picked || busy) return;
-    upload(picked);
-  }
-
-  // Manual capture — real writer path (POST /api/capture), unchanged from CaptureCard.
   const [capture, setCapture] = useState("");
   const [captureStatus, setCaptureStatus] = useState<string | null>(null);
+  const [dialogFiles, setDialogFiles] = useState<File[] | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const { data: job } = useIngestJob(jobId);
+
+  // Tell the parent once the job settles, not when the upload is accepted:
+  // the files a caller's counts are derived from do not exist until then.
+  const status = job?.status;
+  useEffect(() => {
+    if (status === "ok" || status === "partial" || status === "failed") onUploaded?.();
+  }, [status, onUploaded]);
 
   async function submitCapture(event: React.FormEvent) {
     event.preventDefault();
@@ -126,9 +96,25 @@ export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
   }
 
   return (
-    <Panel label="INGEST">
+    <Panel
+      label="INGEST"
+      headerRight={
+        <Link
+          href="/sources"
+          // Was the only link to /sources in the app, in the lowest-contrast
+          // colour in the palette. It is not decoration.
+          className="font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:text-[var(--ac)]"
+        >
+          sources →
+        </Link>
+      }
+    >
       {/* A <button>, not a clickable <div>: the dropzone was mouse-only, with
-          no role, no tabindex and no key handler. */}
+          no role, no tabindex and no key handler. It opens the shared dialog
+          now, so a drop here gets the same destination choice, note style,
+          collision precheck and per-file progress as /sources -- and a
+          dropped file carries straight through rather than being re-asked
+          for. */}
       <button
         type="button"
         onDragOver={(event) => {
@@ -139,35 +125,22 @@ export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
         onDrop={(event) => {
           event.preventDefault();
           setDragOver(false);
-          pickFile(event.dataTransfer.files?.[0]);
+          setDialogFiles(Array.from(event.dataTransfer.files ?? []));
         }}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => setDialogFiles([])}
         className={`w-full cursor-pointer border border-dashed px-4 py-6 text-center transition-[border-color,background-color] ${
           dragOver ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
         }`}
       >
         <span className="block font-mono text-label text-ink-muted">
-          drop a file, or click to choose ({ACCEPT.replaceAll(",", " ")})
+          drop a file, or click to choose
         </span>
       </button>
-      <input
-        ref={inputRef}
-        type="file"
-        accept={ACCEPT}
-        aria-hidden
-        tabIndex={-1}
-        className="hidden"
-        onChange={(event) => pickFile(event.target.files?.[0])}
-      />
-      {status && (
-        <p className="mt-2 font-mono text-label text-ink-muted" aria-live="polite">
-          {output}
-          {busy && !typingDone && <span className="animate-blink text-[var(--ac)]">▊</span>}
-        </p>
+      {job && (
+        <div className="mt-3 border border-line px-3 py-2">
+          <IngestJobProgress job={job} onDismiss={() => setJobId(null)} />
+        </div>
       )}
-      <p className="mt-2 font-mono text-meta text-ink-faint">
-        files are indexed locally — nothing leaves your machine
-      </p>
 
       <form onSubmit={submitCapture} className="mt-4 flex gap-2 border-t border-line pt-4">
         <input
@@ -208,6 +181,14 @@ export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
           {emailBusy ? "EXTRACTING…" : "EXTRACT →"}
         </Button>
       </div>
+      {dialogFiles !== null && (
+        <IngestDialog
+          onClose={() => setDialogFiles(null)}
+          onStarted={setJobId}
+          lockedTarget={target}
+          initialFiles={dialogFiles}
+        />
+      )}
     </Panel>
   );
 }

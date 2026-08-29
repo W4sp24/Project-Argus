@@ -237,6 +237,28 @@ def _dedupe(path: Path) -> Path:
     raise WriterError(f"cannot find a free name for {path.name}")
 
 
+def snapshot_vault(vault_path: Path, reason: str) -> None:
+    """Take the pre-write undo point for a batch (I2), once.
+
+    The counterpart to ``save_ingest_file(..., snapshot=False)``: a caller
+    saving N files in one user action takes this once, before the first
+    write, instead of N times inside the loop.
+    """
+    _git_snapshot(vault_path, reason)
+
+
+def log_action(vault_path: Path, line: str, *, taxonomy: Taxonomy | None = None) -> None:
+    """Write the one daily-note audit line for a batch (I2's paper trail).
+
+    The counterpart to ``log=False`` on the per-file writers, and the exact
+    analogue of :func:`snapshot_vault`: a caller doing one user action over N
+    files wants one line saying what it did, not N lines and not — as the
+    ingest job currently settles for — none at all. The line itself is the
+    only record a delete leaves in the vault, since the file it names is gone.
+    """
+    _argus_log(vault_path, line, taxonomy=taxonomy)
+
+
 def save_ingest_file(
     vault_path: Path,
     target_dir: str,
@@ -244,23 +266,45 @@ def save_ingest_file(
     data: bytes,
     *,
     taxonomy: Taxonomy | None = None,
+    snapshot: bool = True,
+    log: bool = True,
+    replace: bool = False,
 ) -> str:
     """Save one uploaded file into the vault (snapshot-first, I1/I2).
 
     ``target_dir`` is vault-relative (e.g. ``15-Courses/CS301``); protected
     zones (the private/journal zones, dotdirs) are refused by the path guard
     (I3). Returns the saved file's vault-relative path.
+
+    ``snapshot=False`` / ``log=False`` exist for a **batch**: one user action
+    saving N files wants one undo point and one daily-note line, not N of
+    each. Per-file snapshotting is not merely wasteful (each one is a
+    full-vault ``git add -A``) -- ``_git_snapshot`` runs git with
+    ``check=False``, so two concurrent snapshots race on ``.git/index.lock``
+    and the loser fails *silently*, which is I2 broken with nothing to show
+    for it. A caller passing ``snapshot=False`` takes responsibility for
+    calling :func:`snapshot_vault` once, before the first file. The path
+    guard runs either way -- deferring the undo point never defers I3.
+
+    ``replace=True`` writes over a file already at that name instead of
+    deduping to ``name-2``. Dedupe is the right default -- an upload should
+    never silently destroy something -- but it is wrong for the one case where
+    the user has been shown the collision and asked for it: re-ingesting a
+    corrected file. Deduping there leaves the stale copy indexed alongside the
+    new one, and every answer can then cite either.
     """
     tax = taxonomy or active_taxonomy()
     safe_name = SAFE_NAME_RE.sub("_", filename).strip() or "upload.bin"
     clean_dir = target_dir.strip().strip("/").replace("\\", "/") or tax.ingest_files
     guarded = guard_user_path(vault_path, f"{clean_dir}/{safe_name}", taxonomy=tax)
-    _git_snapshot(vault_path, f"ingest {safe_name}")
+    if snapshot:
+        _git_snapshot(vault_path, f"ingest {safe_name}")
     guarded.parent.mkdir(parents=True, exist_ok=True)
-    destination = _dedupe(guarded)
+    destination = guarded if replace else _dedupe(guarded)
     destination.write_bytes(data)
     rel_path = destination.relative_to(vault_path).as_posix()
-    _argus_log(vault_path, f"ingested file {rel_path}", taxonomy=tax)
+    if log:
+        _argus_log(vault_path, f"ingested file {rel_path}", taxonomy=tax)
     return rel_path
 
 
@@ -442,7 +486,13 @@ def _apply_note_diff(vault_path: Path, payload: dict) -> str:
 
 
 def create_note(
-    vault_path: Path, rel_path: str, content: str, *, taxonomy: Taxonomy | None = None
+    vault_path: Path,
+    rel_path: str,
+    content: str,
+    *,
+    taxonomy: Taxonomy | None = None,
+    snapshot: bool = True,
+    log: bool = True,
 ) -> str:
     """Create a brand-new note (redesign §13 quick add-note modal).
 
@@ -457,11 +507,13 @@ def create_note(
     note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     if note.exists():
         raise WriterExists(f"{rel_path} already exists")
-    _git_snapshot(vault_path, f"create note {rel_path}")
+    if snapshot:
+        _git_snapshot(vault_path, f"create note {rel_path}")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(content, encoding="utf-8")
     rel = note.relative_to(vault_path).as_posix()
-    _argus_log(vault_path, f"created note {rel}", taxonomy=tax)
+    if log:
+        _argus_log(vault_path, f"created note {rel}", taxonomy=tax)
     return rel
 
 
@@ -515,15 +567,36 @@ def edit_note(
     return summary
 
 
-def delete_note(vault_path: Path, rel_path: str, *, taxonomy: Taxonomy | None = None) -> None:
-    """Delete one note (user-initiated); the pre-apply snapshot is the undo."""
+def delete_note(
+    vault_path: Path,
+    rel_path: str,
+    *,
+    taxonomy: Taxonomy | None = None,
+    snapshot: bool = True,
+    log: bool = True,
+) -> None:
+    """Delete one file (user-initiated); the pre-apply snapshot is the undo.
+
+    ``snapshot=False`` is the counterpart to :func:`save_ingest_file`'s: a
+    caller deleting N files in one user action takes :func:`snapshot_vault`
+    once, before the first unlink, instead of N times inside the loop.
+    ``_git_snapshot`` runs git with ``check=False``, so two snapshots racing on
+    ``.git/index.lock`` lose one of them *silently* -- which is I2 broken with
+    nothing to show for it.
+
+    Despite the name it is not markdown-specific: it guards and unlinks any
+    path in a user-editable zone, which is what lets a source of any type be
+    deleted through the same single write path (I1).
+    """
     tax = taxonomy or active_taxonomy()
     note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     if not note.is_file():
         raise WriterMissing(f"{rel_path} does not exist")
-    _git_snapshot(vault_path, f"delete note {rel_path}")
+    if snapshot:
+        _git_snapshot(vault_path, f"delete note {rel_path}")
     note.unlink()
-    _argus_log(vault_path, f"deleted note {rel_path}", taxonomy=tax)
+    if log:
+        _argus_log(vault_path, f"deleted note {rel_path}", taxonomy=tax)
 
 
 def delete_course_tree(vault_path: Path, code: str, *, taxonomy: Taxonomy | None = None) -> None:

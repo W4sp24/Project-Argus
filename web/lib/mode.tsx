@@ -46,6 +46,12 @@ const STORAGE_KEY = "argus-mode";
  * with zero flash. `/study*` catches the sub-pages (flashcards, exam, hub).
  */
 function modeFromPathname(pathname: string): Mode {
+  // Explicit rather than falling through. /sources is a GENERAL surface, and
+  // saying so here is what gives the route a real active state instead of one
+  // it lands on by accident. A seventh mode tab would be the wrong fix: `Mode`
+  // is a closed union threaded through six places, and the two-letter tab
+  // strip below `md` has no room for another.
+  if (pathname.startsWith("/sources")) return "general";
   if (pathname.startsWith("/study")) return "study";
   if (pathname.startsWith("/research")) return "research";
   if (pathname.startsWith("/code")) return "code";

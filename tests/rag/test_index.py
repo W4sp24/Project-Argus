@@ -140,6 +140,46 @@ def test_size_reports_chunks_and_files_without_loading_embedding_model(
     assert fresh._model is None
 
 
+def test_chunk_counts_maps_every_indexed_path_to_its_chunk_total(index) -> None:
+    """The per-file counts /api/sources renders, and study's SOURCES rail needs."""
+    counts = index.chunk_counts()
+
+    assert counts, "index is empty"
+    assert all(isinstance(total, int) and total > 0 for total in counts.values())
+    # Same corpus, two different summaries of it: the totals must agree.
+    assert sum(counts.values()) == index.size()["chunks"]
+    assert set(counts) == {chunk["meta"]["path"] for chunk in index.all_chunks()}
+    assert not any(path.startswith("99-Private") for path in counts), "I3 violation"
+
+
+def test_chunk_counts_never_fetches_documents(index, monkeypatch) -> None:
+    """The whole reason this exists instead of counting ``all_chunks()``.
+
+    ``all_chunks()`` pulls the full text of every chunk in the vault out of
+    chroma; ``course_sources`` used it purely to build a ``{path: count}``
+    dict, so a page listing sources paid a whole-vault document fetch. Counts
+    only need metadata -- the same ``include`` ``size()`` already relies on.
+    """
+    seen: list[list[str]] = []
+    original = index.collection.get
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("include") or [])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(index.collection, "get", spy)
+    index.chunk_counts()
+
+    assert seen, "chunk_counts() made no collection.get call"
+    assert all("documents" not in include for include in seen)
+
+
+def test_chunk_counts_on_empty_index_is_empty(tmp_path: Path) -> None:
+    from backend.rag.index import VaultIndex
+
+    assert VaultIndex(tmp_path / "chroma-no-counts").chunk_counts() == {}
+
+
 def test_size_on_empty_index_is_zero(tmp_path: Path) -> None:
     from backend.rag.index import VaultIndex
 

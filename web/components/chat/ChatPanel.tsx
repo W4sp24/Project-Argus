@@ -6,7 +6,7 @@ import Button from "@/components/ui/Button";
 import { useVault } from "@/lib/api";
 import { useChat, type ChatMessage } from "@/lib/chat";
 import CitationChips from "@/components/chat/CitationChips";
-import Markdown from "@/components/chat/Markdown";
+import Markdown from "@/components/Markdown";
 import ToolTrace from "@/components/chat/ToolTrace";
 import { stripCitationMarkers } from "@/lib/citations";
 import { useSelectedModel } from "@/lib/models";
@@ -222,7 +222,10 @@ export default function ChatPanel({
                 />
                 {message.text && (
                   <div className="border border-line bg-void px-3.5 py-2.5 text-body leading-relaxed text-ink-muted">
-                    <Markdown text={stripCitationMarkers(message.text)} />
+                    <Markdown
+                      text={stripCitationMarkers(message.text)}
+                      streaming={message.status === "streaming"}
+                    />
                     <CitationChips steps={message.steps} vaultPath={vaultPath} />
                   </div>
                 )}
@@ -233,7 +236,11 @@ export default function ChatPanel({
             <div key={message.key} className="animate-msg-in group flex gap-3">
               <Orb />
               <div className="min-w-0 flex-1 space-y-2">
-                <p className="font-mono text-meta uppercase tracking-[0.14em] text-ink-faint">
+                {/* `text-ink-muted` rather than `text-ink-faint`: this line
+                    names which model answered and whether the answer is being
+                    kept. Both are facts a user acts on, so it cannot be the
+                    faintest text in the transcript. */}
+                <p className="font-mono text-meta uppercase tracking-[0.14em] text-ink-muted">
                   ARGUS · {model}
                   {message.local && <span className="ml-2 normal-case">· not saved to this thread</span>}
                 </p>
@@ -248,6 +255,7 @@ export default function ChatPanel({
                     <Markdown
                       text={stripCitationMarkers(message.text)}
                       className="text-lead leading-[1.7] text-ink"
+                      streaming={message.status === "streaming"}
                     />
                     <CitationChips steps={message.steps} vaultPath={vaultPath} />
                   </>

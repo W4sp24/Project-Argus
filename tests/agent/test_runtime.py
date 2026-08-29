@@ -837,3 +837,70 @@ def test_repeated_identical_steps_read_as_one() -> None:
 
 def test_a_turn_with_no_steps_gets_no_acknowledgement() -> None:
     assert acknowledge_tool_steps([]) == ""
+
+
+@pytest.mark.anyio
+async def test_search_vault_is_pinned_to_the_selected_sources(
+    settings: Settings, monkeypatch
+) -> None:
+    """The Course Hub SOURCES ticks are a fixed scope, exactly as `course` is:
+    the user narrowed this conversation, and the model does not get to widen
+    it back out."""
+    seen: list[list[str] | None] = []
+    monkeypatch.setattr(
+        "backend.rag.retrieve.retrieve", lambda *a, **k: seen.append(k.get("paths")) or []
+    )
+
+    tools = build_vault_tools(
+        settings, FakeIndex(), course="CS201", sources=["15-Courses/CS201/materials/wk1.pdf"]
+    )
+    await tool(tools, "search_vault").handler({"query": "midterm"})
+
+    assert seen == [["15-Courses/CS201/materials/wk1.pdf"]]
+
+
+@pytest.mark.anyio
+async def test_search_vault_leaves_paths_unset_when_nothing_is_pinned(
+    settings: Settings, monkeypatch
+) -> None:
+    """Global chat must keep searching the whole vault."""
+    seen: list[list[str] | None] = []
+    monkeypatch.setattr(
+        "backend.rag.retrieve.retrieve", lambda *a, **k: seen.append(k.get("paths")) or []
+    )
+
+    tools = build_vault_tools(settings, FakeIndex())
+    await tool(tools, "search_vault").handler({"query": "midterm"})
+
+    assert seen == [None]
+
+
+@pytest.mark.anyio
+async def test_search_vault_says_so_when_every_source_is_unticked(
+    settings: Settings, monkeypatch
+) -> None:
+    """An empty selection must not silently fall back to the whole vault, and
+    must not look like "the vault has nothing on this" either — the model
+    would report the material absent when it is merely deselected."""
+    called = {"n": 0}
+    monkeypatch.setattr(
+        "backend.rag.retrieve.retrieve", lambda *a, **k: called.__setitem__("n", called["n"] + 1)
+    )
+
+    tools = build_vault_tools(settings, FakeIndex(), course="CS201", sources=[])
+    result = await tool(tools, "search_vault").handler({"query": "midterm"})
+
+    assert called["n"] == 0, "nothing is selected, so there is nothing to search"
+    assert "no sources are selected" in str(result)
+
+
+def test_the_tool_description_admits_a_narrowed_scope(settings: Settings) -> None:
+    """A model that believes it can see the whole course will state that
+    something is missing when it was only unticked."""
+    scoped = tool(
+        build_vault_tools(settings, FakeIndex(), sources=["a.md", "b.md"]), "search_vault"
+    )
+    assert "2 specific file(s)" in scoped.description
+
+    unscoped = tool(build_vault_tools(settings, FakeIndex()), "search_vault")
+    assert "specific file(s)" not in unscoped.description

@@ -51,6 +51,21 @@ Two things are due this week, and the reading is the one you have not started.
 - [x] finish the week 3 problem set
 - [ ] read the week 4 notes
 
+Where the week 4 reading sits [15-Courses/CS000/course.md]:
+
+- Graphs
+  - Breadth-first search
+  - Depth-first search
+
+Sorting by comparison costs $O(n \\log n)$ in the average case, which falls out
+of the recurrence
+
+$$
+T(n) = 2T\\!\\left(\\frac{n}{2}\\right) + O(n)
+$$
+
+once you unroll it.
+
 The traversal you asked about is plain BFS:
 
 ```python

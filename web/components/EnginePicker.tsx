@@ -308,7 +308,11 @@ export function EngineTrigger({
           local ? "bg-ok" : "border border-ink-faint"
         }`}
       />
-      <span className="max-w-[11rem] truncate">{selected}</span>
+      {/* Tighter cap on phones. This chip never collapses at a breakpoint —
+          which model is answering is not something to hide — but at 11rem it
+          was the single widest item in a top bar that overran a 390px viewport
+          by 230px. The `aria-label` above carries the full name either way. */}
+      <span className="max-w-[7rem] truncate sm:max-w-[11rem]">{selected}</span>
       <span aria-hidden className="text-ink-faint">
         ▾
       </span>

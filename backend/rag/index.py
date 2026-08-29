@@ -12,6 +12,8 @@ import hashlib
 import logging
 import os
 import re
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -253,6 +255,24 @@ class VaultIndex:
         files = {meta.get("path") for meta in result["metadatas"] if meta.get("path")}
         return {"chunks": total, "files": len(files)}
 
+    def chunk_counts(self) -> dict[str, int]:
+        """``{rel_path: chunks}`` for every indexed file — metadata only.
+
+        Deliberately not built on ``all_chunks()``: that fetches the *text* of
+        every chunk in the vault, and the only thing a source listing wants
+        from it is a count per path. This uses the same metadata-only
+        ``get`` that :meth:`size` is already blessed to call on every status
+        poll, and likewise never touches ``_embed``.
+        """
+        if self.collection.count() == 0:
+            return {}
+        counts: dict[str, int] = {}
+        for meta in self.collection.get(include=["metadatas"])["metadatas"]:
+            path = meta.get("path")
+            if path:
+                counts[path] = counts.get(path, 0) + 1
+        return counts
+
     def query(self, text: str, n_results: int = 20, where: dict | None = None) -> list[dict]:
         """Vector search returning [{text, meta, score}] (higher = closer)."""
         if self.collection.count() == 0:
@@ -334,6 +354,43 @@ class VaultIndex:
         self._link_cache_key = key
         return link_idx
 
+
+def make_index_factory(
+    db_dir: Path, *, taxonomy: Taxonomy | None = None
+) -> Callable[[], VaultIndex]:
+    """A zero-arg callable handing out **one** :class:`VaultIndex`, built lazily.
+
+    Every consumer of an index in this app receives an ``index_factory`` and
+    calls it per use, so that tests can inject a fake. The real factory used
+    to be ``lambda: VaultIndex(...)`` -- a *fresh* instance every call -- which
+    cost more than it looked like:
+
+    * The lazily-loaded SentenceTransformer is per-instance, so the ~7s model
+      load was paid again by every upload, every search, and the watcher.
+    * ``all_chunks``/``bm25``/``link_index`` are memoised against a
+      ``_version`` counter each instance bumps on **its own** mutations only.
+      Two instances over one chroma directory therefore cannot see each
+      other's upserts, so a per-call instance threw its caches away while a
+      long-lived one (the watcher's) could serve stale ones.
+
+    Construction stays lazy -- nothing here imports chromadb or loads a model
+    -- so building the factory at app startup costs nothing on a machine
+    without the ``[rag]`` extras installed.
+    """
+    lock = threading.Lock()
+    holder: list[VaultIndex] = []
+
+    def factory() -> VaultIndex:
+        # Double-checked so the common (warm) path never takes the lock, but
+        # the watcher thread and a request thread racing on first use still
+        # end up with the same instance rather than one each.
+        if not holder:
+            with lock:
+                if not holder:
+                    holder.append(VaultIndex(db_dir, taxonomy=taxonomy))
+        return holder[0]
+
+    return factory
 
 def index_chunks(index: VaultIndex, rel_path: str, chunks: list[Chunk]) -> None:
     """Store pre-built chunks (test seam and future partial updates)."""

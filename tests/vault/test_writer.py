@@ -16,8 +16,10 @@ from backend.vault.writer import (
     WriterForbidden,
     WriterMissing,
     append_capture,
+    create_note,
     edit_note,
     guard_user_path,
+    save_ingest_file,
 )
 
 # Resolved through the package itself, not by walking up from __file__: this
@@ -396,3 +398,113 @@ def test_edit_note_fails_clean_on_drift(vault: Path) -> None:
         edit_note(vault, "Welcome.md", _diff("# Something else", "# Hello"))
 
     assert (vault / "Welcome.md").read_text(encoding="utf-8") == "# Hi\n"
+
+
+# --- batched writes -----------------------------------------------------------
+# A batch ingest saves N files in one user action. Snapshotting per file means
+# N full-vault `git add -A` scans and N commits for one undo point, and
+# `_git_snapshot` runs git with check=False, so two concurrent snapshots race
+# on .git/index.lock and the loser fails *silently* -- I2 broken with no error.
+
+
+def _commit_count(vault: Path) -> int:
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=vault,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return int(result.stdout.strip())
+
+
+def test_save_ingest_file_snapshots_by_default(vault: Path) -> None:
+    """Every existing caller must keep the behaviour it has today."""
+    before = _commit_count(vault)
+    save_ingest_file(vault, "00-Inbox/files", "a.md", b"# A\n")
+
+    assert _commit_count(vault) == before + 1
+
+
+def test_save_ingest_file_can_defer_the_snapshot_to_its_caller(vault: Path) -> None:
+    """One undo point per batch, taken by the caller before the first file."""
+    before = _commit_count(vault)
+    for name in ("a.md", "b.md", "c.md"):
+        save_ingest_file(vault, "00-Inbox/files", name, b"# X\n", snapshot=False)
+
+    assert _commit_count(vault) == before, "no snapshot should have been taken"
+    for name in ("a.md", "b.md", "c.md"):
+        assert (vault / "00-Inbox" / "files" / name).is_file(), "the file must still be saved"
+
+
+def test_save_ingest_file_can_defer_the_daily_note_line(vault: Path) -> None:
+    """20 files should leave one line in the daily note, not 20 rewrites."""
+    save_ingest_file(vault, "00-Inbox/files", "a.md", b"# A\n", snapshot=False, log=False)
+    save_ingest_file(vault, "00-Inbox/files", "b.md", b"# B\n", snapshot=False, log=False)
+
+    daily = list((vault / "10-Daily").glob("*.md"))
+    written = "".join(path.read_text(encoding="utf-8") for path in daily)
+    assert "ingested file" not in written
+
+
+def test_create_note_can_defer_the_snapshot_too(vault: Path) -> None:
+    """The summary note a batch writes belongs to the batch's undo point."""
+    before = _commit_count(vault)
+    create_note(vault, "00-Inbox/files/a.summary.md", "# Summary\n", snapshot=False, log=False)
+
+    assert _commit_count(vault) == before
+    assert (vault / "00-Inbox" / "files" / "a.summary.md").is_file()
+
+
+def test_deferring_the_snapshot_still_refuses_a_protected_zone(vault: Path) -> None:
+    """Skipping the snapshot must not skip the path guard (I3)."""
+    with pytest.raises(WriterForbidden):
+        save_ingest_file(vault, "99-Private", "leak.md", b"# No\n", snapshot=False)
+
+
+def _commit_count(vault) -> int:
+    return int(
+        subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=vault,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    )
+
+
+def test_a_batch_delete_takes_one_snapshot_not_one_each(tmp_path):
+    """One user action, one undo point. `_git_snapshot` runs git with
+    check=False, so two snapshots racing on .git/index.lock lose one of them
+    silently -- which is I2 broken with nothing to show for it. Deleting N
+    files therefore has to snapshot once, before the first unlink, the same
+    way save_ingest_file's snapshot=False does for a batch ingest."""
+    vault = _make_vault(tmp_path)
+    inbox = vault / "00-Inbox"
+    inbox.mkdir()
+    for name in ("a.md", "b.md", "c.md"):
+        (inbox / name).write_text("bye", encoding="utf-8")
+    before = _commit_count(vault)
+
+    writer.snapshot_vault(vault, "delete 3 sources")
+    for name in ("a.md", "b.md", "c.md"):
+        writer.delete_note(vault, f"00-Inbox/{name}", snapshot=False, log=False)
+
+    assert _commit_count(vault) == before + 1
+    assert not any((inbox / name).exists() for name in ("a.md", "b.md", "c.md"))
+
+
+def test_delete_note_is_not_markdown_specific(tmp_path):
+    """It is the single write path for removing a *source*, which is a PDF as
+    often as a note -- the guard and the unlink do not care about the suffix."""
+    vault = _make_vault(tmp_path)
+    (vault / "00-Inbox" / "files").mkdir(parents=True)
+    pdf = vault / "00-Inbox" / "files" / "lecture.pdf"
+    pdf.write_bytes(b"%PDF-1.4 not really")
+
+    writer.delete_note(vault, "00-Inbox/files/lecture.pdf")
+
+    assert not pdf.exists()

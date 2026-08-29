@@ -6,10 +6,14 @@ mutations are a thin HTTP layer over the single writer (I1).
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.core.config import Settings
+from backend.rag.deindex import forget_paths
 from backend.vault import writer
 from backend.vault.errors import raise_http
 from backend.vault.notes import NoteInfo, list_notes
@@ -49,7 +53,17 @@ class NoteUpdate(BaseModel):
     new_content: str
 
 
-def build_notes_router(settings: Settings) -> APIRouter:
+def build_notes_router(
+    settings: Settings, index_factory: Callable[[], Any] | None = None
+) -> APIRouter:
+    """Vault reads and note CRUD.
+
+    ``index_factory`` is here for exactly one route: deleting a note has to
+    delete its chunks too, or the note keeps being retrieved and cited in
+    chat after the file is gone. It is injected the same way the ingest and
+    study routers take it, and defaults to ``None`` so a caller that has no
+    index (or no ``[rag]`` extras) still gets working note CRUD.
+    """
     router = APIRouter(prefix="/api")
 
     @router.get("/vault", response_model=VaultInfo)
@@ -112,10 +126,18 @@ def build_notes_router(settings: Settings) -> APIRouter:
 
     @router.delete("/note")
     def remove_note(path: str) -> dict:
+        """Delete one note, and the chunks that made it answer questions.
+
+        The de-index used to be missing entirely: the file was unlinked and
+        every chunk of it stayed in the index, so search and chat went on
+        retrieving and citing a note that no longer existed. It runs *after*
+        the unlink and never fails the request — see
+        :mod:`backend.rag.deindex`.
+        """
         try:
             writer.delete_note(settings.vault_path, path, taxonomy=settings.taxonomy)
         except WriterError as exc:
             raise_http(exc)
-        return {"path": path}
+        return {"path": path, "chunks_removed": forget_paths(index_factory, [path])}
 
     return router

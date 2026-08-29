@@ -153,3 +153,111 @@ test("panel headers fit their panel on /system at the large UI scale", async ({ 
   await expectHeaderFits(page, "MODELS");
   await expectHeaderFits(page, "AGENT.USAGE");
 });
+
+/**
+ * Nothing may make the document scroll sideways on a phone.
+ *
+ * At 390px (iPhone 12/13/14 CSS width) the document measured 620px — 230px of
+ * overhang, which pushed the `open ↗` link off the right edge of every row on
+ * /sources: present in the DOM, unreachable with a thumb. The cause was the
+ * top bar, not the pages: six mode tabs plus the logo plus the utility cluster
+ * cannot fit 390px, and every one of them was a flex item with the default
+ * `min-width: auto`, so the strip grew the header instead of yielding.
+ *
+ * Everything here is asserted from a single page load, deliberately. The top
+ * bar is the same component on every route, so extra routes would re-prove one
+ * fact — and this suite shares one backend with a real vault, where each extra
+ * navigation is measurable contention: an earlier draft that swept three
+ * routes pushed `POST /api/ingest/jobs` in sources.spec past its five-second
+ * expect while SQLite was locked by the dashboard's `refresh_cache`.
+ */
+test("the app does not scroll horizontally at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  // /sources rather than /dashboard: it is the route where the clipped
+  // `open ↗` was actually reported, and the cheapest of the two to serve.
+  await page.goto("/sources");
+  // Waited on rather than the static heading: "All folders" only renders once
+  // `GET /api/sources` has come back, so the vault scan is finished before
+  // this test ends. Tearing the page down mid-scan leaves the shared backend
+  // still working, and the next spec's ingest POST then queues behind it.
+  await expect(page.getByRole("button", { name: "All folders" })).toBeVisible();
+
+  // The measurement names its own culprit. A bare `scrollWidth` number says a
+  // page is too wide and nothing about which element made it so, and this
+  // assertion is one that can fail on a runner nobody can attach a debugger
+  // to — CI's raw logs need a login, so the failure message is the whole of
+  // the evidence. Reported here: the outermost elements that stick out past
+  // the viewport, which is where a missing `min-w-0` actually lives.
+  const { scrollWidth, containers, content, rows } = await page.evaluate(() => {
+    const vw = 390;
+    const describe = (el: Element, withText: boolean) => {
+      const cls = `${el.className || ""}`.split(/\s+/).slice(0, 3).join(" ");
+      const over = Math.round(el.getBoundingClientRect().right - vw);
+      const text = withText ? ` "${(el.textContent || "").trim().slice(0, 24)}"` : "";
+      return `+${over}px <${el.tagName.toLowerCase()} class="${cls}">${text}`;
+    };
+
+    const over = Array.from(document.querySelectorAll<HTMLElement>("*")).filter((el) => {
+      const box = el.getBoundingClientRect();
+      return (box.width > 0 || box.height > 0) && box.right > vw;
+    });
+    const overSet = new Set<Element>(over);
+    // The outermost overflowing elements say which *container* failed to
+    // constrain itself; the leaves — the ones with no overflowing child of
+    // their own — say what the actual too-wide content is. A container
+    // without its leaf is unactionable, and a leaf without its container
+    // does not say which layout rule let it through.
+    const containers = over.filter((el) => !(el.parentElement && overSet.has(el.parentElement)));
+    const leaves = over.filter((el) => !Array.from(el.children).some((c) => overSet.has(c)));
+    return {
+      scrollWidth: document.documentElement.scrollWidth,
+      containers: containers.slice(0, 2).map((el) => describe(el, false)),
+      content: leaves.slice(0, 3).map((el) => describe(el, true)),
+      rows: document.querySelectorAll("li input[type=checkbox]").length,
+    };
+  });
+  expect(
+    scrollWidth,
+    `the document overflows 390px by ${scrollWidth - 390}px with ${rows} file rows` +
+      `; container: ${containers.join(" | ") || "none"}` +
+      `; content: ${content.join(" | ") || "none"}`,
+  ).toBeLessThanOrEqual(390);
+
+  // The fix works by letting the tab strip scroll inside itself, so all six
+  // modes must still be there — a fix that simply dropped tabs would satisfy
+  // the assertion above and lose a third of the app's navigation.
+  const tabs = page.getByRole("tablist", { name: "Mode" }).getByRole("tab");
+  await expect(tabs).toHaveCount(6);
+
+  // ...and each is named in full at every width. The tab renders "GE" below
+  // `md` and "GENERAL" above it; before `aria-label` the accessible name was
+  // whichever one the breakpoint left standing, so a phone user heard "GE".
+  for (const name of ["GENERAL", "STUDY", "RESEARCH", "CODE", "SYSTEM", "AUTO"]) {
+    await expect(page.getByRole("tab", { name, exact: true })).toHaveCount(1);
+  }
+});
+
+test("the course hub shows one pane at a time on a narrow screen", async ({ page }) => {
+  // Below `lg` the three panes stacked inside a fixed-height column, so each
+  // got about a third of the viewport with its own scrollbar nested inside
+  // the page scroll. Tabs give whichever pane you are using the whole height.
+  await page.setViewportSize({ width: 820, height: 900 });
+  await page.goto("/study/course/CS000");
+
+  const tabs = page.getByRole("tablist", { name: "Course hub pane" });
+  await expect(tabs).toBeVisible();
+
+  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
+  await expect(sources).toBeHidden();
+
+  await tabs.getByRole("tab", { name: "sources" }).click();
+  await expect(sources).toBeVisible();
+  await expect(studio).toBeHidden();
+
+  // Wide again: all three are back side by side, no tabs.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(tabs).toBeHidden();
+  await expect(sources).toBeVisible();
+  await expect(studio).toBeVisible();
+});

@@ -453,14 +453,14 @@ export default function PlannerTimeline() {
                         <button
                           disabled={busy !== null}
                           onClick={() => act(row.suggestionId, "approve")}
-                          className="font-mono text-meta uppercase tracking-wide text-ok hover:underline disabled:opacity-40"
+                          className="font-mono text-meta uppercase tracking-wide text-ok hover:underline disabled:opacity-70"
                         >
                           [Y] APPROVE
                         </button>
                         <button
                           disabled={busy !== null}
                           onClick={() => act(row.suggestionId, "dismiss")}
-                          className="font-mono text-meta uppercase tracking-wide text-danger hover:underline disabled:opacity-40"
+                          className="font-mono text-meta uppercase tracking-wide text-danger hover:underline disabled:opacity-70"
                         >
                           [N] DISMISS
                         </button>

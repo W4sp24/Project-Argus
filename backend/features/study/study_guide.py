@@ -7,13 +7,35 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from backend.agent.formatting import compose, math_contract, note_quality
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.study.practice_exam import (
     MAX_PROMPT_CHARS,
     Generator,
     StudyError,
-    _strip_fences,
+    unique_base,
 )
+from backend.vault.sources import generated_kind
+
+#: A reply that is *entirely* one fenced block, and nothing else. Small models
+#: habitually wrap a whole markdown answer in ```` ```markdown ````, so
+#: unwrapping that is worth doing -- but only that.
+_WHOLE_REPLY_FENCE = re.compile(r"\A```[^\n]*\n(.*?)\n?```\Z", re.DOTALL)
+
+
+def _is_generated(rel_path: str) -> bool:
+    """Did Argus write this note, rather than the user?
+
+    ``notes_gap_list`` below answers "what have you not taken notes on yet",
+    and it answers it by treating everything under ``notes/`` as the user's
+    own notes. Once ingestion started writing generated notes into that same
+    zone (see :mod:`backend.features.ingest.notes`), that question silently
+    answered itself: the AI note covering a lecture made the lecture look
+    covered. Matched on the filename suffix rather than frontmatter because
+    chunk metadata carries no ``generated_by`` field -- which is exactly why
+    the suffix is distinct in the first place.
+    """
+    return generated_kind(rel_path) is not None
 
 
 def notes_gap_list(corpus: list[dict[str, Any]]) -> list[str]:
@@ -23,7 +45,10 @@ def notes_gap_list(corpus: list[dict[str, Any]]) -> list[str]:
     "covered" when its keywords appear in any notes chunk.
     """
     notes_text = " ".join(
-        chunk["text"].lower() for chunk in corpus if "/notes/" in str(chunk["meta"].get("path", ""))
+        chunk["text"].lower()
+        for chunk in corpus
+        if "/notes/" in str(chunk["meta"].get("path", ""))
+        and not _is_generated(str(chunk["meta"].get("path", "")))
     )
     gaps: list[str] = []
     for chunk in corpus:
@@ -44,6 +69,25 @@ def notes_gap_list(corpus: list[dict[str, Any]]) -> list[str]:
     return gaps[:20]
 
 
+def _unwrap_fenced_reply(raw: str) -> str:
+    """Undo a model fencing its *whole* answer, and nothing more.
+
+    This deliberately is not ``practice_exam._strip_fences``. That function
+    answers "where is the JSON payload in this reply", so it searches for the
+    first fence anywhere and returns its contents -- correct for an exam,
+    catastrophic for a guide. A guide is prose that may legitimately *contain*
+    a fence: the prompt asks for step-by-step worked examples, which for a CS
+    course is a code block. Run through the extractor, such a guide had its
+    outline, concepts and citations replaced by the body of that one block,
+    silently, and that is what got written to the vault.
+
+    So the match is anchored to both ends: unwrap only when the fence *is* the
+    reply. Anything else is returned untouched.
+    """
+    match = _WHOLE_REPLY_FENCE.match(raw.strip())
+    return match.group(1) if match else raw
+
+
 def guide_prompt(course: str, scope: str, corpus: list[dict[str, Any]]) -> str:
     excerpts: list[str] = []
     used = 0
@@ -59,18 +103,25 @@ def guide_prompt(course: str, scope: str, corpus: list[dict[str, Any]]) -> str:
             break
         excerpts.append(block)
         used += len(block)
-    return f"""Write a study guide for course {course}, scope: {scope}.
+    structure = f"""Write a study guide for course {course}, scope: {scope}.
 Use ONLY the source excerpts below. Structure (markdown):
 
 1. `## Outline` — the topic map.
 2. `## Key concepts` — each with a one-line definition and a citation like
    [<file> p.N] / [<file> slide N] / [<path>] taken from the SOURCE markers.
-3. `## Worked examples` — 2-3 step-by-step examples from the material.
+3. `## Worked examples` — 2-3 step-by-step examples from the material, each
+   step saying *why* it follows from the one above it.
+4. `## Common mistakes` — the errors this material invites, where the sources
+   name or imply them. Omit the section rather than inventing one.
 
-Every factual claim needs a citation. Do not invent content.
+Every factual claim needs a citation."""
 
-SOURCES:
-{"".join(excerpts)}"""
+    # The same two contracts the per-document note styles get
+    # (backend/features/ingest/notes.py). A course guide and the note sitting
+    # next to it in the vault are the same kind of artefact and are held to the
+    # same rules; two copies of "here is how to write a note" is how they stop
+    # being.
+    return compose(structure, note_quality(), math_contract(), f"SOURCES:\n{''.join(excerpts)}")
 
 
 async def generate_study_guide(
@@ -87,7 +138,7 @@ async def generate_study_guide(
     if not corpus:
         raise StudyError(f"no indexed material for course {course} — upload to materials/ first")
 
-    body = _strip_fences(await generator(guide_prompt(course, scope, corpus))).strip()
+    body = _unwrap_fenced_reply(await generator(guide_prompt(course, scope, corpus))).strip()
     if not body:
         raise StudyError("generator returned an empty guide")
 
@@ -99,6 +150,10 @@ async def generate_study_guide(
     study_dir = vault_path / tax.course_study(course)
     study_dir.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "-", scope.lower()).strip("-")[:40] or "guide"
-    name = f"guide-{slug}-{date.today().isoformat()}.md"
+    # Counted past a collision rather than written over. The name is course +
+    # scope + day by construction, so generating a guide twice in one day --
+    # which is exactly what re-running after tweaking the selection does --
+    # silently destroyed the first one. The exam path has always done this.
+    name = f"{unique_base(study_dir, f'guide-{slug}-{date.today().isoformat()}')}.md"
     (study_dir / name).write_text(body + "\n", encoding="utf-8")
     return f"{tax.course_study(course)}/{name}"

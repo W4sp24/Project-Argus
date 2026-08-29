@@ -21,7 +21,13 @@ export const FLAGS = {
   // /study/course/[code] — NotebookLM-style workspace. Chat is real (course
   // filter forced through search_vault, backend/agent/runtime.py); STUDIO
   // generates real study guides/decks/exams; SOURCES lists real files
-  // (GET /api/study/courses/<code>/sources, not markdown-only /api/notes).
+  // (GET /api/study/courses/<code>/sources, not markdown-only /api/notes),
+  // ingests through POST /api/ingest/jobs with per-file progress, and its
+  // checkboxes are a real retrieval scope for both chat and the generators.
   courseHub: "enabled",
   quickLinks: "enabled", // GET/POST/PUT/DELETE /api/quick-links are wired
+  // /sources — the corpus as a browsable list, and the ingest form that
+  // fills it. GET /api/sources + POST /api/ingest/jobs are wired; progress
+  // is polled from GET /api/ingest/jobs/{id}.
+  sources: "enabled",
 } as const;

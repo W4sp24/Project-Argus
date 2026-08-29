@@ -89,6 +89,7 @@ def create_app(
     scheduler_factory: Callable | None = None,
     model_prober: Callable | None = None,
     model_puller: Callable | None = None,
+    ingest_job_runner: Callable | None = None,
 ) -> FastAPI:
     """Build the FastAPI app around the given (or default) settings.
 
@@ -97,6 +98,11 @@ def create_app(
     so tests run with fakes instead of the agent SDK / embedding model / a live
     provider. ``scheduler_factory`` is only passed by the module-level app
     below — test apps never start background threads.
+
+    ``ingest_job_runner`` keeps its name but is no longer ingest-only: it is
+    how *every* long-running job is scheduled (ingest, reindex, study
+    generation), because they all share one durable store and a test that
+    wants one of them deterministic wants all of them deterministic.
     """
     from contextlib import asynccontextmanager
 
@@ -175,10 +181,23 @@ def create_app(
     def health() -> HealthResponse:
         return HealthResponse()
 
-    def _default_index_factory() -> object:
-        from backend.rag.index import VaultIndex
+    _shared_index: Callable[[], object] | None = None
 
-        return VaultIndex(resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy)
+    def _default_index_factory() -> object:
+        """One VaultIndex for this app, not one per call.
+
+        The construction and the reasoning both live in
+        :func:`backend.rag.index.make_index_factory`; this wrapper only defers
+        the import, so an install without the ``[rag]`` extras still boots.
+        """
+        from backend.rag.index import make_index_factory
+
+        nonlocal _shared_index
+        if _shared_index is None:
+            _shared_index = make_index_factory(
+                resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy
+            )
+        return _shared_index()
 
     def _default_generator(feature: str) -> Callable:
         """agent_generate bound to a feature label + db so usage rows attribute.
@@ -211,20 +230,30 @@ def create_app(
 
     index = index_factory or _default_index_factory
 
-    app.include_router(build_notes_router(resolved))
+    app.include_router(build_notes_router(resolved, index))
     app.include_router(build_journal_router(resolved))
     app.include_router(
-        build_study_router(resolved, generator or _default_generator("study"), index)
+        build_study_router(
+            resolved,
+            generator or _default_generator("study"),
+            index,
+            job_runner=ingest_job_runner,
+        )
     )
     app.include_router(
-        build_ingest_router(resolved, generator or _default_generator("ingest"), index)
+        build_ingest_router(
+            resolved,
+            generator or _default_generator("ingest"),
+            index,
+            job_runner=ingest_job_runner,
+        )
     )
     app.include_router(build_system_router(resolved, model_prober, model_puller))
     app.include_router(build_tasks_router(resolved))
     app.include_router(build_flashcards_router(resolved))
     app.include_router(build_quick_links_router(resolved))
     app.include_router(build_search_router(resolved, index))
-    app.include_router(build_index_router(resolved, index))
+    app.include_router(build_index_router(resolved, index, job_runner=ingest_job_runner))
     app.include_router(build_review_router(resolved, planner or _default_planner()))
     app.include_router(build_briefing_router(resolved, briefing_composer or _default_composer()))
     app.include_router(build_insights_router(resolved))

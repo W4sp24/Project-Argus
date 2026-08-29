@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Markdown from "@/components/Markdown";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import {
@@ -118,7 +119,7 @@ export default function Flashcards() {
           <button
             type="submit"
             disabled={!genCourse || generating}
-            className="border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-40"
+            className="border border-line px-3 py-1.5 font-mono text-label uppercase tracking-wide text-ink transition-colors hover:border-lineHi disabled:opacity-70"
           >
             {generating ? "PARSING…" : "+ GENERATE DECK"}
           </button>
@@ -162,34 +163,60 @@ export default function Flashcards() {
           <p className="text-body text-ink-faint">No cards due right now — check back later.</p>
         ) : (
           <>
+            {/* The faces are divs and the flip is one button beneath them.
+                They used to be two <button>s, which stopped working the
+                moment a face rendered markdown:
+
+                - Each carried an `aria-label` built from the raw card text,
+                  and an aria-label overrides descendant content. Once a face
+                  is typeset, a screen reader would read the LaTeX source --
+                  "dollar backslash frac open brace" -- which is worse than
+                  the plain text it replaced. (The comment that used to sit
+                  here claimed there was no aria-label override. There was
+                  one, four lines below it.)
+                - A markdown link inside a <button> is invalid HTML: an
+                  interactive element cannot contain another. Firefox
+                  activates the button when the link is clicked.
+                - Both faces stay mounted (backface-visibility, not
+                  display:none), so both were focusable and both were in the
+                  accessibility tree, one of them invisible.
+
+                KaTeX marks its own visual tree aria-hidden and exposes MathML
+                beside it, so the accessible answer here is to render the
+                content and get out of its way.
+
+                data-testid still carries the structural flip-state signal for
+                e2e, since backface-visibility is not something a
+                visibility-based assertion can see. */}
             <div className="flip-card h-40">
-              {/* Both faces render their own text as the button's accessible
-                  name (no aria-label override — a shared label between two
-                  buttons would make them ambiguous to assistive tech and to
-                  test locators). data-testid carries the structural
-                  flip-state signal for e2e, since backface-visibility isn't
-                  something visibility-based test assertions can see. */}
               <div data-testid="flashcard-inner" className={`flip-card-inner ${flipped ? "is-flipped" : ""}`}>
-                <button
-                  type="button"
+                <div
                   data-testid="flashcard-front"
-                  onClick={() => setFlipped((value) => !value)}
-                  aria-label={`Flashcard front: ${current.front}. Click to flip.`}
-                  className="flip-card-face flip-card-front flex w-full items-center justify-center border border-line bg-sunken p-4 text-center text-lead text-ink-bright transition-colors hover:border-lineHi"
+                  aria-hidden={flipped}
+                  {...(flipped ? { inert: true } : {})}
+                  className="flip-card-face flip-card-front flex w-full items-center justify-center overflow-auto border border-line bg-sunken p-4 text-center text-lead text-ink-bright"
                 >
-                  {current.front}
-                </button>
-                <button
-                  type="button"
+                  <Markdown text={current.front} className="text-lead" />
+                </div>
+                <div
                   data-testid="flashcard-back"
-                  onClick={() => setFlipped((value) => !value)}
-                  aria-label={`Flashcard back: ${current.back}. Click to flip.`}
-                  className="flip-card-face flip-card-back flex w-full items-center justify-center border border-[var(--ac)] bg-[var(--ac-bg)] p-4 text-center text-lead text-ink-bright"
+                  aria-hidden={!flipped}
+                  {...(flipped ? {} : { inert: true })}
+                  className="flip-card-face flip-card-back flex w-full items-center justify-center overflow-auto border border-[var(--ac)] bg-[var(--ac-bg)] p-4 text-center text-lead text-ink-bright"
                 >
-                  {current.back}
-                </button>
+                  <Markdown text={current.back} className="text-lead" />
+                </div>
               </div>
             </div>
+            <button
+              type="button"
+              data-testid="flashcard-flip"
+              aria-pressed={flipped}
+              onClick={() => setFlipped((value) => !value)}
+              className="mt-2 w-full border border-line py-2 font-mono text-meta uppercase tracking-[0.12em] text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+            >
+              {flipped ? "SHOW QUESTION" : "SHOW ANSWER"}
+            </button>
 
             <div className="mt-4 grid grid-cols-4 gap-1.5 border-t border-line pt-4 font-mono text-meta uppercase tracking-[0.12em]">
               {GRADES.map((g) => (
@@ -198,7 +225,7 @@ export default function Flashcards() {
                   type="button"
                   disabled={grading}
                   onClick={() => grade(g)}
-                  className={`border border-line py-2 text-ink-muted transition-colors disabled:opacity-40 ${GRADE_STYLE[g]}`}
+                  className={`border border-line py-2 text-ink-muted transition-colors disabled:opacity-70 ${GRADE_STYLE[g]}`}
                 >
                   {GRADE_LABEL[g]}
                 </button>

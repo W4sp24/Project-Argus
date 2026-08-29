@@ -227,3 +227,24 @@ def test_email_capture_plain_paste_without_headers(client: TestClient, vault: Pa
 
 def test_email_capture_rejects_empty_text(client: TestClient) -> None:
     assert client.post("/api/ingest/email", json={"text": "   "}).status_code == 422
+
+
+def test_ingest_limits_are_served_from_the_constants_that_enforce_them(
+    client: TestClient,
+) -> None:
+    """The frontend mirrors these to reject a bad file in 0ms instead of after
+    a 100 MB upload. A mirrored constant is a second copy of a rule, and it
+    goes stale the day the server starts accepting something new -- so the
+    definition is served from the side that enforces it, the same way
+    destinations and note styles already are."""
+    from backend.features.ingest.router import (
+        ALLOWED_SUFFIXES,
+        MAX_BATCH_FILES,
+        MAX_FILE_BYTES,
+    )
+
+    payload = client.get("/api/ingest/limits").json()
+
+    assert payload["suffixes"] == sorted(ALLOWED_SUFFIXES)
+    assert payload["max_files"] == MAX_BATCH_FILES
+    assert payload["max_file_bytes"] == MAX_FILE_BYTES

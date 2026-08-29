@@ -289,6 +289,10 @@ export interface CourseSource {
   /** Chunks in the live index for this file, or `null` when not indexed
    * (never `0` for "unknown" — that would misreport "indexed, empty"). */
   chunks: number | null;
+  /** `"note"` / `"summary"` when Argus wrote this file, else `null`. A
+   * generated note lands in the `notes` zone, so the zone-based exclusion
+   * that keeps `study` out of the rail cannot see it. */
+  generated: "note" | "summary" | null;
 }
 
 /**
@@ -956,8 +960,429 @@ export function useIndexStatus() {
 
 /** Trigger a full vault reindex. POST /api/index/reindex — 202, runs on a
  * background thread; poll useIndexStatus() for progress/completion. */
-export function reindexVault() {
-  return mutateJSON<IndexStatus>("/api/index/reindex", undefined);
+/** Trigger a rebuild. With `paths`, only those files are re-embedded --
+ * which is what the "index these" action on /sources calls, rather than
+ * making a user rebuild a whole vault to fix fourteen files.
+ *
+ * Throws `ApiError` with status 409 when an ingest holds the index: both load
+ * the same embedding model and write the same collection, so they contend.
+ * A second *reindex* is not a conflict and still answers 202. */
+export function reindexVault(paths?: string[]) {
+  return mutateJSON<IndexStatus>("/api/index/reindex", paths ? { paths } : undefined);
+}
+
+/** Newest job of a kind, or `null`. The reindex trigger answers `IndexStatus`
+ * rather than a job id -- a shape pinned by a test and not worth changing --
+ * so the readout finds its job here instead. */
+export async function latestJobOfKind(kind: string): Promise<IngestJob | null> {
+  const response = await apiFetch(`/api/ingest/jobs?kind=${encodeURIComponent(kind)}`);
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { jobs: IngestJob[] };
+  return payload.jobs[0] ?? null;
+}
+
+
+// --- Sources & ingestion ------------------------------------------------
+
+/**
+ * `POST /api/ingest` — the single-file, synchronous route.
+ *
+ * Declared here rather than inline at each call site: two components read
+ * this shape and both had their own copy of it, which is how the two drifted
+ * over what `indexed: false` means. `index_error` is the difference between
+ * "indexing broke" and "the [rag] extras are not installed", which
+ * `indexed: false` alone cannot express.
+ */
+export interface IngestResponse {
+  path: string;
+  chunks: number;
+  indexed: boolean;
+  index_error: string | null;
+}
+
+/** One real file in the vault, indexed or not. GET /api/sources. */
+export interface SourceInfo {
+  path: string;
+  title: string;
+  /** Parent directory, vault-relative; `""` for a file at the vault root. */
+  folder: string;
+  /** Uppercased extension, e.g. "PDF" / "MD". */
+  kind: string;
+  modified: string;
+  size: number;
+  /** Chunks in the live index, or `null` when unknown — either the index holds
+   * nothing for this file, or there is no index to ask. Never `0`; see
+   * `index_available` for telling those two apart. */
+  chunks: number | null;
+  /** `"note"` / `"summary"` when Argus wrote this file, else `null`.
+   *
+   * On the wire rather than derived here. This page used to pattern-match
+   * `.summary.md` itself and had never been told about `.notes.md`, so a
+   * course whose notes/ folder Argus had just filled still reported that it
+   * had written nothing. The suffix convention is a backend invariant; a
+   * second copy of it in the frontend is exactly the drift this branch's
+   * formatting-contract work exists to prevent. */
+  generated: "note" | "summary" | null;
+}
+
+export interface SourcesResponse {
+  sources: SourceInfo[];
+  /** False when the [rag] extras are missing or chroma is unreadable, which is
+   * why every `chunks` came back null. */
+  index_available: boolean;
+}
+
+/** Everything in the vault that RAG can read. */
+export function useSources(folder?: string) {
+  const query = folder ? `?folder=${encodeURIComponent(folder)}` : "";
+  return useSWR<SourcesResponse>(`/api/sources${query}`, fetcher);
+}
+
+/** Vault folders an ingest may be pointed at. Taxonomy-derived, server-side:
+ * never build one of these paths in the frontend. */
+export function useIngestDestinations() {
+  return useSWR<{ destinations: string[] }>("/api/ingest/destinations", fetcher);
+}
+
+/** One shape a generated note can take. */
+export interface NoteStyle {
+  key: string;
+  label: string;
+  description: string;
+}
+
+/**
+ * The note shapes the backend actually offers. Fetched rather than listed
+ * here for the same reason destinations are: a copy in the dialog is a copy
+ * that drifts the first time a style is added in
+ * `backend/features/ingest/notes.py`.
+ */
+export function useIngestNoteStyles() {
+  return useSWR<{ styles: NoteStyle[] }>("/api/ingest/note-styles", fetcher);
+}
+
+/** Where one file got to. `stage` is rendered directly by the progress list. */
+export type IngestStage =
+  | "queued"
+  | "saving"
+  | "indexing"
+  | "summarizing"
+  | "done"
+  | "failed"
+  | "skipped";
+
+export interface IngestJobItem {
+  id: number;
+  filename: string;
+  path: string | null;
+  stage: IngestStage;
+  chunks: number;
+  summary_path: string | null;
+  error: string | null;
+  /** Where an item stopped, when it stopped early. `stage` cannot say: it
+   * collapses to `failed`, or to `done` when only the note broke. */
+  failed_stage: IngestStage | null;
+}
+
+export type IngestJobStatus = "queued" | "running" | "ok" | "partial" | "failed";
+
+export interface IngestJob {
+  id: string;
+  created_at: string;
+  finished_at: string | null;
+  status: IngestJobStatus;
+  target: string;
+  summary_prompt: string;
+  /** Which `NoteStyle.key` shaped the notes, or "" for "no note". */
+  note_style: string;
+  total: number;
+  done: number;
+  error: string | null;
+  /** Present on GET /api/ingest/jobs/{id}, absent from the history listing. */
+  items?: IngestJobItem[];
+}
+
+const JOB_POLL_MS = 700;
+
+/**
+ * Poll one ingest job. Polling rather than streaming, deliberately: the job
+ * outlives its request, so it must survive a tab close, a navigation away and
+ * a reload — none of which a response stream does.
+ *
+ * `refreshInterval` is the function form so it stops on its own once the job
+ * reaches a terminal status; there is no timeout to manage and nothing to
+ * clean up on unmount.
+ */
+export function useIngestJob(jobId: string | null) {
+  return useSWR<IngestJob>(jobId ? `/api/ingest/jobs/${jobId}` : null, fetcher, {
+    refreshInterval: (job) =>
+      job && (job.status === "queued" || job.status === "running") ? JOB_POLL_MS : 0,
+  });
+}
+
+/** Recent ingest jobs, newest first, without their items. */
+export function useIngestJobs() {
+  return useSWR<{ jobs: IngestJob[] }>("/api/ingest/jobs", fetcher);
+}
+
+export interface SourceDeleteSummary {
+  files_removed: number;
+  notes_removed: number;
+  chunks_removed: number;
+  /** Every path that is now gone, sources first then companions, so a list
+   * can be filtered without a refetch. */
+  removed: string[];
+}
+
+/**
+ * `DELETE /api/sources` — remove files from the vault *and* the index.
+ *
+ * All-or-nothing: one protected path refuses the whole batch with a 403
+ * naming it, and nothing is touched. The backend takes a single git snapshot
+ * before the first unlink, which is the only undo — there is no trash.
+ *
+ * `includeGenerated` also removes the note Argus wrote from each source,
+ * but only where that note's own frontmatter claims the source being
+ * deleted; a note that does not is somebody else's and is left alone.
+ */
+export function deleteSources(paths: string[], includeGenerated: boolean) {
+  return mutateJSON<SourceDeleteSummary>(
+    "/api/sources",
+    { paths, include_generated: includeGenerated },
+    "DELETE",
+  );
+}
+
+export interface IngestPrecheck {
+  exists: boolean;
+  path: string | null;
+  /** SHA-256 of the file already in the vault, for comparing against the
+   * browser's hash of the file about to be uploaded. */
+  sha256: string | null;
+}
+
+/** What is already at `<target>/<filename>`, so the UI can offer Replace. */
+export function precheckIngest(filename: string, target: string) {
+  return mutateJSON<IngestPrecheck>("/api/ingest/precheck", { filename, target });
+}
+
+/**
+ * What the backend will accept, on this side of the wire.
+ *
+ * These mirror `ALLOWED_SUFFIXES`, `MAX_BATCH_FILES` and `MAX_FILE_BYTES` in
+ * `backend/features/ingest/router.py`, which stays the enforcing copy — every
+ * one of them is re-checked there. Validating here is a courtesy, so a `.zip`
+ * is refused in 0ms instead of after a 100MB upload and a server-side 422; it
+ * is never the guard.
+ *
+ * They live here rather than in IngestDialog because the dialog's own `ACCEPT`
+ * string was already the frontend's copy, and it constrained the file *picker*
+ * only — the drop handler knew nothing, so a dropped `.zip` was queued,
+ * hashed and uploaded before anything objected. One copy per side of the wire.
+ *
+ * These are the FALLBACK only. `GET /api/ingest/limits` is the authority --
+ * served the same way `/ingest/destinations` and `/ingest/note-styles` serve
+ * their config, so the rule lives on the side that enforces it. These values
+ * cover the first render and a backend that cannot be reached; the moment the
+ * real ones arrive they win, so this copy cannot go stale in a way that
+ * matters.
+ */
+export const INGEST_SUFFIXES: readonly string[] = [".pdf", ".pptx", ".docx", ".md", ".eml"];
+export const INGEST_MAX_FILES = 50;
+export const INGEST_MAX_FILE_BYTES = 100 * 1024 * 1024;
+/** `accept` for a file input picking ingestible files. */
+export const INGEST_ACCEPT = INGEST_SUFFIXES.join(",");
+
+export interface IngestLimits {
+  suffixes: string[];
+  max_files: number;
+  max_file_bytes: number;
+}
+
+/** What the server will actually accept, falling back to the mirror above
+ * until it answers. */
+export function useIngestLimits(): IngestLimits {
+  const { data } = useSWR<IngestLimits>("/api/ingest/limits", fetcher);
+  return (
+    data ?? {
+      suffixes: [...INGEST_SUFFIXES],
+      max_files: INGEST_MAX_FILES,
+      max_file_bytes: INGEST_MAX_FILE_BYTES,
+    }
+  );
+}
+
+/** Sizes as a person reads them, for limits and for the file that broke one. */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+/** The extension the backend will judge, derived exactly the way it derives it. */
+export function ingestSuffix(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "" : name.slice(dot).toLowerCase();
+}
+
+/**
+ * Why this file cannot be ingested, or `null` when it can.
+ *
+ * Returns the sentence rather than a code: a rejection has to name the file
+ * and the reason ("deck.zip — .zip isn't supported"), because a batch of forty
+ * with one generic failure is a puzzle, not a message.
+ */
+export function ingestRejection(file: File, limits: IngestLimits): string | null {
+  const suffix = ingestSuffix(file.name);
+  if (!limits.suffixes.includes(suffix)) {
+    const named = suffix ? `${suffix} isn't supported` : "no file extension";
+    return `${file.name} — ${named}`;
+  }
+  if (file.size > limits.max_file_bytes) {
+    return `${file.name} — ${formatBytes(file.size)}, over the ${formatBytes(
+      limits.max_file_bytes,
+    )} limit`;
+  }
+  return null;
+}
+
+/**
+ * Start a batch ingest. Returns immediately with a job id; poll
+ * `useIngestJob` for per-file progress.
+ *
+ * `XMLHttpRequest`, not `fetch`, for one reason: `upload.onprogress`. This is
+ * a multipart POST of up to fifty files and the 202 does not come back until
+ * every byte has arrived, so on a large batch the button sat on "Starting…"
+ * for tens of seconds with nothing else moving. The *job* was beautifully
+ * instrumented and the *upload* was not. `fetch` still has no upload progress
+ * in any shipping browser (request streams are Chromium-only and HTTP/2-only),
+ * so the older API is the only one that can answer "how far along is this".
+ *
+ * `onProgress` receives a 0..1 fraction, or `null` when the browser will not
+ * say how big the body is — an unknowable fraction must not be rendered as 0%.
+ */
+export async function startIngestJob(
+  files: File[],
+  options: { target: string; noteStyle?: string; summaryPrompt?: string; replace?: boolean },
+  onProgress?: (fraction: number | null) => void,
+): Promise<string> {
+  const body = new FormData();
+  files.forEach((file) => body.append("files", file));
+  body.append("target", options.target);
+  body.append("note_style", options.noteStyle ?? "");
+  body.append("summary_prompt", options.summaryPrompt ?? "");
+  body.append("replace", String(options.replace ?? false));
+
+  return new Promise<string>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `${apiBase()}/api/ingest/jobs`);
+    request.upload.onprogress = (event) => {
+      onProgress?.(event.lengthComputable ? event.loaded / event.total : null);
+    };
+    // The bytes are gone but the job has not been created yet; saying 100%
+    // and then waiting is honest, saying 99% forever is not.
+    request.upload.onload = () => onProgress?.(1);
+    request.onload = () => {
+      let payload: unknown = {};
+      try {
+        payload = JSON.parse(request.responseText) as unknown;
+      } catch {
+        // A non-JSON body (a proxy's HTML error page) still has a status.
+      }
+      if (request.status < 200 || request.status >= 300) {
+        const detail = (payload as { detail?: unknown }).detail;
+        reject(
+          new ApiError(
+            request.status,
+            payload,
+            typeof detail === "string" ? detail : `ingest failed (${request.status})`,
+          ),
+        );
+        return;
+      }
+      resolve((payload as { job_id: string }).job_id);
+    };
+    // Not an ApiError: there was no response to carry a status or a detail,
+    // and callers tell the two apart to decide whether to blame the backend
+    // being down rather than the request.
+    request.onerror = () => reject(new Error("the ingest request never reached Argus"));
+    request.onabort = () => reject(new Error("the ingest request was aborted"));
+    request.send(body);
+  });
+}
+
+/**
+ * Run `worker` over `items` with at most `limit` in flight.
+ *
+ * Exists because hashing a batch under `Promise.all` reads every file into
+ * memory at once: fifty 30MB lecture PDFs is ~1.5GB resident, on the main
+ * thread, before a single byte has been uploaded.
+ */
+export async function pooledEach<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+/**
+ * Above this, a file is compared by name alone. `crypto.subtle.digest` has no
+ * streaming form, so hashing means holding the whole file in memory — and the
+ * answer only ever decides the wording of a warning.
+ */
+export const HASH_MAX_BYTES = 32 * 1024 * 1024;
+
+/** Why a file has no digest, when it has none. */
+export type HashSkip =
+  /** Bigger than `HASH_MAX_BYTES`. */
+  | "too-large"
+  /** `crypto.subtle` is undefined — this page is not on a secure origin. */
+  | "insecure-context"
+  /** It threw. Unread file, revoked blob, out of memory. */
+  | "unavailable";
+
+export interface HashResult {
+  digest: string | null;
+  /** `null` exactly when `digest` is a real hash. */
+  skipped: HashSkip | null;
+}
+
+/**
+ * SHA-256 of a picked file, hex, matching the backend's digest of whatever is
+ * already at that path.
+ *
+ * Never throws, and says *why* it has no answer, which the old
+ * `Promise<string | null>` could not. That mattered: `crypto.subtle` is
+ * undefined outside a secure context — fine on localhost, undefined over plain
+ * HTTP at a LAN address — so the whole comparison silently degraded and every
+ * re-ingest of a byte-identical file reported "saved alongside as a second
+ * copy". A degraded comparison has to be visible, not inferred from a `null`.
+ */
+export async function hashFile(file: File): Promise<HashResult> {
+  if (file.size > HASH_MAX_BYTES) return { digest: null, skipped: "too-large" };
+  if (typeof crypto === "undefined" || !crypto.subtle) {
+    return { digest: null, skipped: "insecure-context" };
+  }
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return {
+      digest: Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(""),
+      skipped: null,
+    };
+  } catch {
+    return { digest: null, skipped: "unavailable" };
+  }
 }
 
 // --- Quick Links --------------------------------------------------------

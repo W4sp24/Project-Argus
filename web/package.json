@@ -1,6 +1,6 @@
 {
   "name": "web",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,16 +8,20 @@
     "start": "next start",
     "lint": "next lint",
     "e2e": "playwright test",
-    "perf:budget": "node scripts/check-bundles.mjs"
+    "perf:budget": "node scripts/check-bundles.mjs",
+    "a11y:contrast": "node scripts/check-contrast.mjs"
   },
   "dependencies": {
+    "katex": "^0.18.4",
     "next": "14.2.35",
     "react": "^18",
     "react-dom": "^18",
     "react-markdown": "^10.1.0",
     "recharts": "^3.10.1",
     "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "swr": "^2.4.2"
   },
   "devDependencies": {

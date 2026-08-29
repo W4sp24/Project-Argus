@@ -105,12 +105,19 @@ def _tag_matches(query_tag: str, chunk_tag: str) -> bool:
     return chunk == query or chunk.startswith(f"{query}/")
 
 
-def _passes_filters(meta: dict, course: str | None, tags: list[str] | None) -> bool:
+def _passes_filters(
+    meta: dict,
+    course: str | None,
+    tags: list[str] | None,
+    paths: frozenset[str] | None = None,
+) -> bool:
     """Tag filtering (chroma can't express Obsidian's nested-tag semantics
     over the comma-joined ``tags`` string, so it always happens here) plus a
-    belt-and-braces course re-check for pools a stand-in index didn't filter
-    at the source."""
+    belt-and-braces course/path re-check for pools a stand-in index didn't
+    filter at the source."""
     if course and meta.get("course") != course:
+        return False
+    if paths is not None and meta.get("path") not in paths:
         return False
     if tags:
         chunk_tags = [t for t in str(meta.get("tags", "")).split(",") if t.strip()]
@@ -142,19 +149,28 @@ def _vector_query(
     return index.query(query, n_results=n_results)
 
 
-def _bm25_hits_for_course(
-    corpus: list[dict], bm25: Any, query: str, pool_size: int, course: str | None
+def _bm25_candidates(
+    corpus: list[dict],
+    bm25: Any,
+    query: str,
+    pool_size: int,
+    course: str | None,
+    paths: frozenset[str] | None = None,
 ) -> list[dict]:
-    """BM25 candidates, course-filtered *before* the pool is truncated.
+    """BM25 candidates, filtered *before* the pool is truncated.
 
     Scoring stays against the full (unfiltered) ``corpus`` — that's the list
     the index's memoised BM25Okapi was actually built over, real or
     stand-in — so ``scores[i]`` and ``corpus[i]`` never drift apart. The
-    course predicate is applied while walking the already-ranked indices, so
-    a course whose matches all sit outside the first POOL_SIZE globally-ranked
-    slots still gets its own POOL_SIZE-worth of candidates, instead of being
-    filtered away after truncation already discarded them (the starvation
-    bug this module exists to fix).
+    predicates are applied while walking the already-ranked indices, so a
+    course (or a hand-picked set of files) whose matches all sit outside the
+    first POOL_SIZE globally-ranked slots still gets its own POOL_SIZE-worth
+    of candidates, instead of being filtered away after truncation already
+    discarded them (the starvation bug this module exists to fix).
+
+    ``paths`` matters here even more than ``course`` does: ticking three files
+    out of two hundred in the Course Hub is precisely the case where the
+    global top-20 contains none of them.
     """
     if not corpus or bm25 is None:
         return []
@@ -167,10 +183,30 @@ def _bm25_hits_for_course(
         chunk = corpus[i]
         if course and chunk["meta"].get("course") != course:
             continue
+        if paths is not None and chunk["meta"].get("path") not in paths:
+            continue
         hits.append(chunk)
         if len(hits) >= pool_size:
             break
     return hits
+
+
+def _where_clause(course: str | None, paths: list[str] | None) -> dict | None:
+    """The metadata filter pushed down into the vector search.
+
+    chroma has no implicit AND across top-level keys, so two predicates have
+    to be spelled ``$and`` explicitly. Returns ``None`` when there is nothing
+    to filter — ``_vector_query`` skips the ``where=`` call entirely then, and
+    with it the retry path for stand-in indexes that take no ``where``.
+    """
+    clauses: list[dict] = []
+    if course:
+        clauses.append({"course": course})
+    if paths:
+        clauses.append({"path": {"$in": list(paths)}})
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
 
 def _expand_wikilinks(hits: list[dict], vault_path: Path, link_index: LinkIndex) -> list[dict]:
@@ -264,6 +300,7 @@ def retrieve_result(
     expand_links: bool = True,
     today: date | None = None,
     *,
+    paths: list[str] | None = None,
     taxonomy: Taxonomy | None = None,
     rerank: bool = False,
 ) -> RetrievalResult:
@@ -275,6 +312,12 @@ def retrieve_result(
     hit). Returns an empty ``results`` list when nothing clears the
     similarity floor (see ``MIN_SIMILARITY``) rather than a pool of
     plausible-looking but unrelated chunks.
+
+    ``paths``, when given, restricts the search to those vault-relative files
+    and nothing else — the Course Hub's ticked sources. An empty list is not
+    the same as ``None``: ``None`` means "no restriction", ``[]`` means "the
+    user has selected nothing", and returning the whole vault for the second
+    would answer a question they did not ask.
     """
     tax = taxonomy or active_taxonomy()
     today = today or date.today()
@@ -286,8 +329,13 @@ def retrieve_result(
     # unfiltered course query used to.
     pool_size = POOL_SIZE * 3 if tags else POOL_SIZE
 
-    where = {"course": course} if course else None
-    vector_hits = _vector_query(index, query, pool_size, where)
+    # `None` and `[]` are deliberately different: see the docstring. Frozen
+    # into a set once so the two filter passes below are O(1) per chunk.
+    selected = None if paths is None else frozenset(paths)
+    if selected is not None and not selected:
+        return RetrievalResult(results=[], related=[])
+
+    vector_hits = _vector_query(index, query, pool_size, _where_clause(course, paths))
     similarity_by_key = {
         (hit["meta"].get("path"), hash(hit["text"])): hit.get("score") for hit in vector_hits
     }
@@ -297,7 +345,7 @@ def retrieve_result(
     # longer gets re-fetched from chroma and re-tokenized on every query.
     corpus = index.all_chunks()
     bm25 = _bm25_for(index, corpus)
-    bm25_hits = _bm25_hits_for_course(corpus, bm25, query, pool_size, course)
+    bm25_hits = _bm25_candidates(corpus, bm25, query, pool_size, course, selected)
     bm25_rank = {}
     for rank, hit in enumerate(bm25_hits):
         key = (hit["meta"].get("path"), hash(hit["text"]))
@@ -314,7 +362,7 @@ def retrieve_result(
     scored: list[dict] = []
     for key, entry in fused.items():
         hit, rrf = entry["hit"], entry["rrf"]
-        if not _passes_filters(hit["meta"], course, tags):
+        if not _passes_filters(hit["meta"], course, tags, selected):
             continue
         similarity = similarity_by_key.get(key)
         strongly_bm25 = key in bm25_rank and bm25_rank[key] < BM25_STRONG_RANK
@@ -361,6 +409,7 @@ def retrieve(
     expand_links: bool = True,
     today: date | None = None,
     *,
+    paths: list[str] | None = None,
     taxonomy: Taxonomy | None = None,
     rerank: bool = False,
 ) -> list[dict]:
@@ -386,6 +435,7 @@ def retrieve(
         tags=tags,
         expand_links=expand_links,
         today=today,
+        paths=paths,
         taxonomy=taxonomy,
         rerank=rerank,
     )

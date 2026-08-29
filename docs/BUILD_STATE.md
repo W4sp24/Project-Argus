@@ -10,7 +10,94 @@
 | Active phase | — (roadmap P0–P5 complete; terminal-HUD redesign A–H complete) |
 | Status | REDESIGN INTEGRATED — `feat/redesign-h-integration` merges the full frontend chain (a-foundation→…→f-chat) + e-modes + g-backend, wires all preview panels to the real backend (usage/doctor/models/ingest/email/note-create), purges the legacy design-token aliases, and adds the gcal import guard + `[gcal]` extra (D-038..D-043) 2026-07-15/16; Task 15 (vault cleanup) still BLOCKED pending Ethan's per-item confirmation |
 | Last green commit | feat/redesign-h-integration head (full pytest + web lint + build + perf:budget green; see Phase H evidence below) |
-| Next action | Ethan: review/merge PR for `feat/redesign-h-integration` (supersedes the per-phase redesign branches); approve or reject Task 15 vault-cleanup candidates; optional: gcal/Todoist credentials + setup.ps1; `/code-review ultra` follow-up |
+| Next action | Ethan: review `feature/sources-ingest` (26 commits acting on the 2026-08-29 UX audit — all 25 findings, all 10 predicted-friction items, plus source deletion) and push it; the branch has never met `main`'s required checks. Then: review/merge PR for `feat/redesign-h-integration`; approve or reject Task 15 vault-cleanup candidates |
+
+## Measured 2026-08-29 (`feature/sources-ingest`, after the UX-audit pass)
+
+Twenty-six commits acting on `~/Desktop/ARGUS-UX-AUDIT-sources-ingest.md`:
+all 25 tagged findings, all 10 predicted-friction items, and source deletion
+as a new feature. Every regression test was verified to **fail** against the
+code it fixes before being accepted -- the audit's own closing point was that
+this suite asserted plumbing and never the agreements between components.
+
+```
+.venv/Scripts/python -m ruff check .   -> All checks passed!
+.venv/Scripts/python -m pytest         -> 1540 passed          (was 1475)
+desktop/tests/smoke_backend.py         -> All 29 checks passed
+node desktop/scripts/check-versions.mjs-> versions agree: 0.3.0
+cd web: tsc --noEmit / next lint / next build -> clean
+npm run perf:budget -> Perf budget OK
+  heaviest: /dashboard 127 kB, /system 132 kB, /code 123 kB, /sources 119 kB
+  CSS: 44.8 kB render-blocking (budget 60 kB), 25.5 kB lazy
+npx playwright test -> 85 passed / 2 failed   (was 67 / 2)
+```
+
+**The two e2e failures still pre-date the branch point** and are unchanged:
+`system.spec.ts:42` (also fails on `main`) and `dashboard.spec.ts:91` (fails
+at `2696d06`).
+
+**A third, `chat.spec.ts:92`, fails intermittently under a full-suite run and
+passes in isolation and in a two-file run.** It is the server-death problem
+below, not an assertion. This machine is now at **98% disk, 5.5 GB free** --
+worse than the 6.4 GB recorded on 08-28 -- and clearing `.next`,
+`test-results`, `playwright-report` and `e2e/.workdir` reclaimed nothing
+because they were already clear. Three consecutive full runs gave 85/2, 85/2
+and 84/3; one earlier run cascaded from `study.spec.ts` onward with uniform
+`ERR_CONNECTION_REFUSED`, which is the signature, not a regression.
+
+**Worth knowing when writing e2e against this branch:** the job store allows
+one ingest at a time and answers 409 otherwise, and ingest now contends with
+reindex for the same slot because both load the embedding model and write the
+same chroma collection. A spec that fires several `+ INGEST` cycles back to
+back gets its second and third refused, and the failure surfaces as a missing
+row rather than as an error -- one dialog with several files is both the fix
+and what a user actually does.
+
+## Bundle budget — measured 2026-08-28 (`feature/sources-ingest`)
+
+## Bundle budget — measured 2026-08-28 (`feature/sources-ingest`)
+
+The Phase H numbers below are from **2026-07-16** and are stale; the suite was
+151 tests then and is now ~1450. `/dashboard` had drifted to **141 kB** against
+the documented 135 kB ceiling and `npm run perf:budget` had been failing for
+weeks, unobserved, because that script is not one of CI's `test / web` steps
+(that job runs `tsc --noEmit`, `next lint`, `next build` and the version
+manifest — see `.github/workflows/_test.yml`).
+
+Current, after the LaTeX work and the dashboard split:
+
+```
+npm run perf:budget -> Perf budget OK
+  heaviest routes: /dashboard 127 kB, /system 132 kB, /code 123 kB,
+                   /study 122 kB, /study/course/[code] 121 kB
+  CSS: 44.5 kB render-blocking (budget 60 kB)
+       25.5 kB in lazy chunks (katex.min.css, unbudgeted)
+```
+
+`check-bundles.mjs` now measures CSS as well as JS. It did not before, which
+made it blind to a whole class of regression: Next's route table reports JS
+only, so a 26 kB stylesheet landing in the layout would not have moved a
+single number it printed.
+
+Full suite, 2026-08-28: `pytest 1475 passed`, `ruff` clean repo-wide, `tsc` +
+`next lint` + `next build` clean, desktop smoke 29/29, `check-versions` OK,
+Playwright **67 passed / 2 failed**.
+
+Both e2e failures predate this branch. The whole suite was run at `2696d06`
+(the branch point) for comparison and produced **the same two failures**:
+
+- `web/e2e/system.spec.ts:42` — also fails on `main`.
+- `web/e2e/dashboard.spec.ts:91` — fails at `2696d06`; verified again by
+  checking that commit out and running the test alone.
+
+**On the un-root-caused e2e server death.** Two consecutive full runs failed 9
+and then 42 tests, always as a block from some point onwards, every failure
+taking a uniform ~3.2 s — the signature of the front-end or backend process
+being gone rather than of an assertion. The death point moved *earlier* on each
+successive run. Deleting `web/test-results/` and `web/playwright-report/` and
+re-running restored 67/2 exactly. So it correlates with accumulated artifacts
+or host resource pressure (this machine was at 6.4 GB free disk and a 308 MB
+`.next`), not with any one spec. Worth trying before believing a cascade.
 
 ## Phase H (redesign integration) exit criteria evidence (2026-07-16)
 

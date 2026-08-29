@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from backend.agent.formatting import compose, json_math_contract
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 
 Generator = Callable[[str], Awaitable[str]]
@@ -75,6 +76,115 @@ def _strip_fences(raw: str) -> str:
     return match.group(1) if match else raw
 
 
+#: Hex digits, for recognising a well-formed ``\uXXXX``.
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+#: Escapes a model writing this schema plausibly *means*. Everything else
+#: following a backslash is read as LaTeX and the backslash is kept literal.
+#:
+#: ``\n`` is in here and ``\t``/``\b``/``\f``/``\r`` are not, and that split is
+#: the whole judgement call. A line break inside an explanation is something a
+#: model really does want; a tab, backspace, formfeed or carriage return is
+#: not, while ``\times``, ``\begin``, ``\frac`` and ``\rho`` are among the most
+#: common commands in the language. So ``\n`` keeps its meaning and the other
+#: four are treated as notation. ``\neq`` is the one case this gets wrong, and
+#: the exam contract tells the model to double its backslashes because of it.
+_KEPT_ESCAPES = frozenset('"\\/n')
+
+#: Every C0 control character except LF. Finding one in a parsed payload is
+#: taken as proof that a LaTeX backslash was decoded as an escape.
+#:
+#: TAB is the one arguable member: a quote lifted verbatim out of an extracted
+#: PDF could contain a real one, and repairing such a payload would leave a
+#: literal ``\t`` in the quote, failing ``_citation_verified`` and costing that
+#: question. Included anyway, because ``\text`` is far more likely than a tab
+#: in a cited sentence, and losing one question beats writing a tab into the
+#: middle of an explanation in the vault permanently.
+_DECODED_CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f]")
+
+
+def _repair_lone_backslashes(text: str) -> str:
+    r"""Double any backslash inside a JSON string that isn't starting an escape.
+
+    Walks the document tracking whether it is inside a string literal, because
+    a backslash outside one is not an escape and must not be touched.
+    """
+    out: list[str] = []
+    index, end = 0, len(text)
+    in_string = False
+    while index < end:
+        char = text[index]
+        if not in_string:
+            in_string = char == '"'
+            out.append(char)
+            index += 1
+        elif char != "\\":
+            in_string = char != '"'
+            out.append(char)
+            index += 1
+        else:
+            following = text[index + 1 : index + 2]
+            unicode_escape = following == "u" and len(text[index + 2 : index + 6]) == 4
+            if unicode_escape:
+                unicode_escape = set(text[index + 2 : index + 6]) <= _HEX
+            if following in _KEPT_ESCAPES or unicode_escape:
+                out.append(char + following)
+                index += 2
+            else:
+                out.append("\\\\")
+                index += 1
+    return "".join(out)
+
+
+def _has_decoded_control(value: Any) -> bool:
+    """Did anything in this payload decode to a control character?"""
+    if isinstance(value, str):
+        return _DECODED_CONTROL.search(value) is not None
+    if isinstance(value, dict):
+        return any(_has_decoded_control(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_decoded_control(item) for item in value)
+    return False
+
+
+def _decode_payload(raw: str) -> Any:
+    r"""``json.loads``, tolerant of a model that wrote LaTeX into a JSON string.
+
+    Asking for mathematical notation and asking for JSON are in tension: a
+    backslash means one thing to LaTeX and another to JSON, and a model
+    reliably writes ``\frac`` where the format needs ``\\frac``. That has two
+    outcomes and no third. ``\alpha``, ``\sum``, ``\left``, ``\cdot``, ``\pi``
+    are not valid escapes, so the parse raises and the whole exam is lost.
+    ``\frac``, ``\text``, ``\begin`` and ``\rho`` *are*, so they decode
+    silently to a formfeed, a tab, a backspace and a carriage return -- past
+    ``_citation_verified``, which normalises to ``[a-z0-9]`` and so cannot
+    see them, into ``exams.questions_json``, and into the vault for good.
+
+    So a clean parse is not sufficient evidence of a clean payload. Both the
+    raised error and the tell-tale control character route to the same repair,
+    and the repair is only ever applied to text that has already failed one of
+    those two checks -- a payload the model escaped correctly is returned
+    exactly as ``json.loads`` produced it.
+    """
+    text = _strip_fences(raw)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as first_error:
+        try:
+            return json.loads(_repair_lone_backslashes(text))
+        except json.JSONDecodeError:
+            # Report the original failure: the repaired text is not what the
+            # generator sent, so its error offsets would point at nothing.
+            raise StudyError(f"generator returned invalid JSON: {first_error}") from first_error
+
+    if not _has_decoded_control(payload):
+        return payload
+    try:
+        return json.loads(_repair_lone_backslashes(text))
+    except json.JSONDecodeError:
+        return payload  # Mangled, but parseable — better than losing the exam.
+
+
 def _citation_verified(citation: Citation, corpus: list[dict[str, Any]]) -> bool:
     quote = _normalize(citation.quote)
     if not quote:
@@ -92,10 +202,7 @@ def build_exam(course: str, raw: str, corpus: list[dict[str, Any]]) -> tuple[Exa
 
     Returns the exam and the number of dropped questions.
     """
-    try:
-        payload = json.loads(_strip_fences(raw))
-    except json.JSONDecodeError as exc:
-        raise StudyError(f"generator returned invalid JSON: {exc}") from exc
+    payload = _decode_payload(raw)
 
     kept: list[Question] = []
     dropped = 0
@@ -115,6 +222,22 @@ def build_exam(course: str, raw: str, corpus: list[dict[str, Any]]) -> tuple[Exa
     ), dropped
 
 
+def unique_base(directory: Path, base: str) -> str:
+    """A filename stem in `directory` that no `<stem>.md` already uses.
+
+    Generated study output is named after the course, the day and the shape of
+    the request, so two runs on the same day collide by construction. The exam
+    path has always counted past a collision; the guide used to write straight
+    over the earlier file, which is why this lives here rather than inline.
+    """
+    if not (directory / f"{base}.md").exists():
+        return base
+    suffix = 1
+    while (directory / f"{base}-{suffix}.md").exists():
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
 def render_exam_md(exam: Exam) -> str:
     lines = [f"# {exam.title}", "", f"Course: {exam.course} · {len(exam.questions)} questions", ""]
     for number, question in enumerate(exam.questions, start=1):
@@ -127,15 +250,34 @@ def render_exam_md(exam: Exam) -> str:
     return "\n".join(lines)
 
 
+def _escape_dollars(text: str) -> str:
+    r"""Neutralise a bare ``$`` so it cannot open a maths span.
+
+    Applied to the *verbatim* strings -- a citation quote is lifted straight
+    out of course material, so it can carry a price, a shell variable or a
+    stray delimiter that Argus and Obsidian would both read as the start of an
+    equation running to the next ``$`` somewhere further down the key. A ``$``
+    that is already escaped is left alone.
+    """
+    return re.sub(r"(?<!\\)\$", r"\\$", text)
+
+
 def render_key_md(exam: Exam) -> str:
     lines = [f"# {exam.title} — answer key", ""]
     for number, question in enumerate(exam.questions, start=1):
+        # Blank lines between the three fields, not just newlines. Consecutive
+        # lines are one paragraph with soft breaks, which puts "**Why:**" and
+        # anything the explanation contains mid-line -- so a display block
+        # never starts a line and renders as a literal $$ instead of maths.
+        quote = _escape_dollars(question.citation.quote)
         lines += [
             f"## {number}. {question.q}",
             "",
             f"**Answer:** {question.answer}",
+            "",
             f"**Why:** {question.explanation}",
-            f"**Source:** {question.citation.label()} — “{question.citation.quote}”",
+            "",
+            f"**Source:** {question.citation.label()} — “{quote}”",
             "",
         ]
     return "\n".join(lines)
@@ -160,7 +302,7 @@ def exam_prompt(
         used += len(block)
 
     topic_line = f"Focus on: {topics}." if topics else "Cover the material broadly."
-    return f"""Create a {difficulty} practice exam with exactly {n} questions for course {course},
+    task = f"""Create a {difficulty} practice exam with exactly {n} questions for course {course},
 grounded ONLY in the source excerpts below. {topic_line}
 
 Return ONLY JSON (no prose) with this exact schema:
@@ -171,10 +313,15 @@ Return ONLY JSON (no prose) with this exact schema:
 Citation rules (questions violating them will be discarded):
 - "path" must be one of the SOURCE paths verbatim.
 - "quote" must be a short VERBATIM substring copied from that source excerpt.
-- Do not ask about anything not present in the excerpts.
+- Do not ask about anything not present in the excerpts."""
 
-SOURCES:
-{"".join(excerpts)}"""
+    # json_math_contract(), not the markdown math_contract() the notes and the
+    # study guide get. Three of those rules invert once the reply is JSON --
+    # backslashes double, $$ blocks are out, and `answer` must stay plain
+    # because the grader compares it to what a person typed. Handing over the
+    # markdown contract here would instruct the model to produce exactly what
+    # this feature cannot consume.
+    return compose(task, json_math_contract(), f"SOURCES:\n{''.join(excerpts)}")
 
 
 async def generate_practice_exam(
@@ -213,11 +360,7 @@ async def generate_practice_exam(
     study_dir = vault_path / tax.course_study(course)
     study_dir.mkdir(parents=True, exist_ok=True)
     stamp = date.today().isoformat()
-    base = f"exam-{stamp}-{len(exam.questions)}q"
-    suffix = 0
-    while (study_dir / f"{base}{'-' + str(suffix) if suffix else ''}.md").exists():
-        suffix += 1
-    base = f"{base}{'-' + str(suffix) if suffix else ''}"
+    base = unique_base(study_dir, f"exam-{stamp}-{len(exam.questions)}q")
     (study_dir / f"{base}.md").write_text(render_exam_md(exam), encoding="utf-8")
     (study_dir / f"{base}-key.md").write_text(render_key_md(exam), encoding="utf-8")
 

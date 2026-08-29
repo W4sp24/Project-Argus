@@ -28,20 +28,37 @@
  * the registered name. `path=` cannot mismatch.
  */
 
-/** Matches `[path.md]`, `[deck.pdf p.4]`, `[slides.pptx slide 9]`. */
-const CITATION_MARKER = /\[[^[\]\n]+?\.(?:md|pdf|pptx|docx)(?:\s+(?:p\.|slide\s)?\d+)?\]/g;
+/**
+ * A citation marker — `[path.md]`, `[deck.pdf p.4]`, `[slides.pptx slide 9]` —
+ * together with the horizontal whitespace on either side of it.
+ *
+ * The seam is part of the pattern rather than tidied afterwards, and that is
+ * the whole point. This used to remove the markers and then run
+ * `/[ \t]{2,}/g -> " "` over the entire answer to clean up after itself, which
+ * cannot tell the double space it just created from indentation the model
+ * meant: a nested list item written as `"  - sub-point"` came out as
+ * `" - sub-point"` and rendered flat, and an indented code block lost its
+ * indent, in every answer, whether or not it contained a citation at all.
+ *
+ * Anchoring to the marker means untouched text stays byte-identical.
+ */
+const CITATION_SEAM =
+  /[ \t]*\[[^[\]\n]+?\.(?:md|pdf|pptx|docx)(?:\s+(?:p\.|slide\s)?\d+)?\][ \t]*/g;
+
+/** Punctuation that must close up against the word before it. */
+const CLINGS_LEFT = ".,;:!?)]}";
 
 export function stripCitationMarkers(text: string): string {
-  return (
-    text
-      .replace(CITATION_MARKER, "")
-      // A marker removed mid-sentence leaves "the note  says" or "the note ."
-      // behind. Tidying the seam is cosmetic, but the alternative is visible
-      // in every grounded answer.
-      .replace(/[ \t]{2,}/g, " ")
-      .replace(/[ \t]+([.,;:!?)])/g, "$1")
-      .replace(/\(\s+/g, "(")
-  );
+  return text.replace(CITATION_SEAM, (seam, offset: number, whole: string) => {
+    const before = whole[offset - 1] ?? "";
+    const after = whole[offset + seam.length] ?? "";
+    // "the notes [x.md]." -> "the notes."; likewise at a line or text end.
+    if (after === "" || after === "\n" || CLINGS_LEFT.includes(after)) return "";
+    // "[x.md] The notes" and "(see [x.md] here)" -> no leading space either.
+    if (before === "" || before === "\n" || before === "(") return "";
+    // "the notes [x.md] say" -> "the notes say".
+    return " ";
+  });
 }
 
 export function obsidianUri(vaultPath: string, path: string): string {
