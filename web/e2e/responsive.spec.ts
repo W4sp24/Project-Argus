@@ -182,9 +182,35 @@ test("the app does not scroll horizontally at 390px", async ({ page }) => {
   // still working, and the next spec's ingest POST then queues behind it.
   await expect(page.getByRole("button", { name: "All folders" })).toBeVisible();
 
-  const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-  expect(scrollWidth, `the document overflows 390px by ${scrollWidth - 390}px`)
-    .toBeLessThanOrEqual(390);
+  // The measurement names its own culprit. A bare `scrollWidth` number says a
+  // page is too wide and nothing about which element made it so, and this
+  // assertion is one that can fail on a runner nobody can attach a debugger
+  // to — CI's raw logs need a login, so the failure message is the whole of
+  // the evidence. Reported here: the outermost elements that stick out past
+  // the viewport, which is where a missing `min-w-0` actually lives.
+  const { scrollWidth, offenders } = await page.evaluate(() => {
+    const vw = 390;
+    const out: string[] = [];
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
+      const box = el.getBoundingClientRect();
+      if (box.width === 0 && box.height === 0) continue;
+      const over = Math.round(box.right - vw);
+      if (over <= 0) continue;
+      // Skip anything whose parent already overflows at least as far: the
+      // child is being dragged along, and reporting it buries the cause.
+      const parent = el.parentElement;
+      if (parent && Math.round(parent.getBoundingClientRect().right - vw) >= over) continue;
+      const cls = `${el.className || ""}`.split(/\s+/).slice(0, 4).join(" ");
+      out.push(`+${over}px <${el.tagName.toLowerCase()} class="${cls}">`);
+    }
+    return { scrollWidth: document.documentElement.scrollWidth, offenders: out.slice(0, 4) };
+  });
+  expect(
+    scrollWidth,
+    `the document overflows 390px by ${scrollWidth - 390}px; widest offenders: ${
+      offenders.join(" | ") || "none measurable"
+    }`,
+  ).toBeLessThanOrEqual(390);
 
   // The fix works by letting the tab strip scroll inside itself, so all six
   // modes must still be there — a fix that simply dropped tabs would satisfy
