@@ -286,7 +286,14 @@ function SourcesBrowser() {
         </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
+      {/* `grid-cols-[minmax(0,1fr)]` on the narrow layout, not just on `lg`.
+          A grid item's automatic minimum size is its min-content, so a plain
+          one-column `grid` sizes its track to the widest thing inside it and
+          both panels then inherit that width — the page scrolls sideways on a
+          phone and the row actions go past the right edge. The `lg` template
+          already spelled `minmax(0,1fr)` for exactly this reason; below `lg`
+          the implicit `auto` column had no such floor. */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
         <Panel label="FOLDERS" className="h-fit">
           <ul className="flex flex-col">
             <li>

@@ -188,28 +188,39 @@ test("the app does not scroll horizontally at 390px", async ({ page }) => {
   // to — CI's raw logs need a login, so the failure message is the whole of
   // the evidence. Reported here: the outermost elements that stick out past
   // the viewport, which is where a missing `min-w-0` actually lives.
-  const { scrollWidth, offenders } = await page.evaluate(() => {
+  const { scrollWidth, containers, content, rows } = await page.evaluate(() => {
     const vw = 390;
-    const out: string[] = [];
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
+    const describe = (el: Element, withText: boolean) => {
+      const cls = `${el.className || ""}`.split(/\s+/).slice(0, 3).join(" ");
+      const over = Math.round(el.getBoundingClientRect().right - vw);
+      const text = withText ? ` "${(el.textContent || "").trim().slice(0, 24)}"` : "";
+      return `+${over}px <${el.tagName.toLowerCase()} class="${cls}">${text}`;
+    };
+
+    const over = Array.from(document.querySelectorAll<HTMLElement>("*")).filter((el) => {
       const box = el.getBoundingClientRect();
-      if (box.width === 0 && box.height === 0) continue;
-      const over = Math.round(box.right - vw);
-      if (over <= 0) continue;
-      // Skip anything whose parent already overflows at least as far: the
-      // child is being dragged along, and reporting it buries the cause.
-      const parent = el.parentElement;
-      if (parent && Math.round(parent.getBoundingClientRect().right - vw) >= over) continue;
-      const cls = `${el.className || ""}`.split(/\s+/).slice(0, 4).join(" ");
-      out.push(`+${over}px <${el.tagName.toLowerCase()} class="${cls}">`);
-    }
-    return { scrollWidth: document.documentElement.scrollWidth, offenders: out.slice(0, 4) };
+      return (box.width > 0 || box.height > 0) && box.right > vw;
+    });
+    const overSet = new Set<Element>(over);
+    // The outermost overflowing elements say which *container* failed to
+    // constrain itself; the leaves — the ones with no overflowing child of
+    // their own — say what the actual too-wide content is. A container
+    // without its leaf is unactionable, and a leaf without its container
+    // does not say which layout rule let it through.
+    const containers = over.filter((el) => !(el.parentElement && overSet.has(el.parentElement)));
+    const leaves = over.filter((el) => !Array.from(el.children).some((c) => overSet.has(c)));
+    return {
+      scrollWidth: document.documentElement.scrollWidth,
+      containers: containers.slice(0, 2).map((el) => describe(el, false)),
+      content: leaves.slice(0, 3).map((el) => describe(el, true)),
+      rows: document.querySelectorAll("li input[type=checkbox]").length,
+    };
   });
   expect(
     scrollWidth,
-    `the document overflows 390px by ${scrollWidth - 390}px; widest offenders: ${
-      offenders.join(" | ") || "none measurable"
-    }`,
+    `the document overflows 390px by ${scrollWidth - 390}px with ${rows} file rows` +
+      `; container: ${containers.join(" | ") || "none"}` +
+      `; content: ${content.join(" | ") || "none"}`,
   ).toBeLessThanOrEqual(390);
 
   // The fix works by letting the tab strip scroll inside itself, so all six
