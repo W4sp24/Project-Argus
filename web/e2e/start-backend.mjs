@@ -87,6 +87,15 @@ execFileSync(python, [path.join(here, "seed_chat_threads.py"), vault], {
   stdio: "inherit",
 });
 
+// Calendar: a local event, a weekly series and a subscribed feed's event.
+// Seeded through the store rather than the UI because subscribing writes a
+// keyring entry (CI installs no keyring backend) and syncing would need a
+// live .ics endpoint -- see seed_calendar.py's module docstring.
+execFileSync(python, [path.join(here, "seed_calendar.py"), vault], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 const server = spawn(python, ["-m", "uvicorn", "backend.main:app", "--port", "8000"], {
   cwd: workdir,
   stdio: "inherit",
