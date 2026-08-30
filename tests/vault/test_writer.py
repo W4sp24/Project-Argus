@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -508,3 +509,125 @@ def test_delete_note_is_not_markdown_specific(tmp_path):
     writer.delete_note(vault, "00-Inbox/files/lecture.pdf")
 
     assert not pdf.exists()
+
+
+# --- Recurring tasks (P5a) ----------------------------------------------------
+# Obsidian Tasks keeps a series alive by inserting the *next* instance above the
+# one you just ticked. Argus used to ignore 🔁 entirely, so completing a
+# recurring task destroyed the series -- silent data loss in the user's vault.
+
+
+def _recurring_note(vault: Path, body: str) -> Path:
+    note = vault / "20-Projects" / "p.md"
+    note.parent.mkdir(exist_ok=True)
+    note.write_text(body, encoding="utf-8")
+    return note
+
+
+def test_completing_a_recurring_task_inserts_the_next_instance(vault: Path) -> None:
+    old_line = "- [ ] Water plants 🔁 every week 📅 2026-09-06 ⏫ #home"
+    note = _recurring_note(vault, "# P\n\n" + old_line + "\n")
+
+    new_line = writer.toggle_task_line(vault, "20-Projects/p.md", 3, old_line)
+
+    lines = note.read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        "# P",
+        "",
+        "- [ ] Water plants 🔁 every week 📅 2026-09-13 ⏫ #home",
+        new_line,
+    ], "exactly one new instance, directly above the completed line"
+    assert new_line.startswith("- [x] Water plants") and "✅" in new_line
+    assert "✅" not in lines[2], "the next instance must not be born done"
+
+
+def test_the_next_instance_advances_the_scheduled_date_too(vault: Path) -> None:
+    old_line = "- [ ] Standup 🔁 every monday ⏳ 2026-09-07 📅 2026-09-07"
+    note = _recurring_note(vault, old_line + "\n")
+
+    writer.toggle_task_line(vault, "20-Projects/p.md", 1, old_line)
+
+    lines = note.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "- [ ] Standup 🔁 every monday ⏳ 2026-09-14 📅 2026-09-14"
+
+
+def test_an_undated_recurring_task_advances_from_today(vault: Path) -> None:
+    """Matching the plugin: with no date to advance, today is the anchor. An
+    undated clone would be an identical twin the user ticks again immediately."""
+    old_line = "- [ ] Water plants 🔁 every day #home"
+    note = _recurring_note(vault, old_line + "\n")
+
+    writer.toggle_task_line(vault, "20-Projects/p.md", 1, old_line)
+
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    lines = note.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == f"- [ ] Water plants 🔁 every day #home 📅 {tomorrow}"
+
+
+def test_uncompleting_a_recurring_task_inserts_nothing(vault: Path) -> None:
+    old_line = "- [x] Water plants 🔁 every week 📅 2026-09-06 ✅ 2026-09-06"
+    note = _recurring_note(vault, old_line + "\n")
+
+    new_line = writer.toggle_task_line(vault, "20-Projects/p.md", 1, old_line)
+
+    assert new_line == "- [ ] Water plants 🔁 every week 📅 2026-09-06"
+    assert note.read_text(encoding="utf-8") == new_line + "\n"
+
+
+def test_an_unrecognised_recurrence_rule_still_toggles(vault: Path) -> None:
+    """A task the user cannot tick off is worse than one that does not repeat."""
+    old_line = "- [ ] Water plants 🔁 every blue moon 📅 2026-09-06"
+    note = _recurring_note(vault, old_line + "\n")
+
+    new_line = writer.toggle_task_line(vault, "20-Projects/p.md", 1, old_line)
+
+    lines = note.read_text(encoding="utf-8").splitlines()
+    assert lines == [new_line], "no next instance for a rule we cannot compute"
+    assert new_line.startswith("- [x] Water plants") and "✅" in new_line
+
+
+def test_a_non_recurring_task_is_unaffected(vault: Path) -> None:
+    old_line = "- [ ] ship it 📅 2026-07-20"
+    note = _recurring_note(vault, old_line + "\n")
+
+    new_line = writer.toggle_task_line(vault, "20-Projects/p.md", 1, old_line)
+
+    assert note.read_text(encoding="utf-8").splitlines() == [new_line]
+
+
+def test_a_recurring_toggle_takes_exactly_one_snapshot(vault: Path) -> None:
+    """I2: two edits in one user action are still one undo point, and
+    ``_git_snapshot`` runs git with check=False -- a second one racing on
+    .git/index.lock loses silently."""
+    old_line = "- [ ] Water plants 🔁 every week 📅 2026-09-06"
+    _recurring_note(vault, old_line + "\n")
+    before = _commit_count(vault)
+
+    writer.toggle_task_line(vault, "20-Projects/p.md", 1, old_line)
+
+    assert _commit_count(vault) == before + 1
+
+
+def test_a_recurring_toggle_still_honours_the_cas_guard(vault: Path) -> None:
+    """Drift is refused *before* anything is inserted -- a rolled-forward copy
+    of the wrong line is a corrupted note, not a failed request."""
+    note = _recurring_note(vault, "- [ ] Water plants 🔁 every week 📅 2026-09-06\n")
+
+    with pytest.raises(WriterConflict):
+        writer.toggle_task_line(
+            vault, "20-Projects/p.md", 1, "- [ ] Water plants 🔁 every week 📅 2026-09-13"
+        )
+
+    assert note.read_text(encoding="utf-8") == "- [ ] Water plants 🔁 every week 📅 2026-09-06\n"
+
+
+def test_the_next_instance_keeps_the_indentation_of_a_subtask(vault: Path) -> None:
+    """The insert is a copy of the original line, so a nested task stays nested
+    instead of being promoted to the top level of the list."""
+    old_line = "    - [ ] Water plants 🔁 every week 📅 2026-09-06"
+    note = _recurring_note(vault, "- [ ] Garden\n" + old_line + "\n")
+
+    writer.toggle_task_line(vault, "20-Projects/p.md", 2, old_line)
+
+    lines = note.read_text(encoding="utf-8").splitlines()
+    assert lines[1] == "    - [ ] Water plants 🔁 every week 📅 2026-09-13"

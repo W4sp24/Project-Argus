@@ -24,6 +24,7 @@ from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.vault import suggestions as suggestion_queue
 from backend.vault.obsidian import daily_note_settings
 from backend.vault.suggestions import Suggestion
+from backend.vault.tasks import DUE_RE, RECUR_RE, SCHEDULED_RE, advance_date
 
 ARGUS_LOG_HEADING = "## Argus log"
 
@@ -124,6 +125,49 @@ def _checked_line(note: Path, rel_path: str, line_no: int, old_line: str) -> lis
 DONE_STAMP_RE = re.compile(r"\s*✅\s*\d{4}-\d{2}-\d{2}")
 
 
+def _next_recurrence(line: str, today: date) -> str | None:
+    """The next instance of a recurring task line, or None if it has none.
+
+    Obsidian Tasks keeps a series alive by inserting the next occurrence above
+    the one you just ticked; Argus used to ignore 🔁 entirely, so completing a
+    recurring task silently ended the series. This rebuilds the line as it was
+    before completion — same indentation, text, priority, tags and 🔁 rule —
+    with its dates rolled forward.
+
+    None for anything it cannot compute (no marker, an unrecognised rule), and
+    it never raises: the caller then falls back to a plain toggle, because a
+    task the user cannot tick off is a worse bug than one that stops repeating.
+    """
+    rule = next((first or second for first, second in RECUR_RE.findall(line)), None)
+    if not rule:
+        return None
+    rule = rule.strip()
+    anchor = today.isoformat()
+    if advance_date(anchor, rule) is None:
+        return None
+
+    def _shift(match: re.Match[str]) -> str:
+        stamp = match.group(1) or match.group(2)
+        moved = advance_date(stamp, rule)
+        # A syntactically valid but impossible date (2026-02-31) stays put
+        # rather than blocking the whole roll-forward.
+        return match.group(0) if moved is None else match.group(0).replace(stamp, moved)
+
+    dated = DUE_RE.search(line) is not None or SCHEDULED_RE.search(line) is not None
+    # 📅 and ⏳ each move by the rule independently, which keeps a task
+    # scheduled the 25th and due the 31st on those days of the next month too.
+    nxt = SCHEDULED_RE.sub(_shift, DUE_RE.sub(_shift, line))
+    # Defensive: an open line should carry no ✅, but the new instance must
+    # never be born already done whatever state the old one was left in.
+    nxt = DONE_STAMP_RE.sub("", nxt).rstrip()
+    if not dated:
+        # Nothing to roll forward, so today is the anchor — matching the plugin
+        # and, more to the point, giving the user something other than an
+        # identical twin they would tick again straight away.
+        nxt = f"{nxt} 📅 {advance_date(anchor, rule)}"
+    return nxt
+
+
 def toggle_task_line(
     vault_path: Path,
     rel_path: str,
@@ -132,22 +176,40 @@ def toggle_task_line(
     *,
     taxonomy: Taxonomy | None = None,
 ) -> str:
-    """Check/uncheck one task checkbox; stamps/strips the ✅ done date."""
+    """Check/uncheck one task checkbox; stamps/strips the ✅ done date.
+
+    Completing a task that carries a 🔁 recurrence marker also inserts the next
+    instance immediately above it, the way the Tasks plugin does. Returning the
+    *toggled* line (not the inserted one) is deliberate: callers feed it back as
+    the next CAS `old_line`, and the inserted line is the one thing they must
+    not then edit. The insert shifts the toggled line's number by one, so a
+    caller holding a stale `line` gets a `WriterConflict` on its next write —
+    the guard doing its job — rather than a wrong-line write. Both callers
+    already re-read the note before every operation (the router via
+    `refresh_cache`, `TasksPanel` via `withRawLine`), so neither sees it.
+    """
     tax = taxonomy or active_taxonomy()
     note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     lines = _checked_line(note, rel_path, line_no, old_line)
     line = lines[line_no - 1]
+    next_instance: str | None = None
     if "[ ]" in line:
-        new_line = (
-            line.replace("[ ]", "[x]", 1).rstrip() + f" ✅ {date.today().isoformat()}"
-        )
+        today = date.today()
+        new_line = line.replace("[ ]", "[x]", 1).rstrip() + f" ✅ {today.isoformat()}"
+        next_instance = _next_recurrence(line, today)
     elif "[x]" in line or "[X]" in line:
+        # Un-completing creates nothing: the next instance is already in the
+        # file from the completion this is undoing.
         line_normalized = line.replace("[X]", "[x]").replace("[x]", "[ ]", 1)
         new_line = DONE_STAMP_RE.sub("", line_normalized).rstrip()
     else:
         raise WriterConflict(f"{rel_path}:{line_no} is not a checkbox task")
+    # One user action, one undo point (I2) — the insert and the toggle are the
+    # same action, so they share this single snapshot.
     _git_snapshot(vault_path, f"toggle task {rel_path}:{line_no}")
     lines[line_no - 1] = new_line
+    if next_instance is not None:
+        lines.insert(line_no - 1, next_instance)
     note.write_text("\n".join(lines) + "\n", encoding="utf-8")
     _argus_log(vault_path, f"toggled task in {rel_path}:{line_no}", taxonomy=tax)
     return new_line
