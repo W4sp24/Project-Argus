@@ -171,8 +171,13 @@ async def test_list_tasks_returns_real_vault_buckets(settings: Settings) -> None
 
 def test_build_vault_tools_exposes_only_read_only_tools(settings: Settings) -> None:
     names = {spec.name for spec in build_vault_tools(settings, FakeIndex())}
-    assert names == {"search_vault", "read_note", "list_notes", "list_tasks"}
+    assert names == {"search_vault", "read_note", "list_notes", "list_tasks", "list_events"}
     assert not any(name.startswith("propose_") for name in names)
+    # list_events reads; there is deliberately no create_event beside it.
+    # A write the model performs directly would bypass the approval gate
+    # every other vault mutation goes through, and scheduling already has
+    # a write path: propose_schedule raises a suggestion to approve.
+    assert not any(name.startswith(("create_", "update_", "delete_")) for name in names)
 
 
 @pytest.mark.anyio
@@ -904,3 +909,51 @@ def test_the_tool_description_admits_a_narrowed_scope(settings: Settings) -> Non
 
     unscoped = tool(build_vault_tools(settings, FakeIndex()), "search_vault")
     assert "specific file(s)" not in unscoped.description
+
+
+# --- Calendar tools ----------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_list_events_sees_the_local_calendar(settings: Settings) -> None:
+    """The agent could read tasks but was blind to the calendar entirely.
+
+    Read-only on purpose: placing an event still goes through
+    propose_schedule and the approval gate, like every other write.
+    """
+    from backend.core.db import connect, init_schema
+    from backend.features.calendar import store as calendar_store
+
+    conn = connect(settings.db_path)
+    init_schema(conn)
+    calendar_store.ensure_default_calendar(conn)
+    calendar_store.upsert_event(
+        conn,
+        calendar_store.DEFAULT_CALENDAR_ID,
+        title="Study block",
+        start="2026-09-01T15:00:00",
+        end="2026-09-01T17:00:00",
+    )
+    conn.close()
+
+    tools = build_vault_tools(settings, FakeIndex())
+    listed = await tool(tools, "list_events").handler(
+        {"start": "2026-09-01", "end": "2026-09-02"}
+    )
+
+    payload = json.loads(listed["content"][0]["text"])
+    assert [event["title"] for event in payload["events"]] == ["Study block"]
+
+
+@pytest.mark.anyio
+async def test_list_events_survives_a_date_the_model_invented(settings: Settings) -> None:
+    """A tool that rejects a slightly wrong argument becomes a tool nobody calls.
+
+    Models pass "next Tuesday" and empty strings. Falling back to a sensible
+    window beats an error the model then has to recover from.
+    """
+    tools = build_vault_tools(settings, FakeIndex())
+
+    listed = await tool(tools, "list_events").handler({"start": "next Tuesday"})
+
+    assert json.loads(listed["content"][0]["text"])["events"] == []
