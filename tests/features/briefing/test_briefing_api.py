@@ -108,7 +108,16 @@ def test_build_scheduler_registers_jobs_without_starting() -> None:
 
     scheduler = build_scheduler(Settings(_vault_path=Path("unused")))
     jobs = {job.id for job in scheduler.get_jobs()}
-    assert jobs == {"morning-briefing", "nightly-task-refresh", "nightly-reindex"}
+    # Deliberately an exact set rather than a subset: this is the inventory of
+    # everything Argus does on its own, unattended, against the user's real
+    # vault. A job that appears here without someone choosing to add it is
+    # exactly what this assertion exists to make impossible to miss.
+    assert jobs == {
+        "morning-briefing",
+        "nightly-task-refresh",
+        "nightly-reindex",
+        "calendar-sync",
+    }
     assert not scheduler.running
 
 
