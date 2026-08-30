@@ -17,9 +17,15 @@ import json
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
-from pydantic import BaseModel
-
 from backend.connectors import ConnectorUnavailable
+
+# Compat re-export. CalendarEvent was defined in this module until Argus grew
+# a calendar that is not Google's; it now lives in backend.core.events, below
+# every producer of an event. It is imported (and re-exported) here so the
+# existing `from backend.connectors.gcal import CalendarEvent` call sites --
+# briefing/service.py, tasks/router.py, automations/sources.py and their tests
+# -- keep working unedited, and so `list_events` below still names it directly.
+from backend.core.events import CalendarEvent
 
 # Read events in P2; insert approved schedule blocks in P3 (writer-gated, I1).
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
@@ -43,20 +49,6 @@ def legacy_credentials_file() -> Path:
     from backend.core.config import Settings
 
     return Settings().gcal_legacy_credentials_file
-
-
-class CalendarEvent(BaseModel):
-    """One calendar event in Argus's agenda shape."""
-
-    title: str
-    start: str
-    end: str
-    all_day: bool = False
-    source: str = "gcal"
-    #: Where the event is, when the source says. Additive and defaulted, so the
-    #: connector path (which does not read it) and every existing consumer are
-    #: unaffected; the n8n timeline path fills it from the entry's `sub`.
-    location: str | None = None
 
 
 def _stored_token() -> str | None:
