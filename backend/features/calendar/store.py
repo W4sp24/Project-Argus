@@ -383,6 +383,48 @@ def list_events(
     return [_event_row(row) for row in rows]
 
 
+def candidates_for_window(
+    conn: sqlite3.Connection,
+    window_start: str,
+    window_end: str,
+    *,
+    calendar_ids: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Rows that *might* place an occurrence in ``[window_start, window_end)``.
+
+    Deliberately a superset, because the exact answer needs the RRULE engine
+    and this is SQL. :func:`recurrence.expand` narrows it.
+
+    Two kinds of row that :func:`list_events` correctly omits have to be here:
+
+    * **A recurring row.** Its stored ``start`` is when the *series* began —
+      a class that started in September is one row dated September, and
+      filtering on ``start`` would hide it from every week after the first.
+      Every rule-bearing row is therefore a candidate whatever its date; the
+      window is applied during expansion, where it can be applied truthfully.
+    * **A long event that began earlier.** A three-day conference starting
+      Friday is still happening on Sunday.
+
+    ISO-8601 sorts lexicographically, which is why these string comparisons
+    are date comparisons. A date-only ``YYYY-MM-DD`` is a prefix of any
+    datetime on that day, so it orders before every time on it — exactly the
+    boundary behaviour an all-day event wants.
+    """
+    query = (
+        f"SELECT {_EVENT_COLUMNS} FROM calendar_events"
+        " WHERE ((rrule IS NOT NULL AND rrule <> '') OR (start < ? AND end >= ?))"
+    )
+    params: list[Any] = [window_end, window_start]
+    if calendar_ids is not None:
+        if not calendar_ids:
+            return []
+        placeholders = ", ".join("?" for _ in calendar_ids)
+        query += f" AND calendar_id IN ({placeholders})"
+        params.extend(calendar_ids)
+    query += " ORDER BY start, id"
+    return [_event_row(row) for row in conn.execute(query, params).fetchall()]
+
+
 def delete_event(conn: sqlite3.Connection, calendar_id: str, event_id: str) -> None:
     """Delete one event, or raise :class:`EventNotFound`."""
     cursor = conn.execute(

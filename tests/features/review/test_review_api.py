@@ -59,13 +59,33 @@ def test_plan_review_dismiss_roundtrip(client: TestClient) -> None:
 
 
 def test_approve_applies_through_writer(client: TestClient, vault: Path) -> None:
+    """Approving a schedule block works with no Google account.
+
+    This assertion used to be the opposite — a 409 reading "not connected" —
+    and it was encoding a bug rather than a contract. The planner's whole
+    output is schedule blocks, so on a default install Argus proposed work it
+    could not place, and the approve button was dead for everyone who had not
+    been through the Google Cloud Console.
+
+    The block now lands in the local calendar. Google still takes precedence
+    when it is genuinely connected, which is asserted separately in
+    tests/vault/test_apply.py.
+    """
     client.post("/api/plan", json={"instruction": "x"})
     sid = client.get("/api/review").json()[0]["id"]
 
-    # Schedule blocks require gcal; unconfigured -> conflict with clear message.
     response = client.post(f"/api/review/{sid}/approve")
-    assert response.status_code == 409
-    assert "not connected" in response.json()["detail"]
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "applied"
+
+    # And the block is really there, not merely reported as applied — the
+    # failure this replaces was precisely a write that never happened.
+    conn = connect(vault / ".argus" / "argus.db")
+    try:
+        titles = [row["title"] for row in conn.execute("SELECT title FROM calendar_events")]
+    finally:
+        conn.close()
+    assert titles, "an approved schedule block left no event behind"
 
 
 def test_planner_tools_insert_rows(tmp_path: Path) -> None:

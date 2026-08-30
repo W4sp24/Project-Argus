@@ -12,6 +12,7 @@ line changes) behind the approval gate.
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import sqlite3
@@ -25,6 +26,8 @@ from backend.vault import suggestions as suggestion_queue
 from backend.vault.obsidian import daily_note_settings
 from backend.vault.suggestions import Suggestion
 from backend.vault.tasks import DUE_RE, RECUR_RE, SCHEDULED_RE, advance_date
+
+logger = logging.getLogger("argus.vault.writer")
 
 ARGUS_LOG_HEADING = "## Argus log"
 
@@ -687,6 +690,48 @@ def delete_course_tree(vault_path: Path, code: str, *, taxonomy: Taxonomy | None
     _argus_log(vault_path, f"deleted course {rel_path}", taxonomy=tax)
 
 
+def _schedule_writer(conn: sqlite3.Connection) -> Callable[[str, str, str], None]:
+    """Where an approved schedule block goes when the caller names no target.
+
+    This used to be ``gcal.insert_event`` unconditionally, which meant the
+    approve button on `/review` raised "Google Calendar is not connected" on
+    every install that had not been through the Cloud Console — i.e. the
+    default one. The planner proposed blocks it had no way to place.
+
+    Google still wins when it is actually connected, so nothing changes for
+    anyone already using it; the local calendar is the floor underneath,
+    which is the point of having one.
+
+    ``configured()`` reads the keyring, and an unreadable keyring *raises*
+    rather than answering False (``KeyringUnavailableError`` derives from
+    ``RuntimeError``, not from ``CredentialError``). Treating that as "not
+    connected" is right here: it degrades an approval to a local write
+    instead of failing it, and the block still lands somewhere the user can
+    see.
+    """
+    from backend.connectors import gcal
+
+    try:
+        if gcal.configured():
+            return gcal.insert_event
+    except Exception:  # noqa: BLE001 - an unreadable keyring is not a failed approval
+        logger.warning("could not read Google Calendar state; scheduling locally", exc_info=True)
+
+    from backend.features.calendar import store as calendar_store
+
+    def _insert_locally(title: str, start: str, end: str) -> None:
+        calendar_store.ensure_default_calendar(conn)
+        calendar_store.upsert_event(
+            conn,
+            calendar_store.DEFAULT_CALENDAR_ID,
+            title=title,
+            start=start,
+            end=end,
+        )
+
+    return _insert_locally
+
+
 def apply_suggestion(
     conn: sqlite3.Connection,
     vault_path: Path,
@@ -697,8 +742,11 @@ def apply_suggestion(
 ) -> Suggestion:
     """Execute one approved suggestion. The ONLY mutation path (I1).
 
-    ``gcal_insert(title, start, end)`` is injectable for tests; the default is
-    the real connector (which raises when unconfigured).
+    ``gcal_insert(title, start, end)`` is injectable for tests. The default
+    is chosen by :func:`_schedule_writer`: Google when it is connected, the
+    local calendar otherwise. It used to be the connector unconditionally,
+    which made approving a schedule block raise on any install that had not
+    been through the Google Cloud Console.
     """
     tax = taxonomy or active_taxonomy()
     suggestion = suggestion_queue.get(conn, suggestion_id)
@@ -711,7 +759,7 @@ def apply_suggestion(
 
     if suggestion.kind == "schedule":
         if gcal_insert is None:
-            from backend.connectors.gcal import insert_event as gcal_insert  # noqa: PLR1704
+            gcal_insert = _schedule_writer(conn)
         blocks = suggestion.payload.get("blocks", [])
         if not blocks:
             raise WriterError("schedule suggestion has no blocks")
