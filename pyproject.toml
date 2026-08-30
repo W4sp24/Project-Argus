@@ -45,6 +45,15 @@ dependencies = [
     # it only worked because it had been hand-installed into a local .venv and
     # was absent from every dependency list, including the frozen build.
     "todoist-api-python>=3.0",
+    # The native calendar. Both are pure Python, so they cost the frozen build
+    # nothing but a hiddenimports entry, and both are capped: an uncapped dep
+    # plus a fresh CI resolution is how a green local suite goes red with no
+    # code change (see the `mcp` comment above for the last time that bit).
+    # icalendar parses subscribed .ics feeds; dateutil expands their RRULEs and
+    # ours. dateutil was already present as a transitive — declared here so it
+    # cannot vanish when whichever package was pulling it changes its mind.
+    "icalendar>=6.0,<7",
+    "python-dateutil>=2.9,<3",
 ]
 
 [project.optional-dependencies]
