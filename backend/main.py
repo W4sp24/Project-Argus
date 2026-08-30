@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from backend.core.config import ConfigError, Settings
 from backend.features.automations.router import build_automations_router
 from backend.features.briefing.router import build_briefing_router
+from backend.features.calendar.router import build_calendar_router
 from backend.features.chat.router import ChatRunner, build_chat_router
 from backend.features.external.server import start_external_server
 from backend.features.flashcards.router import build_flashcards_router
@@ -259,6 +260,7 @@ def create_app(
     app.include_router(build_insights_router(resolved))
     app.include_router(build_chat_router(resolved, chat_runner))
     app.include_router(build_automations_router(resolved))
+    app.include_router(build_calendar_router(resolved))
 
     return app
 

@@ -25,12 +25,14 @@ because the only caller is the scheduler's sync job, which is not async.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from icalendar import Calendar
+from icalendar import Calendar, Event, vRecur
 
 from backend.core.events import CalendarEvent
 from backend.features.calendar import recurrence
@@ -433,3 +435,63 @@ def parse(text: str, *, calendar_id: str, source: str = "ics") -> list[IcsEvent]
     job — use :func:`parse_feed` instead.
     """
     return parse_feed(text, calendar_id=calendar_id, source=source).events
+
+
+# --- export -----------------------------------------------------------------
+
+
+def render(rows: Iterable[dict[str, Any]], *, name: str = "Argus") -> str:
+    """Stored rows as a standard iCalendar document.
+
+    The counterweight to keeping events in SQLite. They are invisible in
+    Obsidian and outside the vault's git snapshots, so without an export they
+    would be the one thing in Argus the user could not take elsewhere — and
+    "local-first" that you cannot get your data out of is just a silo with
+    better latency.
+
+    Built with :mod:`icalendar` rather than string concatenation because the
+    parts that look trivial are not: CRLF line endings, 75-octet line folding
+    and escaping in TEXT values are all load-bearing, and a feed that another
+    calendar refuses to import is worse than no export at all.
+    """
+    calendar = Calendar()
+    # PRODID and VERSION are both mandatory; an .ics without them is rejected
+    # outright by strict importers, Outlook among them.
+    calendar.add("prodid", "-//Argus//Local Calendar//EN")
+    calendar.add("version", "2.0")
+    calendar.add("x-wr-calname", name)
+
+    for row in rows:
+        event = Event()
+        event.add("uid", row["id"])
+        event.add("summary", row.get("title") or UNTITLED)
+        all_day = bool(row.get("all_day"))
+        start = _parse_stored(row.get("start"), all_day)
+        end = _parse_stored(row.get("end"), all_day)
+        if start is None:
+            continue
+        event.add("dtstart", start)
+        if end is not None:
+            # An all-day DTEND is exclusive on the wire, so a one-day event
+            # ends the following day. Storing it inclusive and converting here
+            # keeps the off-by-one in one place instead of two.
+            event.add("dtend", end + timedelta(days=1) if all_day else end)
+        if row.get("location"):
+            event.add("location", row["location"])
+        if row.get("notes"):
+            event.add("description", row["notes"])
+        if row.get("rrule"):
+            event.add("rrule", vRecur.from_ical(row["rrule"]))
+        calendar.add_component(event)
+
+    return calendar.to_ical().decode("utf-8")
+
+
+def _parse_stored(value: Any, all_day: bool) -> date | datetime | None:
+    """One stored ISO string back into the type iCalendar needs."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10]) if all_day else datetime.fromisoformat(value)
+    except ValueError:
+        return None

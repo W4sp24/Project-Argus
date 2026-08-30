@@ -383,6 +383,27 @@ def list_events(
     return [_event_row(row) for row in rows]
 
 
+def find_event(conn: sqlite3.Connection, event_id: str) -> dict[str, Any] | None:
+    """One event by id alone, whichever calendar holds it.
+
+    The API addresses an event by its id and nothing else — that is all the
+    UI has when the user clicks a row — so the calendar has to be looked up
+    rather than supplied. :func:`get_event` stays the exact ``(calendar_id,
+    id)`` accessor for callers that already know both.
+
+    Ids are unique in practice: local ones are ``uuid4().hex``, and a feed's
+    are its own UIDs. Two feeds *could* in principle publish the same UID, so
+    the ordering is pinned rather than left to SQLite's discretion, making the
+    answer stable between calls instead of shuffling under a user who clicked
+    the same row twice.
+    """
+    row = conn.execute(
+        f"SELECT {_EVENT_COLUMNS} FROM calendar_events WHERE id = ? ORDER BY calendar_id LIMIT 1",
+        (event_id,),
+    ).fetchone()
+    return None if row is None else _event_row(row)
+
+
 def candidates_for_window(
     conn: sqlite3.Connection,
     window_start: str,

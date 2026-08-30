@@ -50,3 +50,49 @@ def test_run_reindex_job_never_raises_on_failure(monkeypatch, tmp_path: Path) ->
 
     # Must not raise.
     run_reindex_job(Settings(_vault_path=tmp_path / "vault"))
+
+
+# --- Hourly calendar sync ----------------------------------------------------
+
+
+def test_build_scheduler_registers_the_calendar_sync_job(tmp_path: Path) -> None:
+    """Registered by build_scheduler only, so test apps still spawn nothing."""
+    from backend.scheduler import build_scheduler
+
+    scheduler = build_scheduler(Settings(_vault_path=tmp_path))
+    assert "calendar-sync" in {job.id for job in scheduler.get_jobs()}
+
+
+def test_calendar_sync_job_never_raises(monkeypatch, tmp_path: Path) -> None:
+    """A scheduler job that raises is a stack trace in a log nobody reads.
+
+    The per-feed outcome is recorded on each calendar row instead, which is
+    what the UI shows — so this only has to survive, not report.
+    """
+    from backend.features.calendar import sync
+    from backend.scheduler import run_calendar_sync_job
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("network is on fire")
+
+    monkeypatch.setattr(sync, "sync_all", _explode)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    run_calendar_sync_job(Settings(_vault_path=vault))  # must not raise
+
+
+def test_calendar_sync_job_syncs_every_subscription(monkeypatch, tmp_path: Path) -> None:
+    from backend.features.calendar import sync
+    from backend.scheduler import run_calendar_sync_job
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        sync, "sync_all", lambda conn, client=None: seen.append("ran") or []
+    )
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    run_calendar_sync_job(Settings(_vault_path=vault))
+
+    assert seen == ["ran"]
