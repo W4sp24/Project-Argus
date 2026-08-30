@@ -114,23 +114,32 @@ export interface EventDraft {
  */
 export type EventPatch = Partial<EventDraft>;
 
-/** Body of the subscription probe and of `POST /subscriptions`. */
+/** Body of `POST /subscriptions`. */
 export interface SubscriptionDraft {
-  /** Required by *both* routes — the probe shares `SubscriptionRequest`, so a
-   *  probe without a name is a 422 before the feed is ever fetched. */
   name: string;
   url: string;
   color?: string;
 }
+
+/**
+ * Body of `POST /subscriptions/probe` — the URL alone.
+ *
+ * The route's own `ProbeRequest` is *not* `SubscriptionRequest`: a dialog
+ * probes while the user is still deciding what to call the calendar, so
+ * requiring a name would turn "does this address work?" into a validation
+ * error about a different field. Written as a superset of the subscribe body
+ * so a caller that already has the name can hand over the same object.
+ */
+export type ProbeDraft = Pick<SubscriptionDraft, "url"> & Partial<SubscriptionDraft>;
 
 /** What a probe found, so the dialog can say more than "ok". */
 export interface SubscriptionProbe {
   events: number;
   /** Entries the parser skipped — a malformed VEVENT, or one with no DTSTART. */
   skipped: number;
-  /** Declared by the response model but never set by the route, so it is
-   *  always `null` — which is why the dialog asks for a name up front rather
-   *  than offering to fill one in from the feed. */
+  /** The feed's own `X-WR-CALNAME`, when it publishes one — most exporters
+   *  do. Prefill the name box with it: the calendar then ends up called what
+   *  it is called everywhere else. `null` when the feed omits it. */
   name_hint: string | null;
 }
 
@@ -202,7 +211,7 @@ export function deleteEvent(id: string, scope: "one" | "series" = "series") {
 }
 
 /** Fetch and parse a feed without saving anything. */
-export function probeSubscription(draft: SubscriptionDraft) {
+export function probeSubscription(draft: ProbeDraft) {
   return mutateJSON<SubscriptionProbe>("/api/calendar/subscriptions/probe", draft, "POST");
 }
 
