@@ -39,7 +39,12 @@ CREATE TABLE IF NOT EXISTS tasks_cache (
     due       TEXT,
     scheduled TEXT,
     priority  TEXT,
-    tags      TEXT NOT NULL DEFAULT ''
+    tags      TEXT NOT NULL DEFAULT '',
+    -- The 🔁 rule, verbatim. Cached rather than re-parsed because every task
+    -- the UI renders comes out of this table, not out of parse_task_line --
+    -- so without it a recurring task is indistinguishable from a one-off
+    -- everywhere the user can actually see one.
+    recurrence TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit (
@@ -475,6 +480,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if "icon_kind" not in ql_columns:  # migration for pre-custom-icon DBs (glyph-only)
         conn.execute("ALTER TABLE quick_links ADD COLUMN icon_kind TEXT")
         conn.execute("ALTER TABLE quick_links ADD COLUMN icon_value TEXT")
+    # tasks_cache is rebuilt from markdown on every read, so this column needs
+    # no backfill -- but it does need the ALTER. CREATE TABLE IF NOT EXISTS is
+    # a no-op on an existing DB, so without this every refresh_cache INSERT
+    # would fail on an install that predates the column, i.e. all of them.
+    task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks_cache)")}
+    if "recurrence" not in task_columns:
+        conn.execute("ALTER TABLE tasks_cache ADD COLUMN recurrence TEXT")
     # Multi-agent usage: one table now serves Claude Code, Codex, and whatever
     # comes next. Everything recorded before this column existed came from
     # Claude Code, which is exactly what the default backfills.

@@ -201,13 +201,15 @@ def refresh_cache(
                     task.scheduled,
                     task.priority,
                     ",".join(task.tags),
+                    task.recurrence,
                 )
             )
 
     conn.execute("DELETE FROM tasks_cache")
     conn.executemany(
-        "INSERT INTO tasks_cache (path, line, text, done, due, scheduled, priority, tags)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tasks_cache"
+        " (path, line, text, done, due, scheduled, priority, tags, recurrence)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
@@ -247,6 +249,7 @@ def bucketed_tasks(
             tags=[tag for tag in row["tags"].split(",") if tag],
             path=row["path"],
             line=row["line"],
+            recurrence=row["recurrence"],
         )
         buckets[bucket_of(task, today)].append(task)
     priority_rank = {"highest": 0, "high": 1, "medium": 2, "low": 3, None: 4}

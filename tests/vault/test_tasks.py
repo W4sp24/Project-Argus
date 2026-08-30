@@ -173,3 +173,30 @@ def test_advance_date_returns_none_for_an_unrecognised_rule(rule: str) -> None:
 
 def test_advance_date_returns_none_for_an_impossible_anchor() -> None:
     assert advance_date("2026-02-31", "every week") is None
+
+
+def test_recurrence_survives_the_cache(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    """A recurring task must still look recurring after the cache round-trip.
+
+    `parse_task_line` reads 🔁 straight off the markdown, but nothing the user
+    sees comes from there: the agenda and the board both read `tasks_cache`,
+    which `refresh_cache` rebuilds. Before the column existed, `recurrence`
+    was populated on a fresh parse and silently `None` everywhere it was
+    rendered -- the badge would have been dead on arrival, and the difference
+    is invisible unless the assertion goes through the cache like this one.
+    """
+    vault = tmp_path / "vault"
+    (vault / "10-Daily").mkdir(parents=True)
+    (vault / "10-Daily" / "2026-07-12.md").write_text(
+        "- [ ] Water the plants 🔁 every week 📅 2026-07-12\n"
+        "- [ ] One-off errand 📅 2026-07-12\n",
+        encoding="utf-8",
+    )
+
+    refresh_cache(conn, vault)
+    today_tasks = {task.text: task for task in bucketed_tasks(conn, today=TODAY)["today"]}
+
+    assert today_tasks["Water the plants"].recurrence == "every week"
+    assert today_tasks["One-off errand"].recurrence is None
+    # The rule is metadata, not part of the title the panel prints.
+    assert "🔁" not in today_tasks["Water the plants"].text
