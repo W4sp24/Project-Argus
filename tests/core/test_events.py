@@ -42,6 +42,7 @@ def test_a_local_event_can_set_every_new_field() -> None:
         id="abc",
         calendar_id="local",
         notes="bring the handout",
+        rrule="FREQ=WEEKLY",
         editable=True,
     )
 
@@ -55,5 +56,6 @@ def test_a_local_event_can_set_every_new_field() -> None:
         "id": "abc",
         "calendar_id": "local",
         "notes": "bring the handout",
+        "rrule": "FREQ=WEEKLY",
         "editable": True,
     }

@@ -52,11 +52,32 @@ def events_in_window(
         logger.exception("local calendar unreadable; serving no local events")
         return []
 
+    # Which calendar an event belongs to is what decides whether Argus may
+    # write it back, and the row does not carry that — only the calendar does.
+    # Stamped here rather than inside `expand`, which is given one row and has
+    # no way to know. Without it every listed event defaults to
+    # `editable=False` and the whole calendar renders read-only: the create
+    # dialog says the event is yours, the grid says it is not.
+    writable = {
+        row["id"]: row.get("kind") != "ics" for row in _calendars_by_id(conn).values()
+    }
+
     events: list[CalendarEvent] = []
     for row in rows:
-        events.extend(recurrence.expand(row, window_start, window_end))
+        for event in recurrence.expand(row, window_start, window_end):
+            event.editable = writable.get(row["calendar_id"], False)
+            event.rrule = row.get("rrule") or None
+            events.append(event)
     events.sort(key=lambda event: (event.start, event.title))
     return events
+
+
+def _calendars_by_id(conn: sqlite3.Connection) -> dict[str, dict]:
+    try:
+        return {row["id"]: row for row in store.list_calendars(conn)}
+    except sqlite3.Error:
+        logger.exception("calendar list unreadable; treating every event as read-only")
+        return {}
 
 
 def events_on(

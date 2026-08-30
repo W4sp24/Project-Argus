@@ -76,9 +76,20 @@ class EventPatch(BaseModel):
     rrule: str | None = None
 
 
-class SubscriptionRequest(BaseModel):
-    name: str = Field(min_length=1)
+class ProbeRequest(BaseModel):
+    """Just the URL.
+
+    Deliberately not `SubscriptionRequest`: the dialog probes while the user
+    is still deciding what to call the calendar, so requiring a name turns
+    "does this address work?" into a validation error about a different
+    field entirely.
+    """
+
     url: str = Field(min_length=1)
+
+
+class SubscriptionRequest(ProbeRequest):
+    name: str = Field(min_length=1)
     color: str = ""
 
 
@@ -219,11 +230,15 @@ def build_calendar_router(
             conn.close()
 
     @router.post("/subscriptions/probe", response_model=SubscriptionProbe)
-    def probe(request: SubscriptionRequest) -> SubscriptionProbe:
+    def probe(request: ProbeRequest) -> SubscriptionProbe:
         """Fetch and parse a feed without saving anything."""
         body, _etag = _fetch_or_422(request.url, client=_client())
         parsed = ics.parse_feed(body or "", calendar_id="probe")
-        return SubscriptionProbe(events=len(parsed.events), skipped=parsed.skipped)
+        return SubscriptionProbe(
+            events=len(parsed.events),
+            skipped=parsed.skipped,
+            name_hint=ics.feed_name(body or ""),
+        )
 
     @router.post("/subscriptions", response_model=CalendarInfo, status_code=201)
     def subscribe(request: SubscriptionRequest) -> CalendarInfo:
@@ -329,6 +344,7 @@ def _as_event(row: dict[str, Any]) -> CalendarEvent:
         all_day=bool(row["all_day"]),
         location=row["location"],
         notes=row["notes"],
+        rrule=row.get("rrule") or None,
         source=recurrence.DEFAULT_SOURCE,
         editable=True,
     )

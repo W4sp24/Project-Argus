@@ -34,6 +34,7 @@ SECRET_URL = "https://calendar.google.com/calendar/ical/abc123secret/basic.ics"
 FEED = """BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Test//EN
+X-WR-CALNAME:Timetable 2026
 BEGIN:VEVENT
 UID:evt-1
 SUMMARY:Lecture
@@ -158,6 +159,50 @@ def test_cancelling_one_occurrence_keeps_the_series(vault: Path) -> None:
     assert len(after) == 6, "one occurrence cancelled, the rest of the series intact"
     assert target not in [row["id"] for row in after]
     assert event["id"].split("::")[0] == target.split("::")[0]
+
+
+def test_a_listed_local_event_says_it_is_editable(vault: Path) -> None:
+    """The POST response is not the path the UI reads. The list is.
+
+    This regressed once already and nothing caught it: one test asserted
+    `editable is True` on a POST response, another asserted `False` on a
+    listed *subscribed* event, and between them they looked like coverage of
+    a field that was in fact hardcoded False on every listed event. The whole
+    calendar rendered read-only while the create dialog said otherwise.
+    """
+    client = _client(vault)
+    client.post(
+        "/api/calendar/events",
+        json={"title": "Mine", "start": "2026-09-01T10:00:00", "end": "2026-09-01T11:00:00"},
+    )
+
+    listed = client.get(
+        "/api/calendar/events", params={"start": "2026-09-01", "end": "2026-09-02"}
+    ).json()
+
+    assert [row["editable"] for row in listed] == [True]
+
+
+def test_a_probe_needs_only_a_url(vault: Path) -> None:
+    """Checking a URL should not require naming the calendar first.
+
+    The dialog probes while the user is still deciding what to call it, so
+    demanding a name turns a "does this work?" into a validation error about
+    an unrelated field.
+    """
+    client = _client(vault)
+    response = client.post("/api/calendar/subscriptions/probe", json={"url": SECRET_URL})
+    assert response.status_code == 200, response.text
+    assert response.json()["events"] == 1
+
+
+def test_a_probe_reports_the_feeds_own_name(vault: Path) -> None:
+    """So the dialog can prefill it instead of asking the user to invent one."""
+    client = _client(vault)
+    hint = client.post(
+        "/api/calendar/subscriptions/probe", json={"url": SECRET_URL}
+    ).json()["name_hint"]
+    assert hint == "Timetable 2026"
 
 
 def test_an_end_before_its_start_is_rejected(vault: Path) -> None:

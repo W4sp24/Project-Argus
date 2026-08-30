@@ -392,14 +392,19 @@ def find_event(conn: sqlite3.Connection, event_id: str) -> dict[str, Any] | None
     id)`` accessor for callers that already know both.
 
     Ids are unique in practice: local ones are ``uuid4().hex``, and a feed's
-    are its own UIDs. Two feeds *could* in principle publish the same UID, so
-    the ordering is pinned rather than left to SQLite's discretion, making the
-    answer stable between calls instead of shuffling under a user who clicked
-    the same row twice.
+    are its own UIDs. They *can* collide — subscribing Argus to another
+    machine's ``export.ics`` copies UIDs verbatim, which is a reasonable way
+    to mirror between two installs — so the local calendar wins the tie. It
+    is the only one the caller can write to, and resolving a PATCH to the
+    read-only copy would refuse an edit the user is entitled to make. Beyond
+    that the ordering is pinned rather than left to SQLite's discretion, so
+    the answer is stable between calls instead of shuffling under a user who
+    clicked the same row twice.
     """
     row = conn.execute(
-        f"SELECT {_EVENT_COLUMNS} FROM calendar_events WHERE id = ? ORDER BY calendar_id LIMIT 1",
-        (event_id,),
+        f"SELECT {_EVENT_COLUMNS} FROM calendar_events WHERE id = ?"
+        " ORDER BY (calendar_id = ?) DESC, calendar_id LIMIT 1",
+        (event_id, DEFAULT_CALENDAR_ID),
     ).fetchone()
     return None if row is None else _event_row(row)
 

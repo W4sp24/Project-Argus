@@ -495,3 +495,20 @@ def _parse_stored(value: Any, all_day: bool) -> date | datetime | None:
         return date.fromisoformat(value[:10]) if all_day else datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def feed_name(text: str) -> str | None:
+    """The calendar's own name, when the feed publishes one.
+
+    Google, Outlook and most timetable exporters set ``X-WR-CALNAME``. Using
+    it to prefill the subscribe dialog means the user confirms a name rather
+    than inventing one, and the name they end up with matches what the same
+    calendar is called everywhere else.
+    """
+    try:
+        calendar = Calendar.from_ical(text)
+    except Exception:  # noqa: BLE001 - a name is a nicety, never a failure
+        return None
+    raw = calendar.get("X-WR-CALNAME")
+    name = str(raw).strip() if raw else ""
+    return name or None
