@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Argus is currently pre-1.0 (0.x releases).
 
+## [Unreleased]
+
+### Added
+
+#### Note relationships
+
+- **Generated notes link into the vault.** Every note and study guide Argus
+  writes now carries a `Related` section: the concepts the document is about,
+  the nearest existing notes, its source file and its course. Obsidian's
+  graph, backlinks panel and tag search reach generated content for the first
+  time — and because the links sit in the body, `retrieve.py`'s one-hop
+  expansion follows them too, so Argus's own answers improve alongside.
+- **Concepts are verified, never invented.** The model names them; every name
+  is resolved against the real vault through `build_link_index`. A hit is
+  path-qualified with a readable alias, so a link cannot cross-wire two
+  same-named notes. A miss is written anyway, as an unresolved link Obsidian
+  draws in the graph and creates from your Concept Template on click.
+- **Study guides gained the frontmatter they never had.** `generate_study_guide`
+  wrote `body + "
+"` — no title, no type, no course, no tags — leaving guides
+  reachable by full-text search and nothing else. A guide also records the
+  materials it was written from, so a relink can never replace its citations
+  with a similarity guess.
+- **`argus relink` and RELINK NOTES on `/sources`** backfill everything
+  written before this. Guarded to `generated_by: argus`, snapshotted once for
+  the whole run, idempotent, and it leaves your own edits to a generated
+  note's body alone.
+- **Nested tags**: `argus/note`, `argus/guide`, `course/<CODE>`, `topic/<slug>`.
+
+### Fixed
+
+- **A generated note's source link resolved to nothing.** It was written
+  `[[lecture-03]]`, with the extension stripped, so for a PDF source Obsidian
+  drew a hollow node and link expansion had nothing to follow. It now names
+  the file.
+
 ## [0.3.1]
 
 Sixty-one commits since v0.3.0. Argus gains a corpus you can see and steer:
