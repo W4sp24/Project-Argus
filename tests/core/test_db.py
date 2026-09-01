@@ -125,3 +125,52 @@ def test_an_older_database_gains_the_kind_and_params_columns(tmp_path) -> None:
     assert job["kind"] == "ingest"
     assert job["params"] is None
     conn.close()
+
+
+def test_an_older_database_gains_the_task_recurrence_column(tmp_path) -> None:
+    """A recurring task must look recurring everywhere the user can see one.
+
+    `tasks_cache` is a derived cache, rebuilt from markdown on every read, so
+    this column needs no backfill -- but it does need the guarded ALTER. There
+    is no migration framework here, and `CREATE TABLE IF NOT EXISTS` is a
+    no-op against a table that already exists, so an installed copy of Argus
+    would keep its old nine-column `tasks_cache` and every `refresh_cache`
+    INSERT -- which hand-lists each column -- would die with "no such column"
+    on the first agenda load. That is the whole task list, not one panel.
+    """
+    conn = connect(tmp_path / "argus.db")
+    conn.execute(
+        "CREATE TABLE tasks_cache ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  path TEXT NOT NULL,"
+        "  line INTEGER NOT NULL,"
+        "  text TEXT NOT NULL,"
+        "  done INTEGER NOT NULL DEFAULT 0,"
+        "  due TEXT,"
+        "  scheduled TEXT,"
+        "  priority TEXT,"
+        "  tags TEXT NOT NULL DEFAULT '')"
+    )
+    conn.execute("INSERT INTO tasks_cache (path, line, text) VALUES ('a.md', 1, 'old task')")
+    conn.commit()
+
+    init_schema(conn)
+
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks_cache)")}
+    assert "recurrence" in columns
+    row = conn.execute("SELECT text, recurrence FROM tasks_cache").fetchone()
+    assert row["text"] == "old task"
+    assert row["recurrence"] is None
+
+    # The INSERT refresh_cache actually issues must work against the migrated
+    # table -- the failure this test exists to catch is a write, not a read.
+    conn.execute(
+        "INSERT INTO tasks_cache"
+        " (path, line, text, done, due, scheduled, priority, tags, recurrence)"
+        " VALUES ('b.md', 2, 'water plants', 0, '2026-09-01', NULL, NULL, '', 'every week')"
+    )
+    conn.commit()
+    assert conn.execute(
+        "SELECT recurrence FROM tasks_cache WHERE path = 'b.md'"
+    ).fetchone()["recurrence"] == "every week"
+    conn.close()

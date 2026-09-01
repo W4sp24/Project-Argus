@@ -154,6 +154,21 @@ datas += (
     + required_metadata("todoist-api-python")
 )
 
+# --- native calendar (icalendar / dateutil) ---------------------------------
+# icalendar registers its component classes through entry points, the same
+# discovery mechanism that already breaks keyring above when frozen -- without
+# the metadata a subscribed .ics feed parses to zero events and the calendar
+# silently shows nothing, which is precisely the invisible failure this
+# feature exists to remove. dateutil.rrule is imported in-function by
+# backend/features/calendar/recurrence.py, so static analysis cannot see it.
+#
+# required_metadata(), not safe_metadata(): both are base dependencies, so a
+# build that cannot find them installed the wrong thing and must fail here
+# rather than ship a calendar that renders every recurring event once.
+hiddenimports += collect_submodules("icalendar")
+hiddenimports += collect_submodules("dateutil")
+datas += required_metadata("icalendar") + required_metadata("python-dateutil")
+
 # --- apscheduler -----------------------------------------------------------
 # APScheduler 3.x resolves triggers/executors via pkg_resources entry points.
 # Missing -> LookupError: No trigger by the name "cron" -- which fires inside

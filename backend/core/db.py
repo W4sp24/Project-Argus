@@ -39,7 +39,12 @@ CREATE TABLE IF NOT EXISTS tasks_cache (
     due       TEXT,
     scheduled TEXT,
     priority  TEXT,
-    tags      TEXT NOT NULL DEFAULT ''
+    tags      TEXT NOT NULL DEFAULT '',
+    -- The 🔁 rule, verbatim. Cached rather than re-parsed because every task
+    -- the UI renders comes out of this table, not out of parse_task_line --
+    -- so without it a recurring task is indistinguishable from a one-off
+    -- everywhere the user can actually see one.
+    recurrence TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit (
@@ -373,6 +378,68 @@ CREATE TABLE IF NOT EXISTS ingest_job_items (
 );
 CREATE INDEX IF NOT EXISTS idx_ingest_job_items_job
     ON ingest_job_items(job_id, id);
+
+-- The native calendar: one row per calendar the user has, whether it is the
+-- built-in local one ('local', created by ensure_default_calendar so a fresh
+-- install can make an event with zero setup) or a subscribed .ics feed
+-- ('ics'). A secret iCal URL *is* a credential -- anyone holding it can read
+-- the calendar -- so it lives in the OS keyring under `url_ref` (invariant
+-- I4) and never in this table; `url_display` holds only a redaction fit to
+-- show in the UI.
+--
+-- Two deliberate choices, both of which cost a table rebuild to reverse:
+--
+-- `calendar_events.calendar_id` is TEXT NOT NULL because it is half of that
+-- table's PRIMARY KEY, and SQLite permits NULLs inside a PRIMARY KEY and
+-- never treats two of them as equal -- so a nullable key column enforces
+-- nothing at all. That is the `automation_widgets` lesson above, applied
+-- before the rows exist rather than after.
+--
+-- `kind` carries no CHECK constraint on purpose. SQLite cannot alter one, so
+-- every kind a later feature adds (CalDAV, an imported .ics snapshot) would
+-- cost a create/copy/drop/rename rebuild of the table holding the user's
+-- calendars. The vocabulary lives in `calendar.store.CALENDAR_KINDS`
+-- instead, where extending it is a one-line change -- same reasoning as
+-- `ingest_jobs.kind`.
+CREATE TABLE IF NOT EXISTS calendars (
+    id                       TEXT PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    kind                     TEXT NOT NULL DEFAULT 'local',
+    color                    TEXT NOT NULL DEFAULT '',
+    url_ref                  TEXT,
+    url_display              TEXT,
+    refresh_interval_seconds INTEGER NOT NULL DEFAULT 3600,
+    last_sync_at             TEXT,
+    last_sync_error          TEXT,
+    etag                     TEXT,
+    enabled                  INTEGER NOT NULL DEFAULT 1,
+    created_at               TEXT NOT NULL
+);
+
+-- Keyed on (calendar_id, id) rather than a surrogate: an .ics feed's UID is
+-- unique only within the feed that issued it, and `store.replace_events`
+-- rewrites one calendar's rows wholesale on every sync, so the calendar is
+-- part of an event's identity. `start`/`end` are ISO-8601 strings, which sort
+-- lexicographically in the same order they sort chronologically -- that is
+-- what lets the half-open window query use the index below directly and lets
+-- one column hold an all-day date beside a timed instant.
+-- `rrule`/`exdates` store the recurrence rule unexpanded; expansion happens
+-- at read time, bounded by the query window.
+CREATE TABLE IF NOT EXISTS calendar_events (
+    calendar_id TEXT NOT NULL,
+    id          TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    start       TEXT NOT NULL,
+    end         TEXT NOT NULL,
+    all_day     INTEGER NOT NULL DEFAULT 0,
+    location    TEXT,
+    notes       TEXT,
+    rrule       TEXT,
+    exdates     TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (calendar_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start);
 """
 
 
@@ -413,6 +480,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if "icon_kind" not in ql_columns:  # migration for pre-custom-icon DBs (glyph-only)
         conn.execute("ALTER TABLE quick_links ADD COLUMN icon_kind TEXT")
         conn.execute("ALTER TABLE quick_links ADD COLUMN icon_value TEXT")
+    # tasks_cache is rebuilt from markdown on every read, so this column needs
+    # no backfill -- but it does need the ALTER. CREATE TABLE IF NOT EXISTS is
+    # a no-op on an existing DB, so without this every refresh_cache INSERT
+    # would fail on an install that predates the column, i.e. all of them.
+    task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks_cache)")}
+    if "recurrence" not in task_columns:
+        conn.execute("ALTER TABLE tasks_cache ADD COLUMN recurrence TEXT")
     # Multi-agent usage: one table now serves Claude Code, Codex, and whatever
     # comes next. Everything recorded before this column existed came from
     # Claude Code, which is exactly what the default backfills.

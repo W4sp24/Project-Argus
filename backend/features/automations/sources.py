@@ -107,9 +107,40 @@ def calendar_events(
 ) -> tuple[list[Any], str | None]:
     """Events for ``day`` as ``(events, error)``.
 
-    Prefers a fresh ``calendar`` timeline widget pushed by an n8n workflow;
-    falls back to the native Google Calendar connector.
+    Argus's own calendar is **merged**, not chosen between: a locally created
+    event and a subscribed .ics feed are the user's data and must appear
+    whatever else is connected. Only the *external* half is a precedence
+    chain — a fresh n8n ``calendar`` widget, else the Google connector — and
+    that half is untouched, which is what keeps this change orthogonal.
+
+    With no local calendar rows the result is the external half alone, event
+    for event and in the same order, so every existing consumer and its tests
+    see exactly what they saw before. ``tests/features/calendar/
+    test_sources_merge.py`` asserts that rather than trusting it.
+
+    The error slot still belongs to the external half. A local read cannot
+    fail in a way worth reporting — :mod:`calendar.service` logs and degrades
+    — and putting a second failure mode in that slot would change a contract
+    every caller already handles.
     """
+    external, error = _external_events(conn, day, now=now)
+    if conn is None:
+        return external, error
+
+    from backend.features.calendar import service
+
+    # Local first: the user's own entries lead the day, and an external
+    # source that is slow, stale or misconfigured cannot push them down.
+    return service.events_on(conn, day) + external, error
+
+
+def _external_events(
+    conn: sqlite3.Connection | None,
+    day: date,
+    *,
+    now: Callable[[], datetime] = _utcnow,
+) -> tuple[list[Any], str | None]:
+    """The pre-local behaviour, verbatim: fresh n8n widget, else the connector."""
     if conn is not None:
         widget = _fresh_widget(conn, CALENDAR_SLUG, now=now)
         if widget is not None:

@@ -1,6 +1,11 @@
 "use client";
 
 import useSWR from "swr";
+// Type-only, and it has to stay that way: `lib/calendar` imports the fetch
+// helpers below, so a value import here would close a runtime cycle. `import
+// type` is erased, and `isolatedModules` makes that explicit rather than
+// something the bundler infers.
+import type { CalendarEvent } from "@/lib/calendar";
 
 /**
  * Backend base URL. In the browser (dev + `argus web`) this is "" and requests
@@ -329,6 +334,9 @@ export interface TaskItem {
   source: string;
   path: string | null;
   line: number | null;
+  /** The Tasks plugin's 🔁 rule verbatim ("every week"), or null. Read from the
+   *  task cache; only vault tasks ever carry one. */
+  recurrence: string | null;
 }
 
 /** Full task board (overdue/today/week/someday buckets) — used to derive
@@ -1976,15 +1984,18 @@ export function actionFieldName(
   return action.fields.find((f) => f.name.toLowerCase() === wanted.toLowerCase())?.name;
 }
 
-/** One calendar event on the agenda. `source` is "gcal" or "n8n". */
-export interface AgendaEvent {
-  title: string;
-  start: string;
-  end: string;
-  all_day: boolean;
-  source?: string;
-  location?: string | null;
-}
+/**
+ * One calendar event on the agenda.
+ *
+ * The agenda's events *are* `backend.core.events.CalendarEvent` — the same
+ * class the `/api/calendar` router answers with, which is why this is an alias
+ * rather than a second hand-written mirror of it. It used to be that mirror,
+ * and it had already fallen behind: `id`, `calendar_id` and `editable` were
+ * missing, so a client had no way to tell a local event it may edit from a
+ * subscribed one it may not. `source` is "local", "gcal", "n8n", or a feed's
+ * calendar id.
+ */
+export type AgendaEvent = CalendarEvent;
 
 /** One task on the agenda — from the vault, a connector, or an n8n widget. */
 export interface AgendaTask {
@@ -1999,6 +2010,9 @@ export interface AgendaTask {
   line: number | null;
   external_id?: string | null;
   href?: string | null;
+  /** The 🔁 rule this task repeats on ("every week"), or null. Vault tasks
+   *  only — a connector or n8n task has no Tasks-plugin line behind it. */
+  recurrence?: string | null;
 }
 
 /** GET /api/agenda — everything the Today view needs for one date. */

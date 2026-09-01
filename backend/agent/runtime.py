@@ -181,6 +181,30 @@ def _summarize_list_tasks(_args: dict[str, Any], result_text: str) -> ToolSummar
     return ToolSummary(label="list_tasks", detail=f"{count} tasks")
 
 
+def _as_day(value: Any) -> date | None:
+    """One model-supplied date, or None when it is not usable.
+
+    A model will occasionally pass "next Tuesday" or an empty string. The
+    caller falls back to a sensible default rather than erroring, because a
+    tool that refuses a slightly wrong argument turns into a model that
+    stops using the tool.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        return None
+
+
+def _summarize_list_events(args: dict[str, Any], result_text: str) -> ToolSummary:
+    payload = _parse_json(result_text)
+    events = payload.get("events") if isinstance(payload, dict) else None
+    count = len(events) if isinstance(events, list) else 0
+    when = str(args.get("start") or "today")
+    return ToolSummary(label="list_events", detail=f"{count} events from {when}")
+
+
 def build_vault_tools(
     settings: Settings,
     index: VaultIndex,
@@ -416,6 +440,22 @@ def build_vault_tools(
             {bucket: [task.model_dump() for task in tasks] for bucket, tasks in buckets.items()}
         )
 
+    async def list_events(args: dict[str, Any]) -> dict[str, Any]:
+        from datetime import timedelta
+
+        from backend.core.db import connect, init_schema
+        from backend.features.calendar import service
+
+        start = _as_day(args.get("start")) or date.today()
+        end = _as_day(args.get("end")) or start + timedelta(days=7)
+        conn = connect(settings.db_path)
+        try:
+            init_schema(conn)
+            events = service.events_in_window(conn, start, end)
+        finally:
+            conn.close()
+        return _tool_text({"events": [event.model_dump() for event in events]})
+
     return [
         ToolSpec(
             name="search_vault",
@@ -483,6 +523,28 @@ def build_vault_tools(
             handler=list_tasks,
             summarize=_summarize_list_tasks,
         ),
+        ToolSpec(
+            name="list_events",
+            description=(
+                "List calendar events between two ISO dates (YYYY-MM-DD), across the "
+                "user's own calendar and any subscribed feeds. Defaults to the next "
+                "seven days."
+            ),
+            parameters=json_schema(
+                {
+                    "start": {"type": "string", "description": "ISO date, inclusive."},
+                    "end": {"type": "string", "description": "ISO date, exclusive."},
+                },
+                required=[],
+            ),
+            handler=list_events,
+            summarize=_summarize_list_events,
+        ),
+        # No create_event here, deliberately. This belt is read-only: a write
+        # the model performs directly would bypass the suggest-then-approve
+        # gate that every other vault mutation goes through. Scheduling
+        # already has its write path — the planner's propose_schedule raises a
+        # suggestion, and approving it lands the block on the local calendar.
     ]
 
 

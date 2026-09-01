@@ -196,6 +196,14 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     hint: "/sources",
     run: (ctx) => ctx.push("/sources"),
   },
+  {
+    // Same lesson as /sources directly above, applied before it costs
+    // anything: /calendar is otherwise reachable only by typing the URL.
+    kind: "CALENDAR",
+    label: "open calendar",
+    hint: "/calendar",
+    run: (ctx) => ctx.push("/calendar"),
+  },
 ];
 
 /** Debounce delay (ms) before `search vault` mode fires GET /api/search. */

@@ -93,6 +93,21 @@ export default function TasksPanel() {
   // Todoist-shaped instead of flashing empty (§4). Real toggle data only —
   // never mock.
   const doneSession = useRef<Map<string, AgendaTask>>(new Map());
+  // Toggles currently in flight, keyed like `doneSession`.
+  //
+  // Completing a *recurring* task makes this a correctness guard, not polish.
+  // `writer.toggle_task_line` inserts the next instance ABOVE the one it
+  // ticks, so every line below shifts down by one — and `task.line` here
+  // still holds the pre-toggle number until `mutate()` lands. A second click
+  // in that window re-reads the same line number, which now holds the *new*
+  // instance, so the CAS `old_line` matches (it is comparing that line to
+  // itself), the write is accepted, and the user gets a duplicate task in
+  // their real vault plus a third instance spawned from it.
+  //
+  // A ref, not state: the check has to be synchronous and settled before the
+  // first `await`, and a state update is neither. `forceRender` is only so
+  // the control can *look* disabled; the ref is what makes it safe.
+  const inFlight = useRef<Set<string>>(new Set());
   const [, forceRender] = useState(0);
   const { confirm, confirmDialog } = useConfirm();
 
@@ -107,6 +122,8 @@ export default function TasksPanel() {
   }
 
   async function toggle(task: AgendaTask, key: string) {
+    if (inFlight.current.has(key)) return;
+    inFlight.current.add(key);
     const goingDone = !task.done;
     mutate(
       (current) =>
@@ -131,8 +148,14 @@ export default function TasksPanel() {
       forceRender((n) => n + 1);
     } catch (error) {
       flash(error instanceof Error ? error.message : "Toggle failed");
+    } finally {
+      // Cleared only after `mutate()` resolves: until the refetch lands,
+      // `task.line` is still the stale number that makes a second click
+      // dangerous.
+      await mutate();
+      inFlight.current.delete(key);
+      forceRender((n) => n + 1);
     }
-    mutate();
   }
 
   async function saveEdit(task: AgendaTask) {
@@ -186,6 +209,8 @@ export default function TasksPanel() {
    */
   async function completeExternal(task: AgendaTask, key: string) {
     if (!completeTask || !task.external_id) return;
+    if (inFlight.current.has(key)) return;
+    inFlight.current.add(key);
     const id = task.external_id;
     suppressed.current.add(id);
     doneSession.current.set(key, { ...task, done: true });
@@ -204,6 +229,9 @@ export default function TasksPanel() {
       doneSession.current.delete(key);
       forceRender((n) => n + 1);
       flash(error instanceof Error ? error.message : "Could not close the task");
+    } finally {
+      inFlight.current.delete(key);
+      forceRender((n) => n + 1);
     }
   }
 
@@ -383,7 +411,7 @@ export default function TasksPanel() {
                   <li key={key} className="group flex items-center gap-2.5 py-1.5">
                     <button
                       aria-label={task.done ? "Mark not done" : "Mark done"}
-                      disabled={!editable && !closable}
+                      disabled={(!editable && !closable) || inFlight.current.has(key)}
                       title={
                         closable
                           ? `Close in Todoist via ${completeTask!.workflow_name}`
@@ -434,6 +462,18 @@ export default function TasksPanel() {
                     )}
                     {tag && editing !== key && (
                       <span className="shrink-0 font-mono text-meta text-ink-faint">#{tag}</span>
+                    )}
+                    {task.recurrence && editing !== key && (
+                      // Ticking this one does not remove it — it rolls the
+                      // series forward. Worth saying before the click, not
+                      // after, or the reappearing row reads as a failed
+                      // completion.
+                      <span
+                        className="shrink-0 font-mono text-micro text-ink-faint"
+                        title={`Repeats ${task.recurrence} — completing this creates the next one`}
+                      >
+                        🔁
+                      </span>
                     )}
                     {editing !== key && <DueBadge task={task} today={today} />}
                     {editable && editing !== key && (

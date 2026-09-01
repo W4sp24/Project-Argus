@@ -127,3 +127,87 @@ def test_double_apply_rejected(conn: sqlite3.Connection, vault: Path) -> None:
     apply_suggestion(conn, vault, sid, gcal_insert=lambda *a: None)
     with pytest.raises(WriterError, match="already applied"):
         apply_suggestion(conn, vault, sid, gcal_insert=lambda *a: None)
+
+
+# --- Where an approved schedule block goes when the caller names no target ---
+
+
+def _schedule_suggestion(conn: sqlite3.Connection) -> int:
+    return insert_suggestion(
+        conn,
+        "schedule",
+        {
+            "blocks": [
+                {"title": "Deep work", "start": "2026-07-13T09:00:00", "end": "2026-07-13T11:00:00"}
+            ]
+        },
+        "Morning focus block",
+    )
+
+
+def test_a_schedule_block_lands_locally_when_google_is_not_connected(
+    conn: sqlite3.Connection, vault: Path, monkeypatch
+) -> None:
+    """The default install must be able to approve its own planner's output.
+
+    This raised `RuntimeError("Google Calendar is not connected")` before —
+    the planner proposed blocks and the approve button could not place any of
+    them without a Cloud Console project.
+    """
+    from backend.connectors import gcal
+
+    monkeypatch.setattr(gcal, "configured", lambda: False)
+    sid = _schedule_suggestion(conn)
+
+    applied = apply_suggestion(conn, vault, sid)
+
+    assert applied.status == "applied"
+    rows = conn.execute("SELECT title, start, end FROM calendar_events").fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("Deep work", "2026-07-13T09:00:00", "2026-07-13T11:00:00")
+    ]
+
+
+def test_google_still_wins_when_it_is_connected(
+    conn: sqlite3.Connection, vault: Path, monkeypatch
+) -> None:
+    """Nothing changes for anyone already using the connector.
+
+    The local calendar is the floor underneath Google, not a replacement for
+    it — a user who went through the OAuth flow chose where their blocks go.
+    """
+    from backend.connectors import gcal
+
+    inserted: list[tuple] = []
+    monkeypatch.setattr(gcal, "configured", lambda: True)
+    monkeypatch.setattr(gcal, "insert_event", lambda t, s, e: inserted.append((t, s, e)))
+    sid = _schedule_suggestion(conn)
+
+    apply_suggestion(conn, vault, sid)
+
+    assert inserted == [("Deep work", "2026-07-13T09:00:00", "2026-07-13T11:00:00")]
+    assert conn.execute("SELECT COUNT(*) AS n FROM calendar_events").fetchone()["n"] == 0
+
+
+def test_an_unreadable_keyring_degrades_to_a_local_write(
+    conn: sqlite3.Connection, vault: Path, monkeypatch
+) -> None:
+    """An unreadable keyring must not turn into a failed approval.
+
+    `configured()` reads the keyring, and an unreadable one *raises* rather
+    than answering False — KeyringUnavailableError derives from RuntimeError,
+    not from CredentialError, which is a distinction this repo has already
+    been caught by once (listing n8n instances 500'd for exactly this).
+    """
+    from backend.connectors import gcal
+
+    def _explode() -> bool:
+        raise RuntimeError("the keyring is locked")
+
+    monkeypatch.setattr(gcal, "configured", _explode)
+    sid = _schedule_suggestion(conn)
+
+    applied = apply_suggestion(conn, vault, sid)
+
+    assert applied.status == "applied"
+    assert conn.execute("SELECT COUNT(*) AS n FROM calendar_events").fetchone()["n"] == 1

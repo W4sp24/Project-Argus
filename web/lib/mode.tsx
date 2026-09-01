@@ -52,6 +52,7 @@ function modeFromPathname(pathname: string): Mode {
   // is a closed union threaded through six places, and the two-letter tab
   // strip below `md` has no room for another.
   if (pathname.startsWith("/sources")) return "general";
+  if (pathname.startsWith("/calendar")) return "general";
   if (pathname.startsWith("/study")) return "study";
   if (pathname.startsWith("/research")) return "research";
   if (pathname.startsWith("/code")) return "code";

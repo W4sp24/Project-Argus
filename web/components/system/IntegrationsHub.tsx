@@ -6,6 +6,8 @@ import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import AddMcpServerDialog from "@/components/system/AddMcpServerDialog";
 import ConnectDialog from "@/components/system/ConnectDialog";
+import SubscribeDialog from "@/components/calendar/SubscribeDialog";
+import { removeSubscription, syncSubscription, useCalendars } from "@/lib/calendar";
 import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
 import {
@@ -110,6 +112,17 @@ const CONNECTOR_STATUS: Record<string, string> = {
 
 export default function IntegrationsHub() {
   const { data, isLoading, mutate } = useIntegrations();
+  const { data: calendars, mutate: mutateCalendars } = useCalendars();
+  // Only subscriptions belong here. The built-in local calendar is not an
+  // integration — it needs no setup, and listing it as one would imply it
+  // could be disconnected.
+  const subscriptions = (calendars ?? []).filter((calendar) => calendar.kind === "ics");
+  const [syncing, setSyncing] = useState<string | null>(null);
+  // Its own state rather than a synthetic ConnectorInfo pushed through
+  // `connecting`: a subscription is not one of the backend's hardcoded
+  // connectors, and inventing a row to satisfy that type would put a
+  // fiction in the one place the page reads to decide what is connected.
+  const [subscribing, setSubscribing] = useState(false);
   const { data: sessions } = useJournalSessions();
   const { data: snippets } = useMcpSnippets();
   const { data: automations } = useAutomations();
@@ -229,6 +242,91 @@ export default function IntegrationsHub() {
               />
             ))}
 
+            {subscriptions.map((calendar) => (
+              <Card
+                key={calendar.id}
+                status={calendar.last_sync_error ? "FAILING" : "WIRED"}
+                title={calendar.name}
+                // A failed sync keeps the events it already had, so the error
+                // is the whole story — without it a stale calendar is
+                // indistinguishable from a quiet one.
+                detail={
+                  calendar.last_sync_error ??
+                  (calendar.last_sync_at
+                    ? `synced ${formatRelativeTime(calendar.last_sync_at)}`
+                    : "not synced yet")
+                }
+                // url_display only. The feed URL is a credential — Google puts
+                // the secret in the path — and the API never returns it.
+                chips={calendar.url_display ? [calendar.url_display] : undefined}
+                actions={
+                  <>
+                    <Button
+                      size="sm"
+                      disabled={syncing === calendar.id}
+                      onClick={async () => {
+                        setSyncing(calendar.id);
+                        try {
+                          const synced = await syncSubscription(calendar.id);
+                          void mutateCalendars();
+                          show(
+                            synced.last_sync_error ?? `${calendar.name} is up to date`,
+                            { tone: synced.last_sync_error ? "error" : "ok" },
+                          );
+                        } catch (error) {
+                          show(
+                            error instanceof Error ? error.message : "sync failed",
+                            { tone: "error" },
+                          );
+                        } finally {
+                          setSyncing(null);
+                        }
+                      }}
+                    >
+                      {syncing === calendar.id ? "SYNCING…" : "SYNC NOW"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={async () => {
+                        const answer = await confirm({
+                          label: "Remove calendar",
+                          message: `Remove ${calendar.name}?`,
+                          detail:
+                            "Its events disappear from Argus. Nothing is changed in the calendar that publishes them.",
+                          confirmLabel: "REMOVE",
+                          tone: "danger",
+                        });
+                        if (answer === null) return;
+                        try {
+                          await removeSubscription(calendar.id);
+                          void mutateCalendars();
+                          show(`${calendar.name} removed`, { tone: "ok" });
+                        } catch (error) {
+                          show(
+                            error instanceof Error ? error.message : "could not remove",
+                            { tone: "error" },
+                          );
+                        }
+                      }}
+                    >
+                      REMOVE
+                    </Button>
+                  </>
+                }
+              />
+            ))}
+            <Card
+              status={subscriptions.length ? "WIRED" : "NOT CONNECTED"}
+              title="calendar subscription"
+              detail="paste a secret iCal URL — no Google Cloud project, no OAuth client"
+              actions={
+                <Button size="sm" onClick={() => setSubscribing(true)}>
+                  SUBSCRIBE
+                </Button>
+              }
+            />
+
             {/* Informational rows. Real state, but nothing to connect — kept
                 distinct rather than dressed up as connectable. */}
             <Card
@@ -309,6 +407,15 @@ export default function IntegrationsHub() {
         </div>
       </Panel>
 
+      {subscribing && (
+        <SubscribeDialog
+          onClose={() => setSubscribing(false)}
+          onAdded={() => {
+            setSubscribing(false);
+            void mutateCalendars();
+          }}
+        />
+      )}
       {connecting && (
         <ConnectDialog
           connectorId={connecting.id}

@@ -1,4 +1,4 @@
-"""Background jobs: the 07:00 briefing and the nightly task-cache refresh.
+"""Background jobs: the 07:00 briefing, the nightly refreshes, calendar sync.
 
 Built by :func:`build_scheduler` but started only by the module-level app in
 ``backend.main`` — test apps never construct it, so tests never spawn threads.
@@ -22,6 +22,12 @@ logger = logging.getLogger("argus.scheduler")
 BRIEFING_HOUR = 7
 REFRESH_HOUR = 3
 REINDEX_HOUR = 4
+
+#: Subscribed .ics feeds are re-read on the hour. Hourly because a feed is
+#: how someone sees a meeting that was moved this morning, and a day-old
+#: calendar is worse than an obviously absent one; cheap because ETag makes
+#: an unchanged feed a 304 with no body.
+CALENDAR_SYNC_MINUTE = 0
 
 
 def run_briefing_job(settings: Settings, composer: Composer | None = None) -> str | None:
@@ -53,6 +59,30 @@ def run_refresh_job(settings: Settings) -> None:
         logger.info("task cache refreshed (%d open tasks)", count)
     except Exception:
         logger.exception("nightly task refresh failed")
+
+
+def run_calendar_sync_job(settings: Settings) -> None:
+    """Re-read every subscribed .ics feed; never raises.
+
+    The outcome of each feed is recorded on its own row by
+    :func:`calendar.sync.sync_calendar`, so a failure here is visible in
+    the UI rather than only in this log — which matters because nobody
+    watches a background job, and a subscription that quietly stops
+    updating looks exactly like a calendar with nothing new in it.
+    """
+    try:
+        from backend.features.calendar import sync
+
+        conn = connect(settings.db_path)
+        init_schema(conn)
+        try:
+            results = sync.sync_all(conn)
+        finally:
+            conn.close()
+        failed = [row["id"] for row in results if row.get("last_sync_error")]
+        logger.info("synced %d calendar(s), %d failing", len(results), len(failed))
+    except Exception:
+        logger.exception("calendar sync failed")
 
 
 def run_reindex_job(settings: Settings) -> None:
@@ -100,5 +130,11 @@ def build_scheduler(settings: Settings, composer: Composer | None = None) -> Bac
         CronTrigger(hour=REINDEX_HOUR, minute=0),
         args=[settings],
         id="nightly-reindex",
+    )
+    scheduler.add_job(
+        run_calendar_sync_job,
+        CronTrigger(minute=CALENDAR_SYNC_MINUTE),
+        args=[settings],
+        id="calendar-sync",
     )
     return scheduler

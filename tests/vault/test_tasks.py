@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend.core.db import connect, init_schema
-from backend.vault.tasks import bucketed_tasks, parse_task_line, refresh_cache
+from backend.vault.tasks import advance_date, bucketed_tasks, parse_task_line, refresh_cache
 
 TODAY = date(2026, 7, 12)
 
@@ -76,3 +76,127 @@ def test_refresh_cache_and_buckets(conn: sqlite3.Connection, tmp_path: Path) -> 
     assert {task.text for task in buckets["someday"]} == {"Far future", "No date at all"}
     all_texts = [task.text for bucket in buckets.values() for task in bucket]
     assert "Private task" not in all_texts, "I3 violation: private task cached"
+
+
+# --- Recurrence (the Tasks plugin's 🔁 marker) --------------------------------
+
+
+@pytest.mark.parametrize(
+    ("line", "rule"),
+    [
+        ("- [ ] Water plants 🔁 every day", "every day"),
+        ("- [ ] Water plants 🔁 every 2 days", "every 2 days"),
+        ("- [ ] Water plants 🔁 every week 📅 2026-09-06", "every week"),
+        ("- [ ] Water plants 🔁 every 3 weeks ⏫", "every 3 weeks"),
+        ("- [ ] Pay rent 🔁 every month 📅 2026-09-01 #home", "every month"),
+        ("- [ ] Book the MOT 🔁 every year ✅ 2026-09-01", "every year"),
+        ("- [ ] Standup 🔁 every monday ⏳ 2026-09-07", "every monday"),
+        ("- [ ] Standup [repeat: every week] #work", "every week"),
+    ],
+)
+def test_parse_recurrence_marker(line: str, rule: str) -> None:
+    task = parse_task_line(line)
+    assert task is not None
+    assert task.recurrence == rule
+
+
+def test_recurrence_is_stripped_from_the_rendered_text() -> None:
+    """The panel renders `text`; leaving the rule in it shows the user
+    "Water plants 🔁 every week" where they wrote a task called "Water plants"."""
+    task = parse_task_line("- [ ] Water plants 🔁 every week 📅 2026-09-06 ⏫ #home")
+    assert task is not None
+    assert task.text == "Water plants"
+    assert task.recurrence == "every week"
+    # The rest of the parse is unchanged by the new marker.
+    assert task.due == "2026-09-06"
+    assert task.priority == "high"
+    assert task.tags == ["home"]
+
+
+def test_bracket_recurrence_is_stripped_from_the_rendered_text() -> None:
+    task = parse_task_line("- [ ] Standup [repeat: every week] [due: 2026-09-07]")
+    assert task is not None
+    assert task.text == "Standup"
+    assert task.recurrence == "every week"
+    assert task.due == "2026-09-07"
+
+
+def test_a_task_without_a_recurrence_marker_has_none() -> None:
+    """Additive field: every task written before 🔁 existed still parses."""
+    task = parse_task_line("- [ ] Renew passport 📅 2026-07-20 ⏫ #areas/admin")
+    assert task is not None
+    assert task.recurrence is None
+
+
+def test_a_bare_recurrence_marker_is_not_a_rule() -> None:
+    """🔁 with nothing after it must not capture the following marker."""
+    task = parse_task_line("- [ ] Water plants 🔁 📅 2026-09-06")
+    assert task is not None
+    assert task.recurrence is None
+    assert task.due == "2026-09-06"
+
+
+@pytest.mark.parametrize(
+    ("anchor", "rule", "expected"),
+    [
+        ("2026-09-06", "every day", "2026-09-07"),
+        ("2026-09-06", "every 3 days", "2026-09-09"),
+        ("2026-09-06", "every week", "2026-09-13"),
+        ("2026-09-06", "every 2 weeks", "2026-09-20"),
+        ("2026-09-06", "every month", "2026-10-06"),
+        ("2026-09-06", "every 4 months", "2027-01-06"),
+        ("2026-09-06", "every year", "2027-09-06"),
+        # Month-end: there is no 31 February. A monthly task must land in the
+        # next month rather than skipping one, so the day clamps.
+        ("2026-01-31", "every month", "2026-02-28"),
+        ("2026-12-31", "every month", "2027-01-31"),
+        ("2024-02-29", "every year", "2025-02-28"),
+        # A weekday rule anchored on that same weekday means *next* week --
+        # advancing by zero days would make the task un-completable.
+        ("2026-09-07", "every monday", "2026-09-14"),
+        ("2026-09-06", "every monday", "2026-09-07"),
+        ("2026-09-06", "EVERY   Friday", "2026-09-11"),
+    ],
+)
+def test_advance_date(anchor: str, rule: str, expected: str) -> None:
+    assert advance_date(anchor, rule) == expected
+
+
+@pytest.mark.parametrize(
+    "rule",
+    ["every blue moon", "", "weekly", "every", "every 2 mondays", "every week on tuesday"],
+)
+def test_advance_date_returns_none_for_an_unrecognised_rule(rule: str) -> None:
+    """None, never an exception: the caller degrades to a plain toggle."""
+    assert advance_date("2026-09-06", rule) is None
+
+
+def test_advance_date_returns_none_for_an_impossible_anchor() -> None:
+    assert advance_date("2026-02-31", "every week") is None
+
+
+def test_recurrence_survives_the_cache(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    """A recurring task must still look recurring after the cache round-trip.
+
+    `parse_task_line` reads 🔁 straight off the markdown, but nothing the user
+    sees comes from there: the agenda and the board both read `tasks_cache`,
+    which `refresh_cache` rebuilds. Before the column existed, `recurrence`
+    was populated on a fresh parse and silently `None` everywhere it was
+    rendered -- the badge would have been dead on arrival, and the difference
+    is invisible unless the assertion goes through the cache like this one.
+    """
+    vault = tmp_path / "vault"
+    (vault / "10-Daily").mkdir(parents=True)
+    (vault / "10-Daily" / "2026-07-12.md").write_text(
+        "- [ ] Water the plants 🔁 every week 📅 2026-07-12\n"
+        "- [ ] One-off errand 📅 2026-07-12\n",
+        encoding="utf-8",
+    )
+
+    refresh_cache(conn, vault)
+    today_tasks = {task.text: task for task in bucketed_tasks(conn, today=TODAY)["today"]}
+
+    assert today_tasks["Water the plants"].recurrence == "every week"
+    assert today_tasks["One-off errand"].recurrence is None
+    # The rule is metadata, not part of the title the panel prints.
+    assert "🔁" not in today_tasks["Water the plants"].text

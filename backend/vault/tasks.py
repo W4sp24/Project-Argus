@@ -4,10 +4,12 @@ Supports the Tasks plugin's emoji markers and plain-text bracket fallbacks:
 
     - [ ] Renew passport 📅 2026-07-20 ⏫ #areas/admin
     - [ ] Read chapter 4 [due: 2026-07-18] [prio: low] #cs201
+    - [ ] Water plants 🔁 every week 📅 2026-09-06 #home
 """
 
 from __future__ import annotations
 
+import calendar
 import re
 import sqlite3
 from datetime import date, timedelta
@@ -25,7 +27,30 @@ CREATED_RE = re.compile(r"➕\s*\d{4}-\d{2}-\d{2}")
 PRIORITY_MARKS = [("🔺", "highest"), ("⏫", "high"), ("🔼", "medium"), ("🔽", "low")]
 PRIORITY_BRACKET_RE = re.compile(r"\[prio(?:rity)?:\s*(highest|high|medium|low)\]", re.IGNORECASE)
 TAG_RE = re.compile(r"#([\w/\-]+)")
+# A recurrence rule is free text ("every 2 weeks"), so unlike a date it has no
+# shape of its own to match on: it runs from 🔁 to whatever marker comes next,
+# which is why the class excludes every other marker plus `#` and the brackets —
+# a rule must never swallow the tags or dates written after it. `*` and not `+`
+# so a bare 🔁 is still stripped from `text` while parsing as no rule at all.
+RECUR_RE = re.compile(r"🔁\s*([^📅🗓⏳✅➕🔺⏫🔼🔽#\[\]]*)|\[repeat:\s*([^\]]+)\]")
 BUCKETS = ("overdue", "today", "week", "someday")
+
+#: Weekday names the plugin accepts in `every <weekday>`, as `date.weekday()`.
+_WEEKDAYS = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+#: The subset of the plugin's rule grammar Argus can roll a date forward by.
+#: Deliberately anchored: a rule it half-recognises ("every week on tuesday")
+#: must fail the match, not be advanced as if the tail were not there.
+RECUR_RULE_RE = re.compile(
+    r"^every\s+(?:(\d+)\s+)?(day|week|month|year|" + "|".join(_WEEKDAYS) + r")s?$"
+)
 
 
 class TaskItem(BaseModel):
@@ -47,6 +72,12 @@ class TaskItem(BaseModel):
     external_id: str | None = None
     #: Deep link back to the task in its own service, when it supplies one.
     href: str | None = None
+    #: The Tasks plugin's 🔁 rule verbatim ("every week"), or None. Additive and
+    #: defaulted: this model is serialised over the API and mirrored in
+    #: `web/lib/api.ts`, so every existing producer and consumer is unaffected.
+    #: The writer, not this parser, is what acts on it — see
+    #: :func:`backend.vault.writer.toggle_task_line`.
+    recurrence: str | None = None
 
 
 def parse_task_line(line: str) -> TaskItem | None:
@@ -63,9 +94,21 @@ def parse_task_line(line: str) -> TaskItem | None:
         bracket = PRIORITY_BRACKET_RE.search(body)
         priority = bracket.group(1).lower() if bracket else None
     tags = TAG_RE.findall(body)
+    recurrence = next((a or b for a, b in RECUR_RE.findall(body)), None)
+    recurrence = recurrence.strip() if recurrence else None
 
     text = body
-    for pattern in (DUE_RE, SCHEDULED_RE, DONE_DATE_RE, CREATED_RE, PRIORITY_BRACKET_RE, TAG_RE):
+    # RECUR_RE first: its rule ends at the next marker, so stripping the dates
+    # or tags before it would let the rule run on into the rest of the line.
+    for pattern in (
+        RECUR_RE,
+        DUE_RE,
+        SCHEDULED_RE,
+        DONE_DATE_RE,
+        CREATED_RE,
+        PRIORITY_BRACKET_RE,
+        TAG_RE,
+    ):
         text = pattern.sub("", text)
     for mark, _ in PRIORITY_MARKS:
         text = text.replace(mark, "")
@@ -79,7 +122,55 @@ def parse_task_line(line: str) -> TaskItem | None:
         scheduled=scheduled,
         priority=priority,
         tags=tags,
+        recurrence=recurrence,
     )
+
+
+def _add_months(anchor: date, months: int) -> date:
+    """Shift a date by whole months, clamping to the target month's last day.
+
+    There is no 31 February, and a task the user set to repeat monthly on the
+    31st means "every month", not "every month that happens to have 31 days" —
+    so the day clamps rather than the month being skipped.
+    """
+    total = anchor.month - 1 + months
+    year = anchor.year + total // 12
+    month = total % 12 + 1
+    return date(year, month, min(anchor.day, calendar.monthrange(year, month)[1]))
+
+
+def advance_date(iso: str, rule: str) -> str | None:
+    """Move one ISO date forward by a Tasks-plugin recurrence rule.
+
+    Returns None — never raises — for a rule this understands nothing of, or a
+    date that is not a real one. The caller (`writer.toggle_task_line`) then
+    degrades to a plain toggle: a task the user cannot tick off would be a far
+    worse bug than one that quietly stops repeating.
+    """
+    match = RECUR_RULE_RE.match(" ".join(rule.lower().split()))
+    if match is None:
+        return None
+    try:
+        anchor = date.fromisoformat(iso)
+    except ValueError:
+        return None
+
+    count, unit = match.group(1), match.group(2)
+    if unit in _WEEKDAYS:
+        # "every 2 mondays" is every *other* Monday, which this does not model;
+        # returning None keeps the task tickable rather than repeating it wrong.
+        if count is not None:
+            return None
+        # `or 7`: from a Monday, "every monday" means next week, not zero days.
+        ahead = (_WEEKDAYS[unit] - anchor.weekday()) % 7 or 7
+        return (anchor + timedelta(days=ahead)).isoformat()
+
+    every = int(count or 1)
+    if unit == "day":
+        return (anchor + timedelta(days=every)).isoformat()
+    if unit == "week":
+        return (anchor + timedelta(weeks=every)).isoformat()
+    return _add_months(anchor, every if unit == "month" else every * 12).isoformat()
 
 
 def refresh_cache(
@@ -110,13 +201,15 @@ def refresh_cache(
                     task.scheduled,
                     task.priority,
                     ",".join(task.tags),
+                    task.recurrence,
                 )
             )
 
     conn.execute("DELETE FROM tasks_cache")
     conn.executemany(
-        "INSERT INTO tasks_cache (path, line, text, done, due, scheduled, priority, tags)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tasks_cache"
+        " (path, line, text, done, due, scheduled, priority, tags, recurrence)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
@@ -156,6 +249,7 @@ def bucketed_tasks(
             tags=[tag for tag in row["tags"].split(",") if tag],
             path=row["path"],
             line=row["line"],
+            recurrence=row["recurrence"],
         )
         buckets[bucket_of(task, today)].append(task)
     priority_rank = {"highest": 0, "high": 1, "medium": 2, "low": 3, None: 4}
