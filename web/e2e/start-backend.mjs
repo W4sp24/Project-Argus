@@ -69,15 +69,6 @@ execFileSync(python, [path.join(here, "seed_flashcards.py"), vault], {
   stdio: "inherit",
 });
 
-// A generated note in its pre-relationships shape, plus a hand-written one
-// the relink guard must not touch. Relinking calls no generator, which is
-// what makes this feature reachable from a suite that never asks for a
-// summary — see seed_relations.py.
-execFileSync(python, [path.join(here, "seed_relations.py"), vault], {
-  cwd: root,
-  stdio: "inherit",
-});
-
 // n8n automations fixtures (instances, widgets in all four states, cached
 // workflows, activity events) — direct DB/registry writes, no keyring and no
 // live n8n call. See seed_automations.py's module docstring for why the

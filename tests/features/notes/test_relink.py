@@ -391,7 +391,9 @@ def _env_file(tmp_path: Path, vault: Path) -> Path:
     return env_file
 
 
-def test_the_cli_relinks_the_vault(tmp_path: Path, vault: Path, fake_index: FakeIndex, monkeypatch, capsys):
+def test_the_cli_relinks_the_vault(
+    tmp_path: Path, vault: Path, fake_index: FakeIndex, monkeypatch, capsys
+):
     from backend import cli
 
     monkeypatch.setattr(
