@@ -197,6 +197,35 @@ def neighbour_query(raw: str) -> str:
     return relations.strip_section(post.content)
 
 
+def recorded_neighbours(raw: str) -> list[tuple[str, str]] | None:
+    """A guide's own cited materials, or ``None`` to fall back to a query.
+
+    A study guide's neighbours are the materials it was written from, and it
+    records them in ``sources:`` for exactly this moment: the corpus is long
+    gone by the time a relink runs, so recomputing them with a similarity
+    query would quietly replace "what this was written from" with "what reads
+    like this", and the real citation set could never be recovered.
+
+    Returns ``None`` — not ``[]`` — for anything that is not a guide, or a
+    guide written before ``sources:`` existed. The two are different
+    instructions to the caller: ``None`` means "you decide", ``[]`` would
+    mean "this artefact genuinely has no neighbours".
+    """
+    try:
+        post = frontmatter.loads(raw)
+    except Exception:  # noqa: BLE001 - an unparseable note is handled downstream
+        return None
+    if str(post.metadata.get("type") or "") != "guide":
+        return None
+    recorded = post.metadata.get("sources") or []
+    if isinstance(recorded, str):
+        recorded = [recorded]
+    cited = [str(path).strip() for path in recorded if str(path).strip()]
+    if not cited:
+        return None
+    return [(path, path.rsplit("/", 1)[-1]) for path in cited]
+
+
 def run_relink_job(
     job_id: str,
     *,
@@ -287,7 +316,10 @@ def _run(
                 # over the loop variable, which would bind every iteration to
                 # the last path.
                 resolve=lambda name, _from=rel_path: link_index.resolve(name, from_path=_from),
-                neighbours=nearest_notes(
+                # A guide names its own neighbours and they are not
+                # recoverable any other way, so they are never recomputed.
+                neighbours=recorded_neighbours(raw)
+                or nearest_notes(
                     index,
                     settings.vault_path,
                     neighbour_query(raw),

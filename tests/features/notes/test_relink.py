@@ -414,3 +414,31 @@ def test_the_cli_dry_run_writes_nothing(
     assert cli.main(["relink", "--dry-run", "--env-file", str(_env_file(tmp_path, vault))]) == 0
     assert (vault / WK1).read_text(encoding="utf-8") == before
     assert fake_index.upserted == []
+
+
+def test_a_guide_keeps_the_materials_it_cited_rather_than_a_similarity_guess():
+    """A guide's neighbours are what it was written from, and the corpus is
+    gone by relink time. Recomputing them would replace the citation set with
+    whatever happens to read alike, unrecoverably."""
+    guide = (
+        "---\ntitle: ETHICS — midterm\ntype: guide\ngenerated_by: argus\n"
+        "course: ETHICS\nsources:\n"
+        "  - 15-Courses/ETHICS/materials/wk1.pdf\n"
+        "  - 15-Courses/ETHICS/materials/wk2.pdf\n---\n\n## Outline\n\n- a\n"
+    )
+    assert relink.recorded_neighbours(guide) == [
+        ("15-Courses/ETHICS/materials/wk1.pdf", "wk1.pdf"),
+        ("15-Courses/ETHICS/materials/wk2.pdf", "wk2.pdf"),
+    ]
+
+
+def test_a_plain_note_falls_back_to_a_similarity_query():
+    """None, not [] — the caller has to tell 'you decide' apart from 'this
+    genuinely has no neighbours'."""
+    note = "---\ntitle: wk1\ntype: note\ngenerated_by: argus\n---\n\nbody\n"
+    assert relink.recorded_neighbours(note) is None
+
+
+def test_a_guide_written_before_sources_existed_falls_back_too():
+    guide = "---\ntitle: old\ntype: guide\ngenerated_by: argus\n---\n\n## Outline\n"
+    assert relink.recorded_neighbours(guide) is None
