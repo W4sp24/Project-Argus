@@ -337,3 +337,17 @@ def test_merge_frontmatter_keeps_a_users_own_tags():
     merged = relations.merge_frontmatter(front, _sample(), kind="note", course="ETHICS")
     assert "reading/2026" in merged["tags"]
     assert merged["tags"].count("argus/note") == 1
+
+
+def test_source_and_course_are_separate_paragraphs():
+    """Consecutive lines fold into one paragraph under CommonMark, and the
+    app's own viewer is react-markdown + remark-gfm with no remark-breaks. On
+    consecutive lines the Course link rendered on the end of the Source line
+    everywhere except Obsidian, which breaks single newlines by default."""
+    section = relations.render_section(_sample())
+    assert "\n\n**Course** — " in section
+    source_line = next(line for line in section.splitlines() if line.startswith("**Source**"))
+    # "**Course**", not "Course": the source path itself contains
+    # "15-Courses", which made the first draft of this assertion fail
+    # against correct output.
+    assert "**Course**" not in source_line

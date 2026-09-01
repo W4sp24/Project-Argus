@@ -314,11 +314,17 @@ def render_section(relations: Relations) -> str:
         lines += [f"- {link.wikilink()}" for link in neighbours]
         lines.append("")
 
+    # Each on its own paragraph, not on consecutive lines. Obsidian renders a
+    # single newline as a line break by default, but the app's own note viewer
+    # is react-markdown + remark-gfm with no remark-breaks -- and CommonMark
+    # folds consecutive lines into one paragraph. Written the compact way, the
+    # Course link ran onto the end of the Source line everywhere except
+    # Obsidian.
     for kind, label in (("source", "Source"), ("course", "Course")):
         for link in relations.of_kind(kind):
-            lines.append(f"**{label}** — {link.wikilink()}")
+            lines += [f"**{label}** — {link.wikilink()}", ""]
 
-    lines += ["", FENCE_END, ""]
+    lines += [FENCE_END, ""]
     return "\n".join(lines)
 
 
