@@ -25,6 +25,7 @@ import frontmatter
 from backend.agent.formatting import compose, math_contract, note_quality
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.vault.sources import COURSE_NOTE_SUFFIX as _COURSE_NOTE_SUFFIX
+from backend.vault.sources import GENERATED_BY as _GENERATED_BY
 from backend.vault.sources import SUMMARY_SUFFIX as _SUMMARY_SUFFIX
 
 #: How much of a file's text is handed to the model. Matches the email
@@ -147,8 +148,11 @@ NOTE_STYLES: dict[str, NoteStyle] = {style.key: style for style in _STYLES}
 
 #: Written into a generated note's frontmatter, and read by
 #: ``study_guide.notes_gap_list`` so a note Argus wrote is never counted as
-#: one the user wrote.
-GENERATED_BY = "argus"
+#: one the user wrote. Defined in :mod:`backend.vault.sources` with the two
+#: filename suffixes and re-exported here, where callers already expect it --
+#: the relink guard needs the same string, and two copies of it is how a
+#: backfill ends up rewriting a note a human wrote.
+GENERATED_BY = _GENERATED_BY
 
 #: The two suffixes live in :mod:`backend.vault.sources` and are re-exported
 #: here, where callers already expect them. The writer below and every reader
