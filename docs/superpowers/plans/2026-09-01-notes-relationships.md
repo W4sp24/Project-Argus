@@ -30,6 +30,30 @@
 
 ---
 
+## Wave 0 addendum — what actually landed
+
+Wave 0 is **done and committed** (`6768c2c`, `9b3a65d`). Two interfaces moved
+while it was built; the tasks below are written against these, not against the
+originals:
+
+1. **`build_relations` takes `taxonomy: Taxonomy | None = None`, not
+   `courses_dir: str`.** The course link is built from
+   `tax.course_dir(course)`, and the neighbour loop needs a taxonomy for its
+   `is_indexable` check anyway, so threading one value beats threading two.
+2. **The prompt tail is `backend.agent.formatting.topics_tail()`**, reading
+   `backend/agent/prompts/topics.md` — not a constant in
+   `features/ingest/notes.py`. It sits with `note_quality()` and
+   `math_contract()` because the note styles and the study guide both need it,
+   and prompt prose lives in `prompts/*.md` in this codebase. It is already
+   written; compose it, do not re-author it.
+3. **`GENERATED_BY` now lives in `backend/vault/sources.py`** and is
+   re-exported from `features/ingest/notes.py`. Import it from `vault.sources`
+   in any new module.
+
+A third correction found by Wave 0's own tests, worth carrying: `normalise_topic`
+strips only a **lowercase** leading article. "the will" is an article plus a
+concept; "A Priori Knowledge" is a term whose first word is spelled like one.
+
 ## File Structure
 
 | File | Responsibility |
@@ -338,7 +362,7 @@ git commit -m "feat(vault): a model's topic list, as concept names"
   - `Relation` — frozen dataclass: `target: str`, `display: str | None`, `kind: Literal["concept","neighbour","source","course"]`, `resolved: bool`
   - `Relations` — frozen dataclass: `topics: list[str]`, `links: list[Relation]`
   - `Resolver = Callable[[str], str | None]`
-  - `build_relations(*, topics, resolve, neighbours, source_rel_path, note_rel_path, course) -> Relations`
+  - `build_relations(*, topics, resolve, neighbours, source_rel_path, note_rel_path, course, taxonomy=None) -> Relations`
   - `Relation.wikilink() -> str`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1186,7 +1210,6 @@ git commit -m "feat(rag): nearest vault notes, and the I3 boundary around them"
 **Interfaces:**
 - Consumes: `relations.parse_topics`, `relations.build_relations`, `relations.render_section`, `relations.replace_section`, `relations.merge_frontmatter`, `neighbours.nearest_notes`, `links.build_link_index`.
 - Produces:
-  - `notes.TOPICS_TAIL: str`
   - `notes.note_markdown(rel_path, style, instruction, body, *, taxonomy=None, resolve=None, neighbours=()) -> tuple[str, str]` — the two new keyword-only params default to "no relationships", so every existing caller and test keeps working.
 
 - [ ] **Step 1: Write the failing test**
@@ -1458,7 +1481,7 @@ git commit -m "feat(ingest): one link index per job, not one per file"
 - Create: `tests/features/study/test_guide_relations.py`
 
 **Interfaces:**
-- Consumes: Tasks 1–4, plus `notes.TOPICS_TAIL`.
+- Consumes: Tasks 1–4, plus `backend.agent.formatting.topics_tail()`.
 - Produces: `guide_markdown(course, scope, body, corpus, *, resolve=None, courses_dir="15-Courses") -> str` — exported so the test can exercise it without a generator.
 
 - [ ] **Step 1: Write the failing test**
