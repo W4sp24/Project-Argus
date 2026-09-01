@@ -159,9 +159,12 @@ def test_the_note_carries_its_source_style_and_course_in_frontmatter():
     assert post.metadata["generated_by"] == notes.GENERATED_BY
     assert post.metadata["course"] == "CS201"
     assert post.metadata["prompt"] == "extra"
-    # The trailing wikilink is what retrieve.py's one-hop link expansion walks
-    # back to the source with -- it is not decoration.
-    assert post.content.rstrip().endswith("[[lecture-03]]")
+    # The source wikilink is what retrieve.py's one-hop link expansion walks
+    # back to the source with -- it is not decoration. It used to be written
+    # `[[lecture-03]]`, with the extension stripped, which resolved to nothing
+    # at all for a PDF: the link expansion had nothing to walk to and Obsidian
+    # rendered a hollow node. Naming the file is the fix.
+    assert "[[15-Courses/CS201/materials/lecture-03.pdf|lecture-03]]" in post.content
 
 
 def test_a_note_outside_a_course_carries_no_course_field():

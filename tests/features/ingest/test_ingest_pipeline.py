@@ -279,7 +279,11 @@ def test_a_prompt_writes_a_summary_note_beside_its_source(settings, conn, tmp_pa
     assert "source: 00-Inbox/files/lecture.md" in body
     assert "list the key definitions" in body, "the instruction is recorded verbatim"
     assert "Dijkstra, explained." in body
-    assert "[[lecture]]" in body, "wikilink back to the source"
+    # Was `[[lecture]]`. A markdown source keeps resolving either way, but the
+    # path-qualified form is what makes the link unambiguous in a vault with
+    # more than one `lecture.md` -- and it is the same form a PDF needs to
+    # resolve at all.
+    assert "[[00-Inbox/files/lecture|lecture]]" in body, "wikilink back to the source"
 
     item = store.get_job(conn, job_id)["items"][0]
     assert item["summary_path"] == "00-Inbox/files/lecture.summary.md"

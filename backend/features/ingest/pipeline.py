@@ -44,6 +44,8 @@ from backend.core.db import connect, init_schema
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.ingest import notes as note_styles
 from backend.features.ingest import store
+from backend.rag.neighbours import nearest_notes
+from backend.vault.links import build_link_index
 from backend.vault.privacy import is_no_ai_text, is_private_path, is_visible
 from backend.vault.writer import create_note, save_ingest_file, snapshot_vault
 
@@ -151,6 +153,7 @@ def _write_note(
     instruction: str,
     rel_path: str,
     index: Any,
+    link_index: Any,
     conn: Any,
     item_id: int,
 ) -> None:
@@ -164,6 +167,12 @@ def _write_note(
     Where the note lands is :func:`backend.features.ingest.notes.note_destination`'s
     call, not this function's -- a course material's note goes to that course's
     ``notes/`` zone, everything else beside its source.
+
+    ``link_index`` arrives from the job rather than being built here, and may
+    be ``None`` when the vault walk failed. What the note does with it is
+    :func:`backend.vault.relations.build_relations`'s business; this function's
+    only job is to bind it to *this* note's destination, because resolving a
+    wikilink depends on where the link is being written from.
     """
     text = _source_text(settings.vault_path, rel_path)
     # The privacy verdict is taken BEFORE the empty-text check, not after.
@@ -189,8 +198,35 @@ def _write_note(
     # (it is in a CHECK constraint) for something the frontend can say itself.
     store.advance_item(conn, item_id, stage="summarizing")
     body = _generate(generator, note_styles.build_prompt(style, instruction, rel_path, text))
+
+    destination = note_styles.note_destination(rel_path, taxonomy=settings.taxonomy)
+    # Bound to the destination, not to the source: LinkIndex.resolve breaks a
+    # tie in favour of the linking note's own folder, so a resolver bound to
+    # the wrong path picks the wrong file among same-named notes.
+    resolve = (
+        (lambda name: link_index.resolve(name, from_path=destination))
+        if link_index is not None
+        else None
+    )
+    # The generated note, not the source text, is the neighbour query: it is
+    # already the document's own account of what it is about, which is the
+    # question being asked. Both the note and its source are excluded because
+    # the note renders each of them itself.
+    near = nearest_notes(
+        index,
+        settings.vault_path,
+        body,
+        exclude={rel_path, destination},
+        taxonomy=settings.taxonomy,
+    )
     note_path, markdown = note_styles.note_markdown(
-        rel_path, style, instruction, body, taxonomy=settings.taxonomy
+        rel_path,
+        style,
+        instruction,
+        body,
+        taxonomy=settings.taxonomy,
+        resolve=resolve,
+        neighbours=near,
     )
     written = create_note(
         settings.vault_path,
@@ -273,6 +309,17 @@ def _run(
     # embedding model means nothing can be indexed, and no snapshot means I2
     # is not satisfied for any of the writes that would follow.
     index = index_factory()
+    # One vault walk for the whole job, for the same reason the VaultIndex is
+    # constructed once: build_link_index rglobs the vault and parses every
+    # note's frontmatter, so building it per file would be N vault walks for
+    # one ingest. Unlike the two above, a failure here is not fatal: a note
+    # whose concepts render as hollow links is a worse note, not a lost one,
+    # and the file it is about is still saved and still indexed.
+    try:
+        link_index = build_link_index(settings.vault_path, taxonomy=settings.taxonomy)
+    except Exception as exc:  # noqa: BLE001 - a link is not worth a job
+        logger.warning("ingest: link index unavailable, concepts will not resolve: %s", exc)
+        link_index = None
     snapshot_vault(settings.vault_path, f"ingest {len(job['items'])} file(s) into {target}")
 
     staged = _staged_files(staging_dir)
@@ -285,6 +332,7 @@ def _run(
                 staged_path,
                 settings=settings,
                 index=index,
+                link_index=link_index,
                 generator=generator,
                 style=style,
                 instruction=instruction,
@@ -315,6 +363,7 @@ def _run_one(
     *,
     settings: Settings,
     index: Any,
+    link_index: Any,
     generator: Generator | None,
     style: note_styles.NoteStyle | None,
     instruction: str,
@@ -366,6 +415,7 @@ def _run_one(
             instruction=instruction,
             rel_path=rel_path,
             index=index,
+            link_index=link_index,
             conn=conn,
             item_id=item_id,
         )
