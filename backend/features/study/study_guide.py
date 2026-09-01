@@ -212,11 +212,12 @@ def guide_markdown(
     # alternative, nominating the top-ranked material as *the* source, would
     # both be arbitrary and silently cost that material its place in the
     # neighbour list.
+    cited = _cited_materials(corpus)
     self_path = f"{tax.course_study(course)}/guide.md"
     built = relations.build_relations(
         topics=topics,
         resolve=resolve or (lambda _name: None),
-        neighbours=_cited_materials(corpus),
+        neighbours=cited,
         source_rel_path=self_path,
         note_rel_path=self_path,
         course=course,
@@ -234,6 +235,15 @@ def guide_markdown(
         "course": course,
         "scope": scope,
     }
+    if cited:
+        # What this guide was actually written from, recorded because it
+        # cannot be recovered later. A relink recomputes a note's neighbours
+        # with a similarity query, which is right for a note but wrong for a
+        # guide: a guide's neighbours are the materials it cited, the corpus
+        # is gone by the time a relink runs, and without this the first relink
+        # would quietly replace "what this was written from" with "what reads
+        # like this". `relink` reads this key back for exactly that reason.
+        front["sources"] = [path for path, _title in cited]
     front = relations.merge_frontmatter(front, built, kind="guide", course=course)
     content = relations.replace_section(prose, relations.render_section(built))
     return frontmatter.dumps(frontmatter.Post(content, **front)) + "\n"

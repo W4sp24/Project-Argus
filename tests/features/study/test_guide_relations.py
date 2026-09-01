@@ -232,3 +232,21 @@ def test_the_written_guide_keeps_its_gap_checklist_inside_the_prose(tmp_path: Pa
     assert "## What you haven't taken notes on" in post.content
     assert post.content.index("haven't taken notes") < post.content.index(relations.FENCE_START)
     assert post["topics"] == ["Determinism", "Free Will"]
+
+
+def test_a_guide_records_what_it_was_written_from():
+    """A relink recomputes neighbours with a similarity query, which is right
+    for a note and wrong for a guide: the corpus is gone by then, so without
+    this key the first relink replaces "what this was written from" with
+    "what reads like this"."""
+    markdown = study_guide.guide_markdown("ETHICS", "midterm", BODY, CORPUS)
+    post = frontmatter.loads(markdown)
+    assert post["sources"] == [
+        "15-Courses/ETHICS/materials/wk1.pdf",
+        "15-Courses/ETHICS/materials/wk2.pdf",
+    ]
+
+
+def test_a_guide_with_no_corpus_records_no_sources():
+    markdown = study_guide.guide_markdown("ETHICS", "midterm", BODY, [])
+    assert "sources" not in frontmatter.loads(markdown).metadata
