@@ -47,7 +47,7 @@ ACTIVE_STATUSES = ("queued", "running")
 #: Every kind of work this table records. Not a CHECK constraint -- see the
 #: `kind` column's comment in :mod:`backend.core.db`: SQLite cannot alter one,
 #: so a vocabulary expected to grow does not belong in the schema.
-JOB_KINDS = ("ingest", "reindex", "guide", "exam")
+JOB_KINDS = ("ingest", "reindex", "guide", "exam", "relink")
 
 #: Which kinds contend for one slot, and which run unconstrained.
 #:
@@ -68,7 +68,11 @@ JOB_KINDS = ("ingest", "reindex", "guide", "exam")
 #: with an ingest, and making a user wait for one to run the other would be a
 #: restriction with nothing behind it. A kind absent from this mapping never
 #: blocks and is never blocked.
-SLOT_GROUPS: dict[str, str] = {"ingest": "index", "reindex": "index"}
+#:
+#: A relink *is* in the 'index' group, by the same test: it takes one
+#: ``snapshot_vault`` and re-upserts every note it rewrites, so it contends for
+#: the git index and the embedding model exactly as an ingest does.
+SLOT_GROUPS: dict[str, str] = {"ingest": "index", "reindex": "index", "relink": "index"}
 
 
 def _slot_peers(kind: str) -> tuple[str, ...]:

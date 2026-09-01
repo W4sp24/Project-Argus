@@ -3,9 +3,10 @@
 ``argus init <path>`` creates a new vault from the bundled template, git-inits
 it (groundwork for invariant I2: the writer commits the vault before every
 apply), and records ``VAULT_PATH`` in ``.env``. ``reindex``/``watch`` maintain
-the RAG index, ``connect`` stores connector credentials, ``doctor`` checks the
-install, ``web`` serves the dashboard, and ``mcp-server`` exposes the vault
-read-only to an external coding agent.
+the RAG index, ``relink`` backfills concept and source links onto notes Argus
+wrote before it emitted any, ``connect`` stores connector credentials,
+``doctor`` checks the install, ``web`` serves the dashboard, and ``mcp-server``
+exposes the vault read-only to an external coding agent.
 """
 
 from __future__ import annotations
@@ -212,6 +213,18 @@ def main(argv: list[str] | None = None) -> int:
         "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
     )
 
+    relink_parser = subparsers.add_parser(
+        "relink", help="re-derive concept and source links for every note Argus wrote"
+    )
+    relink_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would change without writing anything",
+    )
+    relink_parser.add_argument(
+        "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
+    )
+
     watch_parser = subparsers.add_parser("watch", help="watch the vault and keep the index fresh")
     watch_parser.add_argument(
         "--env-file", type=Path, default=DEFAULT_ENV_FILE, help="env file with VAULT_PATH"
@@ -276,6 +289,53 @@ def main(argv: list[str] | None = None) -> int:
             taxonomy=settings.taxonomy,
         )
         return 0
+
+    if args.command == "relink":
+        from backend.core.config import Settings
+        from backend.core.db import connect, init_schema
+        from backend.features.ingest import store
+        from backend.features.notes.relink import relinkable_notes, run_relink_job
+        from backend.rag.index import make_index_factory
+
+        settings = Settings.load(args.env_file)
+        paths = relinkable_notes(settings.vault_path, taxonomy=settings.taxonomy)
+        if not paths:
+            print("Nothing to relink — no note carries `generated_by: argus`.")
+            return 0
+        print(f"{'Would relink' if args.dry_run else 'Relinking'} {len(paths)} note(s)…")
+        # Recorded on the same job store the app's own relink uses, so a run
+        # started from a terminal still shows up in the history panel and
+        # still holds the index slot against a concurrent ingest.
+        conn = connect(settings.db_path)
+        try:
+            init_schema(conn)
+            job_id = store.create_job(conn, target="", filenames=[], kind="relink")
+        finally:
+            conn.close()
+        # Built the way backend/main.py builds it, not the way `reindex`
+        # above does: `run_relink_job` takes a zero-arg factory so the ~7s
+        # model load stays lazy and one instance serves every note.
+        run_relink_job(
+            job_id,
+            settings=settings,
+            index_factory=make_index_factory(
+                settings.db_path.parent / "chroma", taxonomy=settings.taxonomy
+            ),
+            dry_run=args.dry_run,
+        )
+        conn = connect(settings.db_path)
+        try:
+            job = store.get_job(conn, job_id) or {}
+        finally:
+            conn.close()
+        rewritten = len([item for item in job.get("items", []) if item["stage"] == "done"])
+        if args.dry_run:
+            print(f"Dry run complete — {rewritten} of {len(paths)} would change; nothing written.")
+        else:
+            print(f"Relinked {rewritten} note(s); {len(paths) - rewritten} already current.")
+        if job.get("error"):
+            print(job["error"], file=sys.stderr)
+        return 1 if job.get("status") in ("failed", "partial") else 0
 
     if args.command == "doctor":
         from backend.core.config import ConfigError, Settings

@@ -589,8 +589,22 @@ def update_note(
     new_content: str,
     *,
     taxonomy: Taxonomy | None = None,
+    snapshot: bool = True,
+    log: bool = True,
 ) -> None:
-    """Replace a note's full content iff it still matches what the client read."""
+    """Replace a note's full content iff it still matches what the client read.
+
+    ``snapshot``/``log`` mirror :func:`create_note`'s, and exist for the same
+    reason: a job that rewrites N notes in one user action takes **one**
+    snapshot before the first, not N. That is not merely a speed argument.
+    :func:`_git_snapshot` runs git with ``check=False``, so N overlapping
+    snapshots race on ``.git/index.lock`` and the loser fails silently — the
+    result is not a slower undo point but an unreliable one, which is the
+    whole of invariant I2. The batch counterparts are
+    :func:`snapshot_vault` and :func:`log_action`.
+
+    Both default to today's behaviour, so no existing caller changes.
+    """
     tax = taxonomy or active_taxonomy()
     note = guard_user_path(vault_path, rel_path, taxonomy=tax)
     if not note.is_file():
@@ -598,9 +612,11 @@ def update_note(
     current = note.read_text(encoding="utf-8")
     if current != expected_content:
         raise WriterConflict(f"{rel_path} has changed since you loaded it — refresh")
-    _git_snapshot(vault_path, f"edit note {rel_path}")
+    if snapshot:
+        _git_snapshot(vault_path, f"edit note {rel_path}")
     note.write_text(new_content, encoding="utf-8")
-    _argus_log(vault_path, f"edited note {rel_path}", taxonomy=tax)
+    if log:
+        _argus_log(vault_path, f"edited note {rel_path}", taxonomy=tax)
 
 
 def edit_note(
