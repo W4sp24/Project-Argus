@@ -1,4 +1,5 @@
 import { EngineTrigger } from "@/components/EnginePicker";
+import PopOutButton from "@/components/notebook/PopOutButton";
 
 function formatToday(): string {
   return new Date().toLocaleDateString("en-US", {
@@ -28,6 +29,8 @@ export default function NotebookStatusLine({ title }: { title: string }) {
         <h1 className="min-w-0 flex-1 font-mono text-display font-semibold tracking-tight text-ink-bright">
           {title}
         </h1>
+        {/* Renders nothing once this window *is* the pop-out. */}
+        <PopOutButton />
         <EngineTrigger />
       </div>
     </header>

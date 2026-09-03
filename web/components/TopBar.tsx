@@ -8,6 +8,7 @@ import FocusTimer from "@/components/FocusTimer";
 import JobTray from "@/components/JobTray";
 import Button from "@/components/ui/Button";
 import { type Mode, useMode } from "@/lib/mode";
+import { useStandalone } from "@/lib/standalone";
 import { useUi } from "@/lib/ui";
 
 const TABS: { mode: Mode; label: string; short: string }[] = [
@@ -122,8 +123,58 @@ function OverflowMenu() {
   );
 }
 
+/**
+ * The top bar of a popped-out mode.
+ *
+ * Deliberately not the six-mode strip: this window exists to hold one mode,
+ * and a control that navigates out of it would strand the user in a window
+ * with no way back and no sibling chrome. What it keeps is the model in use
+ * and the job tray — work started here is exactly the work you must not lose
+ * sight of. The Notebook's own OVERVIEW / FLASHCARDS / PRACTICE EXAM sub-nav
+ * is not here because it never was: each page renders `NotebookTabs` itself.
+ */
+function StandaloneBar() {
+  const { setPaletteOpen } = useUi();
+
+  return (
+    <header className="sticky top-0 z-30 border-b border-line bg-void">
+      <div className="shell flex h-14 items-center gap-3 px-4 md:px-8">
+        <span className="flex shrink-0 items-center gap-2">
+          <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full border border-[var(--ac)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--ac)]" />
+          </span>
+          <span className="font-mono text-sm font-semibold tracking-wide text-ink-bright">
+            ARGUS<span className="text-[var(--ac)]">_</span>
+          </span>
+          <span className="font-mono text-label uppercase tracking-[0.14em] text-[var(--ac)]">
+            · NOTEBOOK
+          </span>
+        </span>
+
+        <div className="ml-auto flex shrink-0 items-center gap-2 font-mono text-label text-ink-faint">
+          <JobTray />
+          <EngineTrigger />
+          <Button
+            variant="quiet"
+            aria-label="Command palette"
+            onClick={() => setPaletteOpen(true)}
+            className="hidden normal-case tracking-normal md:inline-flex"
+          >
+            [⌘K]
+          </Button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
 /** Sticky top bar (§3) — replaces Sidebar. Mode tabs + logo + utility cluster. */
 export default function TopBar() {
+  // A popped-out mode gets a bar of its own. Checked before any other hook
+  // result is used, but after the hooks themselves run -- `useStandalone`
+  // returns null on the server and on the first client render, so both trees
+  // hydrate against the same markup.
+  const standalone = useStandalone();
   const { mode, setMode } = useMode();
   const { toggleDrawer, setNoteOpen, setPaletteOpen } = useUi();
   // The drawer and /chat share one ChatProvider, so on /chat the control only
@@ -131,6 +182,10 @@ export default function TopBar() {
   // from everywhere else, which is why it is hidden rather than removed.
   const onChatPage = usePathname() === "/chat";
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // After the hooks, never before: an early return above them would change the
+  // hook count between the standalone and ordinary renders.
+  if (standalone !== null) return <StandaloneBar />;
 
   // APG roving-tabindex tab list: only the active tab is in the Tab order;
   // arrow keys move focus (and activate, per the standard tabs pattern —

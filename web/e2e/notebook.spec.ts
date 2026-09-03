@@ -551,3 +551,33 @@ test("the old study URLs still land on the notebook", async ({ page }) => {
   await page.goto("/study/course/CS000");
   await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
 });
+
+test("the notebook opens in a window of its own", async ({ page, context }) => {
+  await page.goto("/notebook");
+
+  const [popup] = await Promise.all([
+    context.waitForEvent("page"),
+    page.getByRole("button", { name: /pop out/i }).click(),
+  ]);
+  await popup.waitForLoadState();
+  await expect(popup).toHaveURL(/\/notebook\?window=standalone$/);
+
+  // Its own chrome: the page's sub-nav is there, the six-mode strip is not.
+  // A window that exists to hold one mode must not offer to navigate out of
+  // it -- there would be no way back and no sibling chrome.
+  await expect(popup.getByRole("tab", { name: "FLASHCARDS" })).toBeVisible();
+  await expect(popup.getByRole("tablist", { name: "Mode" })).toHaveCount(0);
+
+  // And it does not offer to pop itself out again.
+  await expect(popup.getByRole("button", { name: /pop out/i })).toHaveCount(0);
+
+  // The flag outlives the query string: it is kept in sessionStorage, which is
+  // scoped to this window, so client-side navigation inside it stays
+  // standalone while the window that opened it stays ordinary.
+  await popup.getByRole("tab", { name: "FLASHCARDS" }).click();
+  await expect(popup).toHaveURL(/\/notebook\/flashcards$/);
+  await expect(popup.getByRole("tablist", { name: "Mode" })).toHaveCount(0);
+  await expect(page.getByRole("tablist", { name: "Mode" })).toBeVisible();
+
+  await popup.close();
+});
