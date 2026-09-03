@@ -32,13 +32,16 @@ export function isRunning(status: string): boolean {
  *   disagree with it the moment either window acted.
  * - A tracked id with no row is dropped rather than held pending forever.
  */
-export function reconcile(
+export function reconcile<T extends JobLike>(
   tracked: string[],
-  jobs: JobLike[],
-): { tracked: string[]; finished: JobLike[] } {
+  jobs: T[],
+): { tracked: string[]; finished: T[] } {
+  // Generic rather than taking `JobLike[]`: callers pass the full `IngestJob`,
+  // and a non-generic signature would narrow `finished` to the structural
+  // subset, losing the `target` and `error` a completion message needs.
   const byId = new Map(jobs.map((job) => [job.id, job]));
   const next: string[] = [];
-  const finished: JobLike[] = [];
+  const finished: T[] = [];
 
   for (const id of tracked) {
     const job = byId.get(id);

@@ -1120,6 +1120,14 @@ export interface IngestJob {
   created_at: string;
   finished_at: string | null;
   status: IngestJobStatus;
+  /** Which feature queued this: ingest | reindex | relink | guide | exam | deck.
+   * The backend has returned it since the job store was generalised
+   * (`ingest/store.py::_job_row`); this interface simply never named it, so
+   * every consumer had to re-derive a job's kind from its target. */
+  kind: string;
+  /** The request's inputs, plus results with no column of their own — a
+   * guide's `path`, an exam's `exam_id`, a deck's `deck_id`. */
+  params: Record<string, unknown> | null;
   target: string;
   summary_prompt: string;
   /** Which `NoteStyle.key` shaped the notes, or "" for "no note". */
@@ -1152,6 +1160,21 @@ export function useIngestJob(jobId: string | null) {
 /** Recent ingest jobs, newest first, without their items. */
 export function useIngestJobs() {
   return useSWR<{ jobs: IngestJob[] }>("/api/ingest/jobs", fetcher);
+}
+
+/**
+ * Every job of every kind, newest first.
+ *
+ * `useIngestJobs()` above is the ingest history panel's narrower view — the
+ * endpoint defaults to `kind=ingest`, which is what keeps folding reindexes
+ * and study generations into one table from changing what that panel shows.
+ * The global registry needs the opposite: it must see guides, exams and decks
+ * too, so it asks for `kind=all`.
+ */
+export function useAllJobs(refreshMs: number) {
+  return useSWR<{ jobs: IngestJob[] }>("/api/ingest/jobs?kind=all", fetcher, {
+    refreshInterval: refreshMs,
+  });
 }
 
 export interface SourceDeleteSummary {

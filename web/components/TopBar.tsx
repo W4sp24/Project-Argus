@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { EngineTrigger } from "@/components/EnginePicker";
 import FocusTimer from "@/components/FocusTimer";
+import JobTray from "@/components/JobTray";
 import Button from "@/components/ui/Button";
 import { type Mode, useMode } from "@/lib/mode";
 import { useUi } from "@/lib/ui";
@@ -249,6 +250,10 @@ export default function TopBar() {
             )}
           </div>
           <FocusTimer />
+          {/* Renders nothing while nothing runs, so it costs no width at rest.
+              It never collapses at a breakpoint either: work you started and
+              cannot see is exactly the thing a narrow viewport must not hide. */}
+          <JobTray />
           <OverflowMenu />
           {/* Replaces a hardcoded `● LOCAL` chip that claimed your notes stayed
               on this machine no matter which model was selected. It now names
