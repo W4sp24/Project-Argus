@@ -49,6 +49,9 @@ def run_deck_job(
     course: str,
     deck_id: int,
     n: int,
+    difficulty: str = generate.DEFAULT_DIFFICULTY,
+    styles: list[str] | None = None,
+    instructions: str = "",
 ) -> None:
     """Generate cards into an existing deck. Never raises.
 
@@ -68,8 +71,26 @@ def run_deck_job(
         jobstore.start_job(conn, job_id)
         jobstore.advance_item(conn, item["id"], stage=GENERATING)
 
-        cards = asyncio.run(generate.generate_cards(generator, corpus, course, n))
+        chosen = list(styles) if styles else list(generate.DEFAULT_STYLES)
+        cards = asyncio.run(
+            generate.generate_cards(
+                generator,
+                corpus,
+                course,
+                n,
+                difficulty=difficulty,
+                styles=chosen,
+                instructions=instructions,
+            )
+        )
         added = store.add_cards(conn, deck_id, cards)
+
+        # What it was asked for, on the deck itself. The job row records this
+        # too, but a job is transient and the library is where you go looking
+        # six weeks later wondering why one deck is harder than another.
+        store.update_deck(
+            conn, deck_id, description=generate.summarise_options(difficulty, chosen, n)
+        )
 
         jobstore.advance_item(conn, item["id"], stage="done")
         jobstore.merge_params(conn, job_id, {"deck_id": deck_id, "cards": added})

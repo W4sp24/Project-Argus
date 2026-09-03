@@ -382,3 +382,52 @@ def test_a_nonsense_match_score_is_refused(client: TestClient) -> None:
         f"/api/flashcards/decks/{deck['id']}/match-score", json={"elapsed_ms": 0, "pairs": 3}
     )
     assert response.status_code == 422
+
+
+def test_paste_import_can_read_a_qa_body(client: TestClient) -> None:
+    """What a dropped .md becomes.
+
+    The `qa` branch runs the same `parse_qa_pairs` that reads a vault note, so
+    a dropped file and an imported note cannot diverge.
+    """
+    deck = _deck(client)
+    response = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/paste",
+        json={
+            "text": "# Notes\n\nProse.\n\nQ:: what is P\nA:: polynomial time\n",
+            "format": "qa",
+        },
+    )
+    assert response.json() == {"added": 1}
+    cards = client.get(f"/api/flashcards/decks/{deck['id']}").json()["card_list"]
+    assert cards[0]["front"] == "what is P"
+
+
+def test_paste_import_defaults_to_delimited_so_old_callers_are_unaffected(
+    client: TestClient,
+) -> None:
+    deck = _deck(client)
+    response = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/paste",
+        json={"text": "a\tb", "field": "tab", "row": "newline"},
+    )
+    assert response.json() == {"added": 1}
+
+
+def test_paste_import_rejects_an_unknown_format(client: TestClient) -> None:
+    deck = _deck(client)
+    response = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/paste",
+        json={"text": "a\tb", "format": "yaml"},
+    )
+    assert response.status_code == 422
+    assert "yaml" in response.json()["detail"]
+
+
+def test_a_qa_body_with_no_pairs_is_422_rather_than_a_silent_zero(client: TestClient) -> None:
+    deck = _deck(client)
+    response = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/paste",
+        json={"text": "just some prose with no pairs", "format": "qa"},
+    )
+    assert response.status_code == 422

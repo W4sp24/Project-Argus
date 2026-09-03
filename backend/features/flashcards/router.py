@@ -26,12 +26,13 @@ from pydantic import BaseModel, Field
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.features.flashcards import store, vault
+from backend.features.flashcards import generate, store, vault
 from backend.features.flashcards.jobs import run_deck_job
 from backend.features.flashcards.parsing import (
     FIELD_DELIMITERS,
     ROW_DELIMITERS,
     parse_delimited,
+    parse_qa_pairs,
 )
 from backend.features.flashcards.store import (
     CardInfo,
@@ -91,6 +92,9 @@ class ImportPasteRequest(BaseModel):
     text: str
     field: str = "tab"
     row: str = "newline"
+    #: "delimited" reads `field`/`row`; "qa" reads Q::/A:: pairs and ignores
+    #: both. Defaults to delimited so every existing caller is unaffected.
+    format: str = "delimited"
 
 
 class ExportResult(BaseModel):
@@ -114,6 +118,23 @@ class GenerateDeckRequest(BaseModel):
     model: str | None = None
     n: int = 20
     title: str | None = None
+    difficulty: str = generate.DEFAULT_DIFFICULTY
+    #: Which card shapes to write. Empty means the historical default
+    #: (definitions plus conceptual questions).
+    styles: list[str] = Field(default_factory=list)
+    #: The user's own instruction, appended to the prompt.
+    instructions: str = ""
+
+
+class GenerateOptions(BaseModel):
+    """What `POST /decks/generate` will accept, so the UI cannot offer more."""
+
+    difficulties: list[str]
+    styles: list[str]
+    default_difficulty: str
+    default_styles: list[str]
+    max_cards: int
+    max_instructions: int
 
 
 class CardsAdded(BaseModel):
@@ -217,6 +238,14 @@ def build_flashcards_router(
             raise HTTPException(
                 status_code=503, detail="deck generation is not configured on this server"
             )
+        styles = request.styles or list(generate.DEFAULT_STYLES)
+        try:
+            # Here, not in the job: an unknown difficulty is a fact about *this
+            # request*, and answering it with a 202 and a job that fails a
+            # minute later is strictly worse.
+            generate.validate_options(request.difficulty, styles)
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
         corpus = corpus_for(request.course, request.sources)
 
         conn = db()
@@ -232,7 +261,13 @@ def build_flashcards_router(
                 target=settings.taxonomy.course_study(request.course),
                 filenames=[f"{request.course} flashcards"],
                 kind="deck",
-                params={"course": request.course, "deck_id": deck_id, "model": request.model},
+                params={
+                    "course": request.course,
+                    "deck_id": deck_id,
+                    "model": request.model,
+                    "difficulty": request.difficulty,
+                    "styles": styles,
+                },
             )
         except FlashcardsError as exc:
             raise _fail(exc, 422) from exc
@@ -248,6 +283,9 @@ def build_flashcards_router(
                 course=request.course,
                 deck_id=deck_id,
                 n=request.n,
+                difficulty=request.difficulty,
+                styles=styles,
+                instructions=request.instructions,
             )
         )
         return JSONResponse(status_code=202, content={"job_id": job_id, "deck_id": deck_id})
@@ -364,6 +402,23 @@ def build_flashcards_router(
 
     # --- import / export ---------------------------------------------------
 
+    @router.get("/generate/options", response_model=GenerateOptions)
+    def generate_options() -> GenerateOptions:
+        """What generation accepts, so the dialog never offers a rejected value.
+
+        Same idea as `/import/delimiters` below, and for the same reason: the
+        vocabulary lives in one Python module, and the UI reads it rather than
+        keeping a second copy that drifts.
+        """
+        return GenerateOptions(
+            difficulties=list(generate.DIFFICULTIES),
+            styles=list(generate.CARD_STYLES),
+            default_difficulty=generate.DEFAULT_DIFFICULTY,
+            default_styles=list(generate.DEFAULT_STYLES),
+            max_cards=generate.MAX_CARDS,
+            max_instructions=generate.MAX_INSTRUCTIONS,
+        )
+
     @router.get("/import/delimiters")
     def delimiters() -> dict[str, list[str]]:
         """What the paste importer accepts, so the UI never invents an option."""
@@ -388,8 +443,20 @@ def build_flashcards_router(
 
     @router.post("/decks/{deck_id}/import/paste", response_model=CardsAdded)
     def import_paste(deck_id: int, request: ImportPasteRequest) -> CardsAdded:
+        if request.format not in ("delimited", "qa"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown format {request.format!r} — expected 'delimited' or 'qa'",
+            )
         try:
-            pairs = parse_delimited(request.text, field=request.field, row=request.row)
+            # One parser per shape, shared with every other route: `qa` is the
+            # same function that reads a vault note, so a dropped .md and an
+            # imported note cannot diverge.
+            pairs = (
+                parse_qa_pairs(request.text)
+                if request.format == "qa"
+                else parse_delimited(request.text, field=request.field, row=request.row)
+            )
         except KeyError as exc:
             # The delimiter names arrive from a request body, so an unknown one
             # is a client error rather than a crash.
