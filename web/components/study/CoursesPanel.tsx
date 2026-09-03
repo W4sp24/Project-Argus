@@ -7,6 +7,7 @@ import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
 import { ApiError, apiFetch, mutateJSON, useStudyCourses, useStudyExams, useVault } from "@/lib/api";
+import { useJobs } from "@/lib/jobs";
 import { selectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
@@ -94,8 +95,17 @@ export default function CoursesPanel() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [creating, setCreating] = useState(false);
 
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  // Uploads only. A held-open multipart POST genuinely is this component's
+  // business; a generation is not, and used to share this flag -- which is why
+  // one running guide disabled every button on every course.
+  const [uploading, setUploading] = useState<string | null>(null);
   const [dragOverCourse, setDragOverCourse] = useState<string | null>(null);
+  const { track, isBusy } = useJobs();
+
+  /** Is a generation of this kind running for this course? */
+  const busy = (kind: string, course: string) =>
+    isBusy((job) => job.kind === kind && job.params?.course === course);
+
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const visible = courses ?? [];
@@ -110,20 +120,20 @@ export default function CoursesPanel() {
       show(`"${file.name}" isn't supported — use ${ACCEPTED_EXTENSIONS.join(", ")}`);
       return;
     }
-    setBusyAction(`upload-${course}`);
+    setUploading(course);
     const body = new FormData();
     body.append("course", course);
     body.append("file", file);
     const response = await apiFetch("/api/study/upload", { method: "POST", body });
     const payload = await response.json();
     show(response.ok ? `saved ${payload.path} — indexing in the background` : `upload failed: ${payload.detail}`);
-    setBusyAction(null);
+    setUploading(null);
     refreshCourses();
   }
 
   function handleDragOver(course: string, event: DragEvent) {
     event.preventDefault();
-    if (busyAction !== null) return;
+    if (uploading !== null) return;
     setDragOverCourse(course);
   }
   function handleDragLeave(course: string, event: DragEvent) {
@@ -133,32 +143,43 @@ export default function CoursesPanel() {
   function handleDrop(course: string, event: DragEvent) {
     event.preventDefault();
     setDragOverCourse(null);
-    if (busyAction !== null) return;
+    if (uploading !== null) return;
     const file = event.dataTransfer.files?.[0];
     if (file) upload(course, file);
   }
 
+  /**
+   * Queue a generation for one course and hand its id to the registry.
+   *
+   * `background: true` is what stops this being a fetch held open for minutes
+   * whose only progress state was `busyAction`, a local of a component that
+   * unmounts the moment you leave /study. The backend has accepted the flag
+   * since the job store was generalised; nothing sent it.
+   *
+   * The generation is *not* scoped to a source selection here, unlike the
+   * Course Hub's STUDIO: this panel has no SOURCES rail, so the whole course
+   * is the corpus. Omitting `sources` is what asks for that.
+   */
   async function generate(kind: "guide" | "exam", course: string) {
-    setBusyAction(`${kind}-${course}`);
-    show(`generating ${kind} for ${course} — this can take a few minutes…`);
     // Study generation honours the same model selection chat uses (§7); the
     // backend falls back to the registry default when this is omitted.
     const model = selectedModel();
     const response = await apiFetch(`/api/study/${kind}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(kind === "guide" ? { course, model } : { course, n: 10, model }),
+      body: JSON.stringify(
+        kind === "guide"
+          ? { course, model, background: true }
+          : { course, n: 10, model, background: true },
+      ),
     });
     const payload = await response.json();
     if (!response.ok) {
-      show(`${kind} failed: ${payload.detail}`);
-    } else if (kind === "exam") {
-      show(`exam ready: ${payload.questions} cited questions → ${payload.path}`);
-      refreshExams();
-    } else {
-      show(`study guide written to ${payload.path}`);
+      show(`${kind} failed: ${payload.detail}`, { tone: "error" });
+      return;
     }
-    setBusyAction(null);
+    track(payload.job_id);
+    show(`${kind} queued for ${course} — it keeps running if you leave this tab`);
   }
 
   async function removeCourse(code: string) {
@@ -330,24 +351,24 @@ export default function CoursesPanel() {
                   />
                   <button
                     onClick={() => fileInputs.current[course.code]?.click()}
-                    disabled={busyAction !== null}
+                    disabled={uploading !== null}
                     className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
                   >
-                    {busyAction === `upload-${course.code}` ? "UPLOADING…" : "+ FILES"}
+                    {uploading === course.code ? "UPLOADING…" : "+ FILES"}
                   </button>
                   <button
                     onClick={() => generate("guide", course.code)}
-                    disabled={busyAction !== null || course.materials === 0}
+                    disabled={busy("guide", course.code) || course.materials === 0}
                     className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
                   >
-                    {busyAction === `guide-${course.code}` ? "WRITING…" : "GUIDE"}
+                    {busy("guide", course.code) ? "WRITING…" : "GUIDE"}
                   </button>
                   <button
                     onClick={() => generate("exam", course.code)}
-                    disabled={busyAction !== null || course.materials === 0}
+                    disabled={busy("exam", course.code) || course.materials === 0}
                     className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
                   >
-                    {busyAction === `exam-${course.code}` ? "GENERATING…" : "+ EXAM"}
+                    {busy("exam", course.code) ? "GENERATING…" : "+ EXAM"}
                   </button>
                   <Link
                     href={`/study/course/${encodeURIComponent(course.code)}`}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
@@ -16,6 +16,7 @@ import {
 import { ChatProvider } from "@/lib/chat";
 import { obsidianUri } from "@/lib/citations";
 import { useCourseSelection } from "@/lib/courseSelection";
+import { useJobs } from "@/lib/jobs";
 import { selectedModel, useSelectedModel } from "@/lib/models";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
@@ -182,7 +183,8 @@ export function CourseStudio({ code }: { code: string }) {
   const { data: sources, mutate: refreshSources } = useCourseSources(code);
   const { data: vault } = useVault();
   const { paths, available, refresh: refreshSelection } = useCourseSelection();
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const { jobs, track, isBusy } = useJobs();
+  const [deckBusy, setDeckBusy] = useState(false);
   const [showAllGenerated, setShowAllGenerated] = useState(false);
   const [showAllTopics, setShowAllTopics] = useState(false);
   const scoped = paths.length < available.length;
@@ -229,52 +231,57 @@ export function CourseStudio({ code }: { code: string }) {
 
   const weakTopics = useWeakTopics().filter((topic) => topic.course === code);
 
-  async function generateGuide() {
-    setBusyAction("guide");
-    show(`generating study guide for ${code} — this can take a few minutes…`);
+  /**
+   * Is a generation of this kind running *for this course*?
+   *
+   * This used to be one `busyAction: string | null` shared by all three
+   * buttons, so a running guide disabled the exam and the deck as well —
+   * across every course, since the flag lived in one component. Nothing in the
+   * backend asks for that: study generation takes no single-flight slot and
+   * contends with nothing (backend/features/study/router.py, `_accept`).
+   */
+  const busy = (kind: string) =>
+    isBusy((job) => job.kind === kind && job.params?.course === code);
+
+  /**
+   * Queue a generation and hand its id to the registry.
+   *
+   * `background: true` is the whole fix for work vanishing on navigation. The
+   * backend has accepted it since the job store was generalised; this was the
+   * caller that never sent it, so every generation was a fetch held open for
+   * minutes with its only progress state in a component local.
+   */
+  async function startGeneration(kind: "guide" | "exam") {
+    const endpoint = kind === "guide" ? "/api/study/guide" : "/api/study/exam";
+    const label = kind === "guide" ? "study guide" : "practice exam";
     try {
-      const payload = await mutateJSON<{ path: string }>("/api/study/guide", {
+      const { job_id } = await mutateJSON<{ job_id: string }>(endpoint, {
         course: code,
         model: selectedModel(),
         sources: paths,
+        background: true,
+        ...(kind === "exam" ? { n: 10 } : {}),
       });
-      show(`study guide written to ${payload.path}`);
-      refreshSources();
-      refreshSelection();
+      track(job_id);
+      show(`${label} queued — it keeps running if you leave this tab`);
     } catch (error) {
-      show(`study guide failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
+      // A 422 here is about the *request* (nothing selected, nothing indexed)
+      // and is answered before a job row exists, which is why it still
+      // arrives as a rejected promise rather than as a failed job.
+      show(`${label} could not start: ${error instanceof Error ? error.message : "backend offline?"}`, {
         tone: "error",
       });
-    } finally {
-      setBusyAction(null);
     }
   }
 
-  async function generateExam() {
-    setBusyAction("exam");
-    show(`generating practice exam for ${code} — this can take a few minutes…`);
-    try {
-      const payload = await mutateJSON<{ path: string; questions: number }>("/api/study/exam", {
-        course: code,
-        n: 10,
-        model: selectedModel(),
-        sources: paths,
-      });
-      show(`exam ready: ${payload.questions} cited questions → ${payload.path}`);
-      refreshExams();
-      refreshSources();
-      refreshSelection();
-    } catch (error) {
-      show(`exam generation failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
-        tone: "error",
-      });
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function generateDeck() {
-    setBusyAction("deck");
+  /**
+   * Deck generation keeps a local flag, because it is still the synchronous
+   * `flashcards.md` parse rather than a job — a file read that returns in
+   * milliseconds, not a model call that runs for minutes. It moves onto the
+   * job path when it starts generating from the corpus.
+   */
+  async function runDeck() {
+    setDeckBusy(true);
     try {
       const deck = await generateFlashcardDeck(code);
       show(`deck ready :: ${deck.course} — ${deck.cards} cards`);
@@ -284,9 +291,26 @@ export function CourseStudio({ code }: { code: string }) {
         tone: "error",
       });
     } finally {
-      setBusyAction(null);
+      setDeckBusy(false);
     }
   }
+
+  /**
+   * Reload the GENERATED list when this course's work finishes.
+   *
+   * Refreshing in a promise's resolved branch is no longer possible — there is
+   * no promise, by design. The count of this course's in-flight jobs falling
+   * to zero is the signal instead, and it works no matter which window or
+   * which route started the job.
+   */
+  const inFlight = jobs.filter((job) => job.params?.course === code).length;
+  useEffect(() => {
+    if (inFlight > 0) return;
+    void refreshSources();
+    void refreshExams();
+    void refreshDecks();
+    refreshSelection();
+  }, [inFlight, refreshSources, refreshExams, refreshDecks, refreshSelection]);
 
   const scopeNote = scoped ? ` · ${paths.length} source${paths.length === 1 ? "" : "s"}` : "";
 
@@ -295,17 +319,17 @@ export function CourseStudio({ code }: { code: string }) {
       <div className="flex flex-col gap-2">
         <StudioAction
           label={`study guide${scopeNote}`}
-          running={busyAction === "guide"}
+          running={busy("guide")}
           runningLabel="writing the guide"
-          disabled={busyAction !== null || nothingSelected}
-          onClick={generateGuide}
+          disabled={busy("guide") || nothingSelected}
+          onClick={() => void startGeneration("guide")}
         />
         <StudioAction
           label="flashcard deck"
-          running={busyAction === "deck"}
+          running={deckBusy}
           runningLabel="parsing flashcards.md"
-          disabled={busyAction !== null}
-          onClick={generateDeck}
+          disabled={deckBusy}
+          onClick={() => void runDeck()}
           // Decks are parsed from the course's own flashcards.md, never from
           // the corpus (backend/features/flashcards/store.py), so the source
           // selection genuinely does not apply. Saying so beats printing a
@@ -314,10 +338,10 @@ export function CourseStudio({ code }: { code: string }) {
         />
         <StudioAction
           label={`practice exam${scopeNote}`}
-          running={busyAction === "exam"}
+          running={busy("exam")}
           runningLabel="generating questions"
-          disabled={busyAction !== null || nothingSelected}
-          onClick={generateExam}
+          disabled={busy("exam") || nothingSelected}
+          onClick={() => void startGeneration("exam")}
         />
       </div>
 

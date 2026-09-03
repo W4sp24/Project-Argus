@@ -443,3 +443,88 @@ test("shift-click ticks a run, and only the rows on screen", async ({ page }) =>
 
   await expect(page.getByText(`SOURCES · 3/${total} selected`)).toBeVisible();
 });
+
+test("a generation started in the course hub survives leaving the tab", async ({ page }) => {
+  // The reported bug: generation state lived in `busyAction`, a component
+  // local, so navigating away discarded the only record the UI had of work the
+  // backend was still doing. The guide still landed in the vault; nothing ever
+  // said where.
+  //
+  // Both halves are checked here, and they are the two that were missing:
+  // that the request carries `background: true` (the backend has accepted it
+  // since the job store was generalised, and nothing sent it), and that the
+  // resulting job outlives every navigation.
+  //
+  // Routed rather than live: `POST /api/study/guide` is a real model call over
+  // a real corpus, and the claim under test belongs to the registry, not to
+  // the generator. The backend's side of this contract is covered by
+  // tests/features/study/test_study_api.py::test_a_background_guide_is_accepted_as_a_job.
+  let sentBody: Record<string, unknown> | null = null;
+  // The listing is stateful, because the registry is: it adopts any running
+  // job it sees. A mock that reported one before the click would (correctly)
+  // disable the button this test needs to press.
+  let queued = false;
+
+  await page.route("**/api/study/guide", async (route) => {
+    sentBody = route.request().postDataJSON();
+    queued = true;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ job_id: "e2e-guide" }),
+    });
+  });
+
+  await page.route("**/api/ingest/jobs?kind=all", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        jobs: queued
+          ? [
+              {
+                id: "e2e-guide",
+                created_at: "2026-09-03T00:00:00",
+                finished_at: null,
+                status: "running",
+                kind: "guide",
+                params: { course: "CS000" },
+                target: "15-Courses/CS000/study",
+                summary_prompt: "",
+                note_style: "",
+                total: 1,
+                done: 0,
+                error: null,
+              },
+            ]
+          : [],
+      }),
+    });
+  });
+
+  await page.goto("/study/course/CS000");
+  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
+  await studio.getByRole("button", { name: /^study guide/ }).click();
+
+  expect(sentBody).toMatchObject({ course: "CS000", background: true });
+
+  // The tray is the proof the job is owned above the router.
+  const tray = page.getByRole("button", { name: /Background work: 1 running/ });
+  await expect(tray).toBeVisible();
+
+  // Leaving the route it was started from used to be the end of the story.
+  // (The Course Hub renders no sub-nav of its own -- it is a workspace, not
+  // one of the three tabbed pages -- so this leaves by URL.)
+  await page.goto("/study/flashcards");
+  await expect(page.getByRole("tab", { name: "FLASHCARDS" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(tray).toBeVisible();
+
+  // And leaving the mode entirely.
+  await page.goto("/dashboard");
+  await expect(tray).toBeVisible();
+  await tray.click();
+  await expect(page.getByText("study guide", { exact: true })).toBeVisible();
+});
