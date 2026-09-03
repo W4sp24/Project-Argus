@@ -87,6 +87,13 @@ jobs:
       - run: npm run build
         working-directory: web
 
+      # Also pure node stdlib (node:test), so it runs without installing
+      # electron. Covers the window-open guard, which is the shell's one
+      # exception to denying every popup and is therefore worth a real test.
+      - name: Test the desktop shell's pure helpers
+        run: node --test "tests/*.test.js"
+        working-directory: desktop
+
       # Pure node stdlib, so it needs no install -- the previous `npm ci` in
       # desktop/ pulled electron and sharp just to run this one script.
       # During a tag build GITHUB_REF_NAME makes it assert all three manifests
