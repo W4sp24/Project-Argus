@@ -989,6 +989,27 @@ export async function latestJobOfKind(kind: string): Promise<IngestJob | null> {
   return payload.jobs[0] ?? null;
 }
 
+// --- Relink ---------------------------------------------------------------
+
+export interface RelinkStarted {
+  job_id: string;
+  /** How many generated notes the job will visit. Reported up front because
+   * "nothing happened" and "you have no generated notes" look identical in a
+   * progress readout otherwise. */
+  notes: number;
+}
+
+/** Re-derive concept, neighbour and source links for every note Argus wrote.
+ * `POST /api/notes/relink` — 202, runs on a background thread; the returned
+ * `job_id` feeds the same segmented readout an ingest uses.
+ *
+ * Throws `ApiError` with status 409 when an ingest or a reindex holds the
+ * index: a relink re-embeds every note it rewrites and snapshots the vault,
+ * so all three contend. 503 means this install has no index at all. */
+export function relinkNotes() {
+  return mutateJSON<RelinkStarted>("/api/notes/relink", {});
+}
+
 
 // --- Sources & ingestion ------------------------------------------------
 

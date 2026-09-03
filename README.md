@@ -115,6 +115,7 @@ Optional extras:
 ```bash
 pip install -e ".[rag]"         # chat/RAG stack (embeddings, chroma, pdf extraction)
 argus reindex                   # build the search index over your vault
+argus relink                    # link generated notes into the vault (--dry-run first)
 argus connect gcal              # Google Calendar (needs a Desktop OAuth credentials.json)
 argus connect todoist <token>   # Todoist personal API token
 ```

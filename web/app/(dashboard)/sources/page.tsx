@@ -15,6 +15,7 @@ import {
   ApiError,
   latestJobOfKind,
   reindexVault,
+  relinkNotes,
   useIngestJob,
   useIngestJobs,
   useSources,
@@ -205,6 +206,37 @@ function SourcesBrowser() {
     }
   }
 
+  const [relinking, setRelinking] = useState(false);
+
+  /** Backfill relationships onto notes written before the feature existed.
+   * Without it the vault stays half-linked: every note written from here on
+   * carries a Related section and everything older is still a leaf, which
+   * reads as the feature being broken rather than new. */
+  async function relinkGenerated() {
+    setRelinking(true);
+    try {
+      const started = await relinkNotes();
+      if (started.notes === 0) {
+        show("relink :: nothing to do — no generated notes in this vault");
+        return;
+      }
+      // Same segmented readout an ingest uses; the job id comes back with the
+      // 202, so unlike reindex this one needs no second lookup.
+      setJobId(started.job_id);
+      show(`relink :: ${started.notes} note${started.notes === 1 ? "" : "s"}`);
+    } catch (relinkError) {
+      const conflict = relinkError instanceof ApiError && relinkError.status === 409;
+      show(
+        conflict
+          ? "relink :: the index is busy — try again when the current job finishes"
+          : `relink :: failed — ${relinkError instanceof Error ? relinkError.message : "backend offline?"}`,
+        { tone: "error" },
+      );
+    } finally {
+      setRelinking(false);
+    }
+  }
+
   // Refetch once a job settles: the files it wrote are new rows in this list.
   // In an effect, not during render -- `mutate` is a side effect, and clearing
   // `jobId` mid-render would drop the finished job's summary before the user
@@ -350,6 +382,19 @@ function SourcesBrowser() {
                   Delete {selected.length}
                 </Button>
               )}
+              {/* A page-level action, not part of the "not indexed" banner:
+                  relinking is worth doing on a vault whose index is perfectly
+                  healthy, and burying it in a conditional panel would hide it
+                  in exactly that case. */}
+              <Button
+                variant="quiet"
+                size="sm"
+                onClick={relinkGenerated}
+                disabled={relinking}
+                title="Re-derive concept, neighbour and source links for every note Argus wrote"
+              >
+                {relinking ? "Relinking…" : "Relink notes"}
+              </Button>
               <Button variant="primary" size="sm" onClick={() => setDialogOpen(true)}>
                 + Ingest
               </Button>

@@ -17,14 +17,17 @@ keeps the old behaviour, because there is no better place for it to go.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 import frontmatter
 
-from backend.agent.formatting import compose, math_contract, note_quality
+from backend.agent.formatting import compose, math_contract, note_quality, topics_tail
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.vault import relations
 from backend.vault.sources import COURSE_NOTE_SUFFIX as _COURSE_NOTE_SUFFIX
+from backend.vault.sources import GENERATED_BY as _GENERATED_BY
 from backend.vault.sources import SUMMARY_SUFFIX as _SUMMARY_SUFFIX
 
 #: How much of a file's text is handed to the model. Matches the email
@@ -147,8 +150,11 @@ NOTE_STYLES: dict[str, NoteStyle] = {style.key: style for style in _STYLES}
 
 #: Written into a generated note's frontmatter, and read by
 #: ``study_guide.notes_gap_list`` so a note Argus wrote is never counted as
-#: one the user wrote.
-GENERATED_BY = "argus"
+#: one the user wrote. Defined in :mod:`backend.vault.sources` with the two
+#: filename suffixes and re-exported here, where callers already expect it --
+#: the relink guard needs the same string, and two copies of it is how a
+#: backfill ends up rewriting a note a human wrote.
+GENERATED_BY = _GENERATED_BY
 
 #: The two suffixes live in :mod:`backend.vault.sources` and are re-exported
 #: here, where callers already expect them. The writer below and every reader
@@ -214,10 +220,15 @@ def build_prompt(style: NoteStyle | None, instruction: str, rel_path: str, text:
     typed a sentence would be the opposite of what they asked for. With no
     style at all the instruction stands alone -- which is exactly how this
     behaved before styles existed.
+
+    ``topics_tail()`` is composed last of the house-rule blocks because it asks
+    for a section that comes after everything else the prompt asked for. It is
+    composed rather than owned here so the course-wide study guide can ask for
+    the same section and have it read back by the same parser.
     """
     return _PROMPT.format(
         instruction=compose(style.instruction if style else "", instruction),
-        house_rules=compose(_HOUSE_RULES, note_quality(), math_contract()),
+        house_rules=compose(_HOUSE_RULES, note_quality(), math_contract(), topics_tail()),
         path=rel_path,
         text=text[:MAX_NOTE_CHARS],
     )
@@ -264,19 +275,44 @@ def note_markdown(
     body: str,
     *,
     taxonomy: Taxonomy | None = None,
+    resolve: relations.Resolver | None = None,
+    neighbours: Sequence[tuple[str, str]] = (),
 ) -> tuple[str, str]:
     """``(note_rel_path, markdown)`` for one source file.
 
-    The trailing wikilink is load-bearing rather than decorative: it is what
-    lets ``retrieve.py``'s existing one-hop link expansion reach the source
-    from the note, with no new retrieval code. It resolves only when the
-    source is itself markdown -- ``build_link_index`` is markdown-only -- so
-    for a PDF the link is a readable breadcrumb and nothing more.
+    ``resolve`` and ``neighbours`` are how the note learns about the rest of
+    the vault, and both default to "nothing known" -- a caller with no link
+    index and no live collection still gets a correct note, carrying a source
+    link, a course link and whatever concepts the model named, rendered hollow.
+    That default is what lets the wiring in ``pipeline.py`` be the only caller
+    that had to change.
+
+    The links are load-bearing rather than decorative: ``rag.chunk``'s
+    ``WIKILINK_RE`` scans block text, so the Related section is what lets
+    ``retrieve.py``'s existing one-hop expansion reach the source and the
+    neighbours from the note, with no new retrieval code. The trailing
+    ``[[stem]]`` this replaces could not do that job for a PDF -- with the
+    suffix stripped it resolved to nothing at all.
     """
     tax = taxonomy or active_taxonomy()
     source = PurePosixPath(rel_path)
     destination = note_destination(rel_path, taxonomy=tax)
-    front = {
+    code = course_of(rel_path, taxonomy=tax)
+    # The model was asked for a trailing `## Topics` list; it comes back off
+    # here, so the reader sees the concepts as links rather than as a second
+    # list of bare names. A model that ignored the instruction yields no
+    # topics and the body untouched -- there is no failure path.
+    prose, topics = relations.parse_topics(body.strip())
+    built = relations.build_relations(
+        topics=topics,
+        resolve=resolve or (lambda _name: None),
+        neighbours=neighbours,
+        source_rel_path=rel_path,
+        note_rel_path=destination,
+        course=code,
+        taxonomy=tax,
+    )
+    front: dict = {
         "title": f"{source.stem} — {style.label.lower() if style else 'summary'}",
         "type": "note",
         "generated_by": GENERATED_BY,
@@ -284,10 +320,10 @@ def note_markdown(
         "source": rel_path,
         "prompt": instruction,
     }
-    code = course_of(rel_path, taxonomy=tax)
     if code is not None:
         # Chunk metadata already carries `course` derived from the path, but
         # the frontmatter is what a human -- and Obsidian's own search -- reads.
         front["course"] = code
-    post = frontmatter.Post(f"{body.strip()}\n\n[[{source.stem}]]\n", **front)
-    return destination, frontmatter.dumps(post) + "\n"
+    front = relations.merge_frontmatter(front, built, kind="note", course=code)
+    content = relations.replace_section(prose, relations.render_section(built))
+    return destination, frontmatter.dumps(frontmatter.Post(content, **front)) + "\n"

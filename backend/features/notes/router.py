@@ -6,6 +6,7 @@ mutations are a thin HTTP layer over the single writer (I1).
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -13,6 +14,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.core.config import Settings
+from backend.core.db import connect, init_schema
+from backend.features.ingest import store
+from backend.features.notes.relink import relinkable_notes, run_relink_job
 from backend.rag.deindex import forget_paths
 from backend.vault import writer
 from backend.vault.errors import raise_http
@@ -53,18 +57,42 @@ class NoteUpdate(BaseModel):
     new_content: str
 
 
+class RelinkStarted(BaseModel):
+    """The 202 body for ``POST /api/notes/relink``."""
+
+    job_id: str
+    #: How many generated notes the job will visit. Reported up front because
+    #: "nothing happened" and "you have no generated notes" look identical in
+    #: a progress readout otherwise, and the second is the state a brand-new
+    #: vault is actually in.
+    notes: int
+
+
+def _default_job_runner(run: Callable[[], None]) -> None:
+    """Run a job on a daemon thread. Replaced in tests by a synchronous call."""
+    threading.Thread(target=run, daemon=True).start()
+
+
 def build_notes_router(
-    settings: Settings, index_factory: Callable[[], Any] | None = None
+    settings: Settings,
+    index_factory: Callable[[], Any] | None = None,
+    job_runner: Callable[[Callable[[], None]], None] | None = None,
 ) -> APIRouter:
     """Vault reads and note CRUD.
 
-    ``index_factory`` is here for exactly one route: deleting a note has to
-    delete its chunks too, or the note keeps being retrieved and cited in
-    chat after the file is gone. It is injected the same way the ingest and
+    ``index_factory`` is here for two routes: deleting a note has to delete
+    its chunks too, or the note keeps being retrieved and cited in chat after
+    the file is gone, and a relink has to find each note's neighbours and
+    re-embed what it rewrote. It is injected the same way the ingest and
     study routers take it, and defaults to ``None`` so a caller that has no
-    index (or no ``[rag]`` extras) still gets working note CRUD.
+    index (or no ``[rag]`` extras) still gets working note CRUD -- relink is
+    the one route that then answers 503 rather than pretending.
+
+    ``job_runner`` mirrors the ingest, study and index routers: a daemon
+    thread in production, a synchronous call in tests.
     """
     router = APIRouter(prefix="/api")
+    run_job = job_runner or _default_job_runner
 
     @router.get("/vault", response_model=VaultInfo)
     def vault_info() -> VaultInfo:
@@ -139,5 +167,53 @@ def build_notes_router(
         except WriterError as exc:
             raise_http(exc)
         return {"path": path, "chunks_removed": forget_paths(index_factory, [path])}
+
+    @router.post("/notes/relink", status_code=202, response_model=RelinkStarted)
+    def relink_notes() -> RelinkStarted:
+        """Re-derive relationships for every note Argus wrote.
+
+        Takes the index slot: it re-embeds each note it rewrites and takes a
+        git snapshot, so it contends with an ingest and a reindex. 409 is this
+        codebase's idiom for "one at a time" -- the same answer
+        ``/api/index/reindex`` gives when an ingest is in the way.
+
+        Answers 202 and hands back a ``job_id``: the walk plus a rewrite plus
+        an embed per note is far too long for a request, and the job feeds the
+        same segmented readout an ingest uses.
+        """
+        if index_factory is None:
+            raise HTTPException(
+                status_code=503,
+                detail="the search index is unavailable — relinking needs it to find neighbours",
+            )
+        conn = connect(settings.db_path)
+        try:
+            init_schema(conn)
+            blocking = store.running_job(conn, "relink")
+            if blocking is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"a {blocking['kind']} is already using the index — "
+                    "wait for it to finish",
+                )
+            job_id = store.create_job(
+                conn,
+                # A relink writes only into notes that already exist, so it
+                # has no target folder; '' is the column's "not applicable".
+                target="",
+                filenames=[],
+                kind="relink",
+            )
+        finally:
+            conn.close()
+
+        # Counted here as well as inside the job, which is one vault walk more
+        # than strictly necessary. The alternative is a 202 that cannot say
+        # whether it found anything, and a user staring at an empty progress
+        # panel with no way to tell "still starting" from "you have no
+        # generated notes yet".
+        notes = len(relinkable_notes(settings.vault_path, taxonomy=settings.taxonomy))
+        run_job(lambda: run_relink_job(job_id, settings=settings, index_factory=index_factory))
+        return RelinkStarted(job_id=job_id, notes=notes)
 
     return router

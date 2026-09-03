@@ -13,6 +13,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import frontmatter
 import pytest
 
 from backend.features.study.practice_exam import StudyError
@@ -84,7 +85,12 @@ def test_a_reply_wrapped_entirely_in_one_fence_is_unwrapped(tmp_path: Path) -> N
     """
     body = _write(tmp_path, "```markdown\n## Outline\n\n- Binary search\n```", scope="wrapped")
 
-    assert body.startswith("## Outline"), "a whole-reply fence is still unwrapped"
+    # `.content` rather than the file: a guide now opens with a frontmatter
+    # block (study_guide.guide_markdown), so "the reply was unwrapped" is a
+    # statement about the prose, not about byte zero of the file.
+    assert frontmatter.loads(body).content.startswith("## Outline"), (
+        "a whole-reply fence is still unwrapped"
+    )
     assert "```" not in body
 
 
@@ -114,8 +120,12 @@ def test_a_second_guide_the_same_day_does_not_replace_the_first(tmp_path: Path) 
     second = _write_path(tmp_path, "The second guide.")
 
     assert first != second
-    assert (tmp_path / first).read_text(encoding="utf-8").startswith("The first guide.")
-    assert (tmp_path / second).read_text(encoding="utf-8").startswith("The second guide.")
+    # Same reason as above: the prose is what must not have been written
+    # over, and it now sits below a frontmatter block.
+    first_post = frontmatter.loads((tmp_path / first).read_text(encoding="utf-8"))
+    second_post = frontmatter.loads((tmp_path / second).read_text(encoding="utf-8"))
+    assert first_post.content.startswith("The first guide.")
+    assert second_post.content.startswith("The second guide.")
 
 
 def test_a_guide_is_written_inside_its_own_course(tmp_path: Path) -> None:

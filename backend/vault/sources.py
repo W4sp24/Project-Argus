@@ -42,6 +42,13 @@ from backend.vault.privacy import is_no_ai, is_private_path
 COURSE_NOTE_SUFFIX = ".notes.md"
 SUMMARY_SUFFIX = ".summary.md"
 
+#: Stamped into every generated note's frontmatter. Lives here with the two
+#: suffixes for exactly the same reason they do: the ingest writer, the study
+#: guide, the study guide's gap list and the relink guard all have to agree on
+#: one string, and a second copy of it is how a backfill ends up rewriting a
+#: note a human wrote.
+GENERATED_BY = "argus"
+
 #: What the frontend renders as a WRITTEN badge.
 GeneratedKind = Literal["note", "summary"]
 

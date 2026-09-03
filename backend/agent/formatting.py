@@ -38,6 +38,11 @@ NOTE_QUALITY_PROMPT = _PROMPTS / "note_quality.md"
 #: Notation for a model answering in JSON rather than in markdown.
 JSON_MATH_PROMPT = _PROMPTS / "formatting_json.md"
 
+#: The trailing ``## Topics`` section that becomes a note's concept links.
+#: Notes and study guides only, for the same reason NOTE_QUALITY_PROMPT is --
+#: a chat answer has nowhere to put links, and an exam is JSON.
+TOPICS_PROMPT = _PROMPTS / "topics.md"
+
 
 @cache
 def math_contract() -> str:
@@ -49,6 +54,24 @@ def math_contract() -> str:
 def note_quality() -> str:
     """What a note has to do to be worth coming back to."""
     return NOTE_QUALITY_PROMPT.read_text(encoding="utf-8").strip()
+
+
+@cache
+def topics_tail() -> str:
+    """Ask for the concept names a note's links are built from.
+
+    Shared by the four per-document note styles and the course-wide study
+    guide, for the same reason :func:`note_quality` is: two copies of "name
+    the concepts" is how a guide and the note beside it end up connected to
+    the vault by different rules.
+
+    The whole feature is designed so that a model ignoring this section costs
+    nothing. :func:`backend.vault.relations.parse_topics` finds no section,
+    returns no topics, and the note is written exactly as it was before this
+    existed -- only the concept links are missing. There is no retry, no
+    fallback prompt and no error stage behind this, and that is deliberate.
+    """
+    return TOPICS_PROMPT.read_text(encoding="utf-8").strip()
 
 
 @cache
