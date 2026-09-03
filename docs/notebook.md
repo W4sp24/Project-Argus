@@ -34,7 +34,7 @@ A **deck** is the thing you own. The four study modes are things you do to it.
 
 ### Getting cards in
 
-Four routes, and only one of them involves a model.
+Five routes, and only one of them involves a model.
 
 | Route | Where | What it does |
 |---|---|---|
@@ -44,7 +44,7 @@ Four routes, and only one of them involves a model.
 | **From a note** | IMPORT → FROM A NOTE | Search your vault's notes and pick one; reads every `Q::` / `A::` pair in it. |
 | **Generate** | Course Hub → STUDIO, or the deck library's ✨ GENERATE | Writes cards from your sources, in the background, with the options below. |
 
-The third one is worth knowing about: **every note Argus generates already
+**From a note** is worth knowing about: **every note Argus generates already
 carries a `Q::`/`A::` self-test section**, so a lecture note usually imports
 as-is. You do not need a special file.
 
