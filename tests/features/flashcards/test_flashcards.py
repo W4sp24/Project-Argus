@@ -1,4 +1,11 @@
-"""Tests for flashcard deck generation, due-queue ordering, and FSRS grading."""
+"""The flashcard HTTP surface: authoring, importing, exporting, studying.
+
+``POST /decks`` changed meaning in the rows rewrite. It used to take
+``{course}`` and generate by parsing that course's ``flashcards.md`` — a file
+nothing in Argus ever wrote, which is why the feature was unreachable. It now
+creates a deck; parsing ``flashcards.md`` is one case of
+``POST /decks/{id}/import/note``, which reads any note.
+"""
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,15 +14,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.core.config import Settings
-from backend.core.db import connect, init_schema
-from backend.features.flashcards.store import (
-    FlashcardsError,
-    delete_deck,
-    due_cards,
-    generate_deck,
-    grade_card,
-    parse_qa_pairs,
-)
 from backend.main import create_app
 
 FLASHCARDS_MD = """\
@@ -38,201 +36,349 @@ def _vault(tmp_path: Path) -> Path:
     return vault
 
 
-# --- parsing -----------------------------------------------------------
-
-
-def test_parse_qa_pairs_handles_multiline_and_dashes() -> None:
-    pairs = parse_qa_pairs(FLASHCARDS_MD)
-    assert len(pairs) == 3
-    assert pairs[0] == ("What is Big-O of binary search?", "O(log n)")
-    assert pairs[1][0].startswith("CAP theorem")
-    assert "Partition tolerance" in pairs[1][1]
-    assert "distributed system" in pairs[1][1]
-
-
-# --- direct module tests (FSRS state, with fast-forwarded clocks) ------
-
-
 @pytest.fixture()
-def conn(tmp_path: Path):
-    connection = connect(tmp_path / "argus.db")
-    init_schema(connection)
-    yield connection
-    connection.close()
+def client(tmp_path: Path) -> TestClient:
+    return TestClient(create_app(Settings(_vault_path=_vault(tmp_path))))
 
 
-def test_generate_deck_from_markdown(tmp_path: Path, conn) -> None:
-    vault = _vault(tmp_path)
-    deck_id = generate_deck(vault, conn, "CS201")
-
-    row = conn.execute("SELECT * FROM flashcard_decks WHERE id = ?", (deck_id,)).fetchone()
-    assert row["course"] == "CS201"
-    import json
-
-    cards = json.loads(row["cards_json"])
-    assert len(cards) == 3
-    assert all(card["id"].startswith(f"{deck_id}:") for card in cards)
+def _deck(client: TestClient, **body: object) -> dict:
+    payload = {"title": "CS201 deck", "course": "CS201", **body}
+    response = client.post("/api/flashcards/decks", json=payload)
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
-def test_due_cards_ordering_new_cards_and_soonest_due_first(tmp_path: Path, conn) -> None:
-    vault = _vault(tmp_path)
-    deck_id = generate_deck(vault, conn, "CS201")
-
-    now = datetime.now(UTC)
-    all_due = due_cards(conn, deck_id, now=now)
-    assert len(all_due) == 3, "ungraded cards must be due immediately"
-
-    first_card_id = all_due[0].id
-    grade_card(conn, deck_id, first_card_id, "easy", now=now)
-
-    remaining_new = due_cards(conn, deck_id, now=now)
-    assert len(remaining_new) == 2, "a graded-into-the-future card drops out of the due queue"
-    assert first_card_id not in [c.id for c in remaining_new]
+def _imported(client: TestClient) -> dict:
+    """A deck filled from the course's flashcards.md — the old default path."""
+    deck = _deck(client)
+    added = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/note",
+        json={"path": "15-Courses/CS201/flashcards.md"},
+    )
+    assert added.status_code == 200, added.text
+    assert added.json()["added"] == 3
+    return client.get(f"/api/flashcards/decks/{deck['id']}").json()
 
 
-def test_grading_increases_due_at_on_successive_good_grades(tmp_path: Path, conn) -> None:
-    vault = _vault(tmp_path)
-    deck_id = generate_deck(vault, conn, "CS201")
-    card_id = due_cards(conn, deck_id)[0].id
+# --- decks -----------------------------------------------------------------
 
-    now = datetime.now(UTC)
-    intervals = []
-    for _ in range(3):
-        result = grade_card(conn, deck_id, card_id, "good", now=now)
-        due_at = datetime.fromisoformat(result.due_at)
-        intervals.append((due_at - now).total_seconds())
-        now = due_at  # fast-forward to the new due time, like a real review cadence
 
-    assert intervals[0] < intervals[1] < intervals[2], (
-        "successive 'good' grades must schedule further into the future each time"
+def test_a_deck_is_created_empty_and_needs_no_course(client: TestClient) -> None:
+    created = _deck(client, title="Spanish verbs", course="")
+    assert created["cards"] == 0
+    assert created["course"] == ""
+    assert created["source"] == "manual"
+
+
+def test_a_blank_title_is_422(client: TestClient) -> None:
+    assert client.post("/api/flashcards/decks", json={"title": "  "}).status_code == 422
+
+
+def test_a_deck_can_be_renamed(client: TestClient) -> None:
+    created = _deck(client)
+    patched = client.patch(f"/api/flashcards/decks/{created['id']}", json={"title": "Renamed"})
+    assert patched.status_code == 200
+    assert patched.json()["title"] == "Renamed"
+
+
+def test_patching_an_unknown_deck_is_404_but_a_blank_title_is_422(client: TestClient) -> None:
+    assert client.patch("/api/flashcards/decks/99999", json={"title": "x"}).status_code == 404
+    created = _deck(client)
+    assert (
+        client.patch(f"/api/flashcards/decks/{created['id']}", json={"title": " "}).status_code
+        == 422
     )
 
 
-def test_grading_again_shrinks_interval_relative_to_prior_good_grades(tmp_path: Path, conn) -> None:
+def test_an_unknown_deck_reads_404(client: TestClient) -> None:
+    assert client.get("/api/flashcards/decks/99999").status_code == 404
+    assert client.delete("/api/flashcards/decks/99999").status_code == 404
+
+
+# --- cards -----------------------------------------------------------------
+
+
+def test_cards_are_added_read_back_and_edited(client: TestClient) -> None:
+    created = _deck(client)
+    added = client.post(
+        f"/api/flashcards/decks/{created['id']}/cards",
+        json={"cards": [{"front": "a", "back": "1"}, {"front": "b", "back": "2", "hint": "bee"}]},
+    )
+    assert added.json() == {"added": 2}
+
+    detail = client.get(f"/api/flashcards/decks/{created['id']}").json()
+    assert [card["front"] for card in detail["card_list"]] == ["a", "b"]
+    assert detail["card_list"][1]["hint"] == "bee"
+
+    ref = detail["card_list"][0]["ref"]
+    patched = client.patch(
+        f"/api/flashcards/decks/{created['id']}/cards/{ref}",
+        json={"back": "one", "starred": True},
+    )
+    assert patched.status_code == 200
+    assert (patched.json()["back"], patched.json()["starred"]) == ("one", True)
+
+
+def test_adding_a_card_to_an_unknown_deck_is_404(client: TestClient) -> None:
+    response = client.post(
+        "/api/flashcards/decks/99999/cards", json={"cards": [{"front": "a", "back": "b"}]}
+    )
+    assert response.status_code == 404
+
+
+def test_editing_an_unknown_card_is_404_and_a_blank_face_is_422(client: TestClient) -> None:
+    deck = _imported(client)
+    assert (
+        client.patch(
+            f"/api/flashcards/decks/{deck['id']}/cards/nope", json={"front": "x"}
+        ).status_code
+        == 404
+    )
+    ref = deck["card_list"][0]["ref"]
+    assert (
+        client.patch(
+            f"/api/flashcards/decks/{deck['id']}/cards/{ref}", json={"front": "  "}
+        ).status_code
+        == 422
+    )
+
+
+def test_a_card_is_deleted_with_its_reviews(client: TestClient) -> None:
+    deck = _imported(client)
+    ref = deck["card_list"][0]["ref"]
+    client.post(f"/api/flashcards/decks/{deck['id']}/cards/{ref}/grade", json={"grade": "good"})
+
+    removed = client.delete(f"/api/flashcards/decks/{deck['id']}/cards/{ref}")
+    assert removed.json() == {"card_ref": ref, "reviews_removed": 1}
+    assert client.get(f"/api/flashcards/decks/{deck['id']}").json()["cards"] == 2
+
+
+def test_reorder_rewrites_the_order_and_refuses_a_partial_one(client: TestClient) -> None:
+    deck = _imported(client)
+    refs = [card["ref"] for card in deck["card_list"]]
+
+    reordered = client.post(
+        f"/api/flashcards/decks/{deck['id']}/cards/reorder",
+        json={"order": [refs[2], refs[0], refs[1]]},
+    )
+    assert reordered.status_code == 200
+    assert [card["ref"] for card in reordered.json()["card_list"]] == [refs[2], refs[0], refs[1]]
+
+    partial = client.post(
+        f"/api/flashcards/decks/{deck['id']}/cards/reorder", json={"order": refs[:2]}
+    )
+    assert partial.status_code == 422
+
+
+# --- import / export -------------------------------------------------------
+
+
+def test_the_delimiters_endpoint_names_what_the_parser_accepts(client: TestClient) -> None:
+    """So the import dialog never offers an option the server will reject."""
+    assert client.get("/api/flashcards/import/delimiters").json() == {
+        "field": ["comma", "dash", "tab"],
+        "row": ["newline", "semicolon"],
+    }
+
+
+def test_import_from_an_arbitrary_note_not_just_flashcards_md(
+    tmp_path: Path,
+) -> None:
+    """The fix for the feature being unreachable: any note with Q::/A:: works.
+
+    Ingest has been writing exactly this tail into every generated note all
+    along, and nothing could read it.
+    """
     vault = _vault(tmp_path)
-    deck_id = generate_deck(vault, conn, "CS201")
-    card_id = due_cards(conn, deck_id)[0].id
+    (vault / "50-Reference").mkdir(parents=True)
+    (vault / "50-Reference" / "lecture.md").write_text(
+        "# Lecture\n\nProse.\n\n## Self-test\n\nQ:: what is P\nA:: polynomial time\n",
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(Settings(_vault_path=vault)))
+    deck = _deck(client)
 
-    now = datetime.now(UTC)
-    for _ in range(2):
-        result = grade_card(conn, deck_id, card_id, "good", now=now)
-        now = datetime.fromisoformat(result.due_at)
-
-    good_interval = (now - datetime.now(UTC)).total_seconds()
-
-    again_result = grade_card(conn, deck_id, card_id, "again", now=now)
-    again_interval = (datetime.fromisoformat(again_result.due_at) - now).total_seconds()
-
-    assert again_interval < good_interval, "'again' must reset scheduling to a short interval"
-
-
-def test_delete_deck_removes_deck_and_its_reviews(tmp_path: Path, conn) -> None:
-    vault = _vault(tmp_path)
-    deck_id = generate_deck(vault, conn, "CS201")
-    card_id = due_cards(conn, deck_id)[0].id
-    grade_card(conn, deck_id, card_id, "good")
-
-    reviews_removed = delete_deck(conn, deck_id)
-
-    assert reviews_removed == 1
-    assert conn.execute(
-        "SELECT * FROM flashcard_decks WHERE id = ?", (deck_id,)
-    ).fetchone() is None
-    assert conn.execute("SELECT * FROM flashcard_reviews").fetchone() is None
+    response = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/note",
+        json={"path": "50-Reference/lecture.md"},
+    )
+    assert response.json() == {"added": 1}
 
 
-def test_delete_deck_missing_raises(conn) -> None:
-    with pytest.raises(FlashcardsError):
-        delete_deck(conn, 99999)
-
-
-def test_grade_card_nonexistent_card_raises(tmp_path: Path, conn) -> None:
-    from backend.features.flashcards.store import FlashcardsError
-
-    vault = _vault(tmp_path)
-    deck_id = generate_deck(vault, conn, "CS201")
-    with pytest.raises(FlashcardsError):
-        grade_card(conn, deck_id, "nope", "good")
-
-
-# --- API tests -----------------------------------------------------------
-
-
-@pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
-    vault = _vault(tmp_path)
-    app = create_app(Settings(_vault_path=vault))
-    return TestClient(app)
-
-
-def test_api_generate_list_due_and_grade_roundtrip(client: TestClient) -> None:
-    created = client.post("/api/flashcards/decks", json={"course": "CS201"}).json()
-    assert created["cards"] == 3
-
-    listing = client.get("/api/flashcards/decks", params={"course": "CS201"}).json()
-    assert listing[0]["id"] == created["id"]
-
-    due = client.get(f"/api/flashcards/decks/{created['id']}/due").json()
-    assert len(due) == 3
-
-    card_id = due[0]["id"]
-    graded = client.post(
-        f"/api/flashcards/decks/{created['id']}/cards/{card_id}/grade", json={"grade": "good"}
-    ).json()
-    assert graded["card_id"] == card_id
-    assert graded["due_at"] > datetime.now(UTC).isoformat()
-
-    due_after = client.get(f"/api/flashcards/decks/{created['id']}/due").json()
-    assert card_id not in [c["id"] for c in due_after]
-
-
-def test_api_generate_deck_missing_flashcards_md_is_422(tmp_path: Path) -> None:
-    vault = tmp_path / "vault"
-    (vault / "15-Courses" / "CS999").mkdir(parents=True)
-    app = create_app(Settings(_vault_path=vault))
-    client = TestClient(app)
-    response = client.post("/api/flashcards/decks", json={"course": "CS999"})
+def test_import_from_a_note_with_no_pairs_is_422(client: TestClient) -> None:
+    deck = _deck(client)
+    response = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/note", json={"path": "nope.md"}
+    )
     assert response.status_code == 422
 
 
-def test_api_grade_nonexistent_deck_is_404(client: TestClient) -> None:
+def test_import_refuses_a_path_that_escapes_the_vault(client: TestClient) -> None:
+    deck = _deck(client)
     response = client.post(
-        "/api/flashcards/decks/99999/cards/99999:0/grade", json={"grade": "good"}
+        f"/api/flashcards/decks/{deck['id']}/import/note", json={"path": "../../secrets.md"}
     )
-    assert response.status_code == 404
+    assert response.status_code == 422
 
 
-def test_api_grade_nonexistent_card_in_real_deck_is_404(client: TestClient) -> None:
-    created = client.post("/api/flashcards/decks", json={"course": "CS201"}).json()
+def test_paste_import_parses_delimited_rows(client: TestClient) -> None:
+    deck = _deck(client)
     response = client.post(
-        f"/api/flashcards/decks/{created['id']}/cards/nope/grade", json={"grade": "good"}
+        f"/api/flashcards/decks/{deck['id']}/import/paste",
+        json={"text": "ser,to be\nestar,to be (temporary)", "field": "comma", "row": "newline"},
     )
-    assert response.status_code == 404
+    assert response.json() == {"added": 2}
+    cards = client.get(f"/api/flashcards/decks/{deck['id']}").json()["card_list"]
+    # Split on the first delimiter only, so a definition keeps its commas.
+    assert cards[1]["back"] == "to be (temporary)"
+
+
+def test_paste_import_rejects_an_unknown_delimiter_and_an_empty_result(
+    client: TestClient,
+) -> None:
+    deck = _deck(client)
+    unknown = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/paste",
+        json={"text": "a|b", "field": "pipe", "row": "newline"},
+    )
+    assert unknown.status_code == 422
+
+    nothing = client.post(
+        f"/api/flashcards/decks/{deck['id']}/import/paste",
+        json={"text": "no delimiter anywhere", "field": "tab", "row": "newline"},
+    )
+    assert nothing.status_code == 422
+
+
+def test_export_writes_a_note_the_importer_reads_back(client: TestClient) -> None:
+    deck = _imported(client)
+    exported = client.post(f"/api/flashcards/decks/{deck['id']}/export")
+    assert exported.json() == {"path": "15-Courses/CS201/flashcards.md"}
+
+    # Round trip: importing the export back into a fresh deck yields the same
+    # three cards.
+    fresh = _deck(client, title="round trip")
+    back = client.post(
+        f"/api/flashcards/decks/{fresh['id']}/import/note",
+        json={"path": "15-Courses/CS201/flashcards.md"},
+    )
+    assert back.json() == {"added": 3}
+
+
+def test_export_of_a_courseless_deck_is_422(client: TestClient) -> None:
+    deck = _deck(client, title="Spanish verbs", course="")
+    client.post(
+        f"/api/flashcards/decks/{deck['id']}/cards",
+        json={"cards": [{"front": "ser", "back": "to be"}]},
+    )
+    assert client.post(f"/api/flashcards/decks/{deck['id']}/export").status_code == 422
+
+
+# --- studying --------------------------------------------------------------
+
+
+def test_due_grade_roundtrip_and_the_preview_on_every_card(client: TestClient) -> None:
+    deck = _imported(client)
+    due = client.get(f"/api/flashcards/decks/{deck['id']}/due").json()
+    assert len(due) == 3
+    # Each card says what every grade would cost, which is what makes the
+    # grade bar a choice rather than four unlabelled verbs.
+    assert set(due[0]["preview"]) == {"again", "hard", "good", "easy"}
+
+    ref = due[0]["id"]
+    graded = client.post(
+        f"/api/flashcards/decks/{deck['id']}/cards/{ref}/grade", json={"grade": "good"}
+    ).json()
+    assert graded["card_id"] == ref
+    assert graded["due_at"] > datetime.now(UTC).isoformat()
+    # The label the button promised is the label the commit reports.
+    assert graded["due_label"] == due[0]["preview"]["good"]
+
+    after = client.get(f"/api/flashcards/decks/{deck['id']}/due").json()
+    assert ref not in [card["id"] for card in after]
+
+
+def test_grading_an_unknown_deck_or_card_is_404(client: TestClient) -> None:
+    assert (
+        client.post(
+            "/api/flashcards/decks/99999/cards/anything/grade", json={"grade": "good"}
+        ).status_code
+        == 404
+    )
+    deck = _imported(client)
+    assert (
+        client.post(
+            f"/api/flashcards/decks/{deck['id']}/cards/nope/grade", json={"grade": "good"}
+        ).status_code
+        == 404
+    )
+
+
+def test_an_invalid_grade_is_422(client: TestClient) -> None:
+    deck = _imported(client)
+    ref = deck["card_list"][0]["ref"]
+    response = client.post(
+        f"/api/flashcards/decks/{deck['id']}/cards/{ref}/grade", json={"grade": "brilliant"}
+    )
+    assert response.status_code == 422
+
+
+def test_a_suspended_card_leaves_the_due_queue(client: TestClient) -> None:
+    deck = _imported(client)
+    ref = deck["card_list"][0]["ref"]
+    client.patch(f"/api/flashcards/decks/{deck['id']}/cards/{ref}", json={"suspended": True})
+    due = client.get(f"/api/flashcards/decks/{deck['id']}/due").json()
+    assert ref not in [card["id"] for card in due]
+    assert len(due) == 2
 
 
 def test_due_summary_reports_total_and_per_deck(client: TestClient) -> None:
-    """Backs the Study overview's real "cards due" stat — previously a
-    hardcoded `MOCK_CARDS_DUE = 7`. `useDueCards()` only takes one deck id, so
-    this is the one-request whole-vault total the stat row and the
-    FLASHCARDS panel actually need."""
-    created = client.post("/api/flashcards/decks", json={"course": "CS201"}).json()
+    """Backs the Notebook overview's real "cards due" stat."""
+    deck = _imported(client)
 
     summary = client.get("/api/flashcards/due-summary").json()
     assert summary["total"] == 3
     assert summary["decks"] == [
-        {"deck_id": created["id"], "course": "CS201", "title": created["title"], "due": 3}
+        {"deck_id": deck["id"], "course": "CS201", "title": deck["title"], "due": 3}
     ]
 
-    card_id = client.get(f"/api/flashcards/decks/{created['id']}/due").json()[0]["id"]
-    client.post(
-        f"/api/flashcards/decks/{created['id']}/cards/{card_id}/grade", json={"grade": "easy"}
-    )
+    ref = client.get(f"/api/flashcards/decks/{deck['id']}/due").json()[0]["id"]
+    client.post(f"/api/flashcards/decks/{deck['id']}/cards/{ref}/grade", json={"grade": "easy"})
 
-    summary_after = client.get("/api/flashcards/due-summary").json()
-    assert summary_after["total"] == 2, "a card graded into the future drops out of the due total"
-    assert summary_after["decks"][0]["due"] == 2
+    after = client.get("/api/flashcards/due-summary").json()
+    assert after["total"] == 2, "a card graded into the future drops out of the due total"
 
 
 def test_due_summary_is_zero_with_no_decks(client: TestClient) -> None:
-    summary = client.get("/api/flashcards/due-summary").json()
-    assert summary == {"total": 0, "decks": []}
+    assert client.get("/api/flashcards/due-summary").json() == {"total": 0, "decks": []}
+
+
+# --- match -----------------------------------------------------------------
+
+
+def test_match_records_a_best_time_without_touching_the_schedule(client: TestClient) -> None:
+    deck = _imported(client)
+    assert client.get(f"/api/flashcards/decks/{deck['id']}/match-best").json() == {"best_ms": None}
+
+    before = client.get("/api/flashcards/due-summary").json()["total"]
+    posted = client.post(
+        f"/api/flashcards/decks/{deck['id']}/match-score", json={"elapsed_ms": 14_500, "pairs": 3}
+    )
+    assert posted.json() == {"best_ms": 14_500}
+    # Match is a game. Playing it must not spend a card's review.
+    assert client.get("/api/flashcards/due-summary").json()["total"] == before
+
+    client.post(
+        f"/api/flashcards/decks/{deck['id']}/match-score", json={"elapsed_ms": 30_000, "pairs": 3}
+    )
+    assert client.get(f"/api/flashcards/decks/{deck['id']}/match-best").json() == {
+        "best_ms": 14_500
+    }
+
+
+def test_a_nonsense_match_score_is_refused(client: TestClient) -> None:
+    deck = _imported(client)
+    response = client.post(
+        f"/api/flashcards/decks/{deck['id']}/match-score", json={"elapsed_ms": 0, "pairs": 3}
+    )
+    assert response.status_code == 422

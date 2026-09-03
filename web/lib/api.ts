@@ -857,19 +857,44 @@ export interface FlashcardDeck {
   id: number;
   course: string;
   title: string;
+  description: string;
+  /** How the deck came to exist: "manual" | "imported" | "generated". */
+  source: string;
   created_at: string;
+  updated_at: string;
   cards: number;
 }
+
+export interface FlashcardCard {
+  ref: string;
+  front: string;
+  back: string;
+  hint: string | null;
+  position: number;
+  starred: boolean;
+  suspended: boolean;
+  /** The vault note an imported card came from; null if typed in. */
+  source_path: string | null;
+}
+
+export interface FlashcardDeckDetail extends FlashcardDeck {
+  card_list: FlashcardCard[];
+}
+
+export type FlashcardGrade = "again" | "hard" | "good" | "easy";
 
 export interface DueCard {
   id: string;
   front: string;
   back: string;
+  hint: string | null;
   due_at: string;
   state: string;
+  /** What each grade would schedule, as a human interval ("4d"). Computed by
+   * the backend from one FSRS state, so the label on a grade button is the
+   * label the commit reports back. */
+  preview: Record<FlashcardGrade, string>;
 }
-
-export type FlashcardGrade = "again" | "hard" | "good" | "easy";
 
 export interface FlashcardGradeResult {
   card_id: string;
@@ -878,6 +903,8 @@ export interface FlashcardGradeResult {
   difficulty: number;
   due_at: string;
   state: string;
+  /** The same interval `DueCard.preview` promised for this grade. */
+  due_label: string;
 }
 
 /** Generated flashcard decks, optionally scoped to one course. */
@@ -894,9 +921,125 @@ export function useDueCards(deckId: number | null) {
   );
 }
 
-/** Parse `Q:: A::` pairs from the course's `flashcards.md` into a new deck. */
-export function generateFlashcardDeck(course: string) {
-  return mutateJSON<FlashcardDeck>("/api/flashcards/decks", { course });
+/** One deck with all of its cards, in author order. */
+export function useDeck(deckId: number | null) {
+  return useSWR<FlashcardDeckDetail>(
+    deckId !== null ? `/api/flashcards/decks/${deckId}` : null,
+    fetcher,
+  );
+}
+
+/**
+ * Create an empty deck.
+ *
+ * This endpoint used to take `{course}` and generate cards by parsing that
+ * course's `flashcards.md` -- the one input nothing in Argus ever wrote, which
+ * is why decks were unreachable. Filling a deck is now a separate, deliberate
+ * act with four routes: typed in, pasted, imported from a note, or generated.
+ */
+export function createDeck(body: { title: string; course?: string; description?: string }) {
+  return mutateJSON<FlashcardDeck>("/api/flashcards/decks", body);
+}
+
+export function updateDeck(
+  deckId: number,
+  body: { title?: string; description?: string; course?: string },
+) {
+  return mutateJSON<FlashcardDeck>(`/api/flashcards/decks/${deckId}`, body, "PATCH");
+}
+
+export function deleteDeck(deckId: number) {
+  return mutateJSON<{ deck_id: number; reviews_removed: number }>(
+    `/api/flashcards/decks/${deckId}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+export function addCards(
+  deckId: number,
+  cards: { front: string; back: string; hint?: string | null }[],
+) {
+  return mutateJSON<{ added: number }>(`/api/flashcards/decks/${deckId}/cards`, { cards });
+}
+
+export function updateCard(
+  deckId: number,
+  ref: string,
+  body: {
+    front?: string;
+    back?: string;
+    hint?: string | null;
+    starred?: boolean;
+    suspended?: boolean;
+  },
+) {
+  return mutateJSON<FlashcardCard>(
+    `/api/flashcards/decks/${deckId}/cards/${encodeURIComponent(ref)}`,
+    body,
+    "PATCH",
+  );
+}
+
+export function deleteCard(deckId: number, ref: string) {
+  return mutateJSON<{ card_ref: string; reviews_removed: number }>(
+    `/api/flashcards/decks/${deckId}/cards/${encodeURIComponent(ref)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+/** Rewrite card order. Must name every card in the deck exactly once. */
+export function reorderCards(deckId: number, order: string[]) {
+  return mutateJSON<FlashcardDeckDetail>(`/api/flashcards/decks/${deckId}/cards/reorder`, {
+    order,
+  });
+}
+
+/** Pull `Q::`/`A::` pairs out of any vault note -- not only `flashcards.md`. */
+export function importFromNote(deckId: number, path: string) {
+  return mutateJSON<{ added: number }>(`/api/flashcards/decks/${deckId}/import/note`, { path });
+}
+
+export function importPaste(
+  deckId: number,
+  body: { text: string; field: string; row: string },
+) {
+  return mutateJSON<{ added: number }>(`/api/flashcards/decks/${deckId}/import/paste`, body);
+}
+
+/** Write the deck to its course's `flashcards.md`, through the normal writer. */
+export function exportDeck(deckId: number) {
+  return mutateJSON<{ path: string }>(`/api/flashcards/decks/${deckId}/export`, undefined);
+}
+
+/**
+ * The old one-call "generate a deck for this course" behaviour, expressed in
+ * terms of what actually happens: create a deck, then import the course's
+ * `flashcards.md` into it.
+ *
+ * Interim. It exists so the Course Hub and the old flashcards page keep
+ * working while the deck library and corpus generation land; both callers move
+ * off it, and then it goes.
+ */
+export async function generateFlashcardDeck(course: string) {
+  const deck = await createDeck({ title: `${course} flashcards`, course });
+  const { added } = await importFromNote(deck.id, `15-Courses/${course}/flashcards.md`);
+  return { ...deck, cards: added };
+}
+
+export function postMatchScore(deckId: number, elapsedMs: number, pairs: number) {
+  return mutateJSON<{ best_ms: number | null }>(
+    `/api/flashcards/decks/${deckId}/match-score`,
+    { elapsed_ms: elapsedMs, pairs },
+  );
+}
+
+export function useMatchBest(deckId: number | null) {
+  return useSWR<{ best_ms: number | null }>(
+    deckId !== null ? `/api/flashcards/decks/${deckId}/match-best` : null,
+    fetcher,
+  );
 }
 
 /** Grade one card — updates its FSRS state and schedules the next `due_at`. */
