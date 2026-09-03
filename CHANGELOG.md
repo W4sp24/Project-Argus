@@ -10,6 +10,41 @@ Argus is currently pre-1.0 (0.x releases).
 
 ### Added
 
+#### The Notebook, in a window of its own
+
+- **Study is now Notebook**, and it can be popped out into a real second window
+  — the desktop shell opens an OS window, a browser opens a browser window.
+  Everything under the mode goes with it: the overview, the Course Hub,
+  flashcards and the practice exam. `/study` and `/study/*` redirect
+  permanently, so existing links keep working.
+
+#### Flashcards you can actually author
+
+- **Cards can be written, edited, reordered, starred and suspended.** They were
+  a JSON blob parsed once from a `flashcards.md` that nothing in Argus ever
+  wrote, so unless you hand-authored that file every deck attempt failed. Four
+  ways in now: type them, paste delimited rows, **import the `Q::`/`A::` pairs
+  out of any note** — which every note Argus generates already carries — or
+  generate them from the sources you have ticked.
+- **Four ways to study a deck.** Review (FSRS, with each grade button showing
+  the interval it will actually schedule), Flashcards (browse and sort),
+  Learn (adaptive multiple-choice then typing) and Match (a timed pairing
+  game). Browse and Match deliberately record nothing: cramming must not
+  rewrite spacing built over weeks.
+- **Decks export back to `flashcards.md`** and round-trip with the note
+  importer.
+
+### Fixed
+
+- **Study generation survives leaving the tab.** A guide or exam was a request
+  held open for minutes with its progress in a component local, so navigating
+  away discarded the only record the UI had of work the backend was still
+  doing. Jobs are now owned above the router and listed in a tray, and are
+  recovered from the server after a reload, a crash, or in a second window.
+- **One generation no longer blocks the others.** A single busy flag disabled
+  every action on every course while anything ran, which is not something the
+  backend ever asked for.
+
 #### Note relationships
 
 - **Generated notes link into the vault.** Every note and study guide Argus

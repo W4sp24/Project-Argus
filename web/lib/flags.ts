@@ -2,7 +2,11 @@
 // Every `preview` panel renders a PREVIEW badge (Panel's `preview` prop),
 // uses hardcoded mock data, and MUST NOT call any backend write endpoint.
 export const FLAGS = {
-  flashcards: "enabled", // POST /api/flashcards/decks + due/grade are wired (real FSRS)
+  // Decks are authored, not parsed from one file: create/edit/reorder cards,
+  // paste-import, import Q::/A:: from any note, or generate from the course
+  // corpus as a background job. Four study modes over real FSRS, of which two
+  // deliberately record nothing.
+  flashcards: "enabled",
   // Research reading queue + highlights persist to the vault for real (one
   // note per paper under <areas>/papers/, one running highlights.md).
   library: "enabled",
