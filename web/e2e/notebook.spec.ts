@@ -695,3 +695,62 @@ test("importing a note's Q::/A:: tail fills a deck", async ({ page, request }) =
   await expect(page.getByText("1 card", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Front of card 1")).toHaveValue("what is P");
 });
+
+test("browsing a deck does not touch its schedule", async ({ page, request }) => {
+  // The reason Browse and Review both exist: skimming a deck before a lecture
+  // must not rewrite a schedule built over weeks. Nothing in this mode posts a
+  // grade, and this is the assertion that keeps it that way.
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e browse deck" } })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: {
+      cards: [
+        { front: "browse one", back: "answer one" },
+        { front: "browse two", back: "answer two" },
+      ],
+    },
+  });
+
+  const dueBefore = await (await request.get("/api/flashcards/due-summary")).json();
+
+  await page.goto(`/notebook/flashcards/${deck.id}/cards`);
+  await expect(page.getByTestId("flashcard-front")).toContainText("browse one");
+
+  // Track progress swaps ←/→ for ✗/✓ — a session-local sort, not a grade.
+  await page.getByLabel("Track progress").check();
+  await page.getByTestId("flashcard-flip").click();
+  await page.getByRole("button", { name: "Know it" }).click();
+  await expect(page.getByTestId("flashcard-front")).toContainText("browse two");
+  await page.getByRole("button", { name: "Still learning" }).click();
+
+  await expect(page.getByText("1 known · 1 still learning")).toBeVisible();
+  await expect(page.getByText("None of this touched your review schedule.")).toBeVisible();
+
+  const dueAfter = await (await request.get("/api/flashcards/due-summary")).json();
+  expect(dueAfter.total).toBe(dueBefore.total);
+
+  // The ✗ pile earns a second pass — the reason to sort at all.
+  await page.getByRole("button", { name: /REVIEW THE 1 STILL LEARNING/ }).click();
+  await expect(page.getByTestId("flashcard-front")).toContainText("browse two");
+  await expect(page.getByText("round 2")).toBeVisible();
+});
+
+test("starring a card in browse mode persists, because it is not session state", async ({
+  page,
+  request,
+}) => {
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e star deck" } })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: { cards: [{ front: "star me", back: "starred" }] },
+  });
+
+  await page.goto(`/notebook/flashcards/${deck.id}/cards`);
+  await page.getByRole("button", { name: "Star this card" }).click();
+  await expect(page.getByRole("button", { name: "Unstar this card" })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Unstar this card" })).toBeVisible();
+});
