@@ -38,6 +38,7 @@ from backend.features.notes.router import build_notes_router
 from backend.features.quick_links.router import build_quick_links_router
 from backend.features.review.router import build_review_router
 from backend.features.search.router import build_search_router
+from backend.features.study.corpus import course_corpus
 from backend.features.study.router import build_study_router
 from backend.features.system.router import build_system_router
 from backend.features.tasks.router import build_tasks_router
@@ -251,7 +252,20 @@ def create_app(
     )
     app.include_router(build_system_router(resolved, model_prober, model_puller))
     app.include_router(build_tasks_router(resolved))
-    app.include_router(build_flashcards_router(resolved))
+    app.include_router(
+        build_flashcards_router(
+            resolved,
+            generator or _default_generator("flashcards"),
+            # The same corpus the study guide and the practice exam read, so a
+            # generated deck honours the SOURCES selection instead of parsing
+            # one hand-authored file that nothing writes.
+            # `index` is the factory, not an instance -- the study router calls it
+            # the same way. Calling it per request is what keeps a test's fake
+            # index injectable.
+            lambda course, sources: course_corpus(index(), course, sources),
+            job_runner=ingest_job_runner,
+        )
+    )
     app.include_router(build_quick_links_router(resolved))
     app.include_router(build_search_router(resolved, index))
     app.include_router(build_index_router(resolved, index, job_runner=ingest_job_runner))

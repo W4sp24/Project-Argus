@@ -16,13 +16,18 @@ that nothing in Argus ever wrote, which is why flashcards were unreachable.
 from __future__ import annotations
 
 import sqlite3
+import threading
+from collections.abc import Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.flashcards import store, vault
+from backend.features.flashcards.jobs import run_deck_job
 from backend.features.flashcards.parsing import (
     FIELD_DELIMITERS,
     ROW_DELIMITERS,
@@ -37,6 +42,7 @@ from backend.features.flashcards.store import (
     FlashcardsError,
     GradeResult,
 )
+from backend.features.ingest import store as jobstore
 
 
 class CreateDeckRequest(BaseModel):
@@ -100,6 +106,16 @@ class MatchBest(BaseModel):
     best_ms: int | None
 
 
+class GenerateDeckRequest(BaseModel):
+    course: str
+    #: The SOURCES-rail selection. `None` means the whole course, which is what
+    #: a caller with no rail (the Notebook overview) sends.
+    sources: list[str] | None = None
+    model: str | None = None
+    n: int = 20
+    title: str | None = None
+
+
 class CardsAdded(BaseModel):
     added: int
 
@@ -114,9 +130,29 @@ class CardDeleteSummary(BaseModel):
     reviews_removed: int
 
 
-def build_flashcards_router(settings: Settings) -> APIRouter:
-    """All /api/flashcards routes."""
+def _default_job_runner(run: Callable[[], None]) -> None:
+    """Run a job on a daemon thread. Replaced in tests by a deterministic one."""
+    threading.Thread(target=run, daemon=True).start()
+
+
+def build_flashcards_router(
+    settings: Settings,
+    generator: Any = None,
+    corpus_for: Callable[[str, list[str] | None], list[dict[str, Any]]] | None = None,
+    job_runner: Callable[[Callable[[], None]], None] | None = None,
+) -> APIRouter:
+    """All /api/flashcards routes.
+
+    ``generator`` and ``corpus_for`` are only needed by ``POST /decks/generate``;
+    everything else is pure storage. They are optional so a test that only
+    exercises authoring does not have to build a model.
+
+    ``job_runner`` is the same injection the study and ingest routers take, and
+    for the same reason: a test that spawned the real daemon thread would be
+    testing ``threading``.
+    """
     router = APIRouter(prefix="/api/flashcards")
+    run_job = job_runner or _default_job_runner
 
     def db() -> sqlite3.Connection:
         conn = connect(settings.db_path)
@@ -125,6 +161,25 @@ def build_flashcards_router(settings: Settings) -> APIRouter:
 
     def _fail(exc: FlashcardsError, status: int) -> HTTPException:
         return HTTPException(status_code=status, detail=str(exc))
+
+    def _bind_model(model: str | None) -> Any:
+        """Bind the injected generator to a chosen model, if it accepts one.
+
+        Same shape as ``study/router.py::_generator_for``: model-aware
+        generators get the model, single-argument ones (every test fake) keep
+        working untouched.
+        """
+        if not model:
+            return generator
+
+        async def run(prompt: str) -> str:
+            try:
+                call = generator(prompt, model=model)
+            except TypeError:
+                call = generator(prompt)
+            return await call
+
+        return run
 
     # --- decks -------------------------------------------------------------
 
@@ -143,6 +198,59 @@ def build_flashcards_router(settings: Settings) -> APIRouter:
             raise _fail(exc, 422) from exc
         finally:
             conn.close()
+
+    @router.post("/decks/generate")
+    def generate_deck(request: GenerateDeckRequest) -> Any:
+        """Write a deck from the course corpus, in the background.
+
+        The deck row is created here, before the 202, so the response can name
+        the deck the cards will land in and the UI can open it immediately. A
+        generation that fails therefore leaves an empty deck rather than
+        nothing, which is the honest outcome -- and the job row says why.
+
+        The corpus is read here too, not in the job, for the same reason the
+        study router reads it in the handler: "none of the selected sources are
+        indexed" is a 422 about *this request*, and answering it with a 202 and
+        a job that fails a minute later is strictly worse.
+        """
+        if generator is None or corpus_for is None:
+            raise HTTPException(
+                status_code=503, detail="deck generation is not configured on this server"
+            )
+        corpus = corpus_for(request.course, request.sources)
+
+        conn = db()
+        try:
+            deck_id = store.create_deck(
+                conn,
+                title=request.title or f"{request.course} — generated",
+                course=request.course,
+                source="generated",
+            )
+            job_id = jobstore.create_job(
+                conn,
+                target=settings.taxonomy.course_study(request.course),
+                filenames=[f"{request.course} flashcards"],
+                kind="deck",
+                params={"course": request.course, "deck_id": deck_id, "model": request.model},
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+        finally:
+            conn.close()
+
+        run_job(
+            lambda: run_deck_job(
+                job_id,
+                settings=settings,
+                generator=_bind_model(request.model),
+                corpus=corpus,
+                course=request.course,
+                deck_id=deck_id,
+                n=request.n,
+            )
+        )
+        return JSONResponse(status_code=202, content={"job_id": job_id, "deck_id": deck_id})
 
     @router.get("/decks", response_model=list[DeckSummary])
     def decks(course: str | None = None) -> list[DeckSummary]:
