@@ -820,3 +820,62 @@ test("a typed answer with a typo is accepted as a near miss", async ({ page, req
   await page.getByRole("button", { name: "ANSWER" }).click();
   await expect(page.getByText("close enough")).toBeVisible();
 });
+
+test("match pairs against the clock and records a best, changing no schedule", async ({
+  page,
+  request,
+}) => {
+  const PAIRS: Record<string, string> = {
+    "match front one": "match back one",
+    "match front two": "match back two",
+    "match front three": "match back three",
+  };
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e match deck" } })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: { cards: Object.entries(PAIRS).map(([front, back]) => ({ front, back })) },
+  });
+  const dueBefore = (await (await request.get("/api/flashcards/due-summary")).json()).total;
+
+  await page.goto(`/notebook/flashcards/${deck.id}/match`);
+  await expect(page.getByText("0 / 3 paired")).toBeVisible();
+
+  // Click a term then its definition. Click-to-pair, not drag: two clicks say
+  // "these go together" as well as a drag does, and are testable.
+  for (const [front, back] of Object.entries(PAIRS)) {
+    await page.getByRole("button", { name: front, exact: true }).click();
+    await page.getByRole("button", { name: back, exact: true }).click();
+  }
+
+  await expect(page.getByText("3 pairs in")).toBeVisible();
+  await expect(page.getByText(/best :: /)).toBeVisible();
+
+  // A game must not be able to corrupt weeks of spacing.
+  const dueAfter = (await (await request.get("/api/flashcards/due-summary")).json()).total;
+  expect(dueAfter).toBe(dueBefore);
+});
+
+test("a mispair clears the selection instead of pairing", async ({ page, request }) => {
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e mispair deck" } })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: {
+      cards: [
+        { front: "alpha front", back: "alpha back" },
+        { front: "bravo front", back: "bravo back" },
+      ],
+    },
+  });
+
+  await page.goto(`/notebook/flashcards/${deck.id}/match`);
+  await page.getByRole("button", { name: "alpha front", exact: true }).click();
+  await page.getByRole("button", { name: "bravo back", exact: true }).click();
+  await expect(page.getByText("0 / 2 paired")).toBeVisible();
+
+  // ...and the right pair still works afterwards.
+  await page.getByRole("button", { name: "alpha front", exact: true }).click();
+  await page.getByRole("button", { name: "alpha back", exact: true }).click();
+  await expect(page.getByText("1 / 2 paired")).toBeVisible();
+});
