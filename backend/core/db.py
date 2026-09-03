@@ -7,8 +7,12 @@ WAL mode — no ORM needed at this size.
 
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 from pathlib import Path
+
+logger = logging.getLogger("argus.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -113,8 +117,52 @@ CREATE TABLE IF NOT EXISTS flashcard_decks (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     course     TEXT NOT NULL,
     title      TEXT NOT NULL,
+    -- Vestigial. Cards live in flashcard_cards below; this is written '[]' and
+    -- read by nothing. Dropping it means a create/copy/drop/rename rebuild of
+    -- a table flashcard_reviews holds a foreign key into -- real risk for a
+    -- cosmetic gain -- so it stays, saying "no cards here", which is true.
     cards_json TEXT NOT NULL
 );
+
+-- Cards are rows, not a JSON blob, because they are now authored: created by
+-- hand, edited, reordered, starred, suspended and imported one at a time.
+--
+-- `card_ref` is the key flashcard_reviews.card_id joins on. Migrated cards
+-- keep the "{deck_id}:{index}" string the blob-era generator produced, which
+-- is precisely what lets _migrate_flashcard_cards leave every review row
+-- untouched. New cards get "c<uuid4 hex>", which cannot collide with that
+-- shape.
+CREATE TABLE IF NOT EXISTS flashcard_cards (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id     INTEGER NOT NULL REFERENCES flashcard_decks(id),
+    card_ref    TEXT    NOT NULL,
+    front       TEXT    NOT NULL,
+    back        TEXT    NOT NULL,
+    hint        TEXT,
+    position    INTEGER NOT NULL,
+    starred     INTEGER NOT NULL DEFAULT 0,
+    suspended   INTEGER NOT NULL DEFAULT 0,
+    -- The vault note an imported card came from, so a deck can say where it
+    -- got its material. NULL for hand-written cards.
+    source_path TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcard_cards_ref
+    ON flashcard_cards(deck_id, card_ref);
+CREATE INDEX IF NOT EXISTS idx_flashcard_cards_deck
+    ON flashcard_cards(deck_id, position);
+
+-- Match is a game, so its scores are activity, not scheduling state: they live
+-- nowhere near flashcard_reviews and nothing reads them into FSRS.
+CREATE TABLE IF NOT EXISTS flashcard_match_scores (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id    INTEGER NOT NULL REFERENCES flashcard_decks(id),
+    elapsed_ms INTEGER NOT NULL,
+    pairs      INTEGER NOT NULL,
+    created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_flashcard_match_deck ON flashcard_match_scores(deck_id, elapsed_ms);
 
 CREATE TABLE IF NOT EXISTS flashcard_reviews (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -514,6 +562,29 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if "failed_stage" not in item_columns:  # migration for pre-failed-stage DBs
         conn.execute("ALTER TABLE ingest_job_items ADD COLUMN failed_stage TEXT")
 
+    # Decks became authorable: they can be renamed, described, and can belong
+    # to no course at all (course = '', since relaxing a NOT NULL in SQLite
+    # would cost a table rebuild to buy nothing a value cannot say).
+    deck_columns = {row["name"] for row in conn.execute("PRAGMA table_info(flashcard_decks)")}
+    if "description" not in deck_columns:
+        conn.execute("ALTER TABLE flashcard_decks ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+    if "source" not in deck_columns:
+        # Everything that existed before decks could be authored was generated,
+        # which is exactly what the default backfills.
+        conn.execute(
+            "ALTER TABLE flashcard_decks ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'"
+        )
+    if "updated_at" not in deck_columns:
+        # No DEFAULT (datetime('now')): SQLite rejects a non-constant default in
+        # ALTER TABLE ADD COLUMN, so it is backfilled below instead.
+        conn.execute("ALTER TABLE flashcard_decks ADD COLUMN updated_at TEXT")
+    # Unconditional, not folded into the branch above: the column has no
+    # default, so *any* INSERT that omits it leaves a NULL -- not just the rows
+    # that predate the column. Running it every open makes the table
+    # self-healing instead of correct exactly once.
+    conn.execute("UPDATE flashcard_decks SET updated_at = created_at WHERE updated_at IS NULL")
+    _migrate_flashcard_cards(conn)
+
     # Multi-instance n8n support (chunk B1): additive columns for databases
     # that reached automation_widgets/automation_runs/automation_workflows
     # before instance_id existed. The two PRIMARY KEY rebuilds that also need
@@ -549,6 +620,58 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_widget_key(conn)
     _migrate_workflow_key(conn)
 
+    conn.commit()
+
+
+def _migrate_flashcard_cards(conn: sqlite3.Connection) -> None:
+    """Explode every legacy ``cards_json`` blob into ``flashcard_cards`` rows.
+
+    Additive by construction. Each row's ``card_ref`` is the very
+    ``"{deck_id}:{index}"`` string the blob-era generator wrote into
+    ``cards_json`` and that ``flashcard_reviews.card_id`` already holds, so
+    **no review row is read, rewritten, or backfilled** and every card keeps
+    the FSRS state it earned. That is the whole reason for keying cards by a
+    string rather than by their new row id.
+
+    Idempotent: a deck that already has rows is skipped, so this runs on every
+    ``init_schema`` call for the life of the database.
+    """
+    migrated = {
+        row["deck_id"] for row in conn.execute("SELECT DISTINCT deck_id FROM flashcard_cards")
+    }
+    for row in conn.execute("SELECT id, cards_json FROM flashcard_decks").fetchall():
+        deck_id = row["id"]
+        if deck_id in migrated:
+            continue
+        try:
+            cards = json.loads(row["cards_json"])
+        except (TypeError, ValueError):
+            # A hand-edited or truncated blob is not worth failing every
+            # database open over -- and this runs on every open. The deck
+            # arrives empty and can be re-imported.
+            logger.warning("flashcard deck %s has unreadable cards_json; leaving it empty", deck_id)
+            continue
+        if not isinstance(cards, list) or not cards:
+            continue
+        rows = [
+            (
+                deck_id,
+                card.get("id") or f"{deck_id}:{index}",
+                card["front"],
+                card["back"],
+                index,
+            )
+            for index, card in enumerate(cards)
+            # A card missing either face is not a card. The blob-era parser
+            # dropped these too; this keeps that contract.
+            if isinstance(card, dict) and card.get("front") and card.get("back")
+        ]
+        if rows:
+            conn.executemany(
+                "INSERT INTO flashcard_cards (deck_id, card_ref, front, back, position)"
+                " VALUES (?, ?, ?, ?, ?)",
+                rows,
+            )
     conn.commit()
 
 
