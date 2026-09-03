@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -12,7 +12,21 @@ from backend.core.db import connect, init_schema
 from backend.features.flashcards import scheduler, store
 from backend.features.flashcards.store import FlashcardsError
 
-NOW = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+
+def _due_base(conn: sqlite3.Connection, deck_id: int) -> datetime:
+    """A clock reading at which this deck's untouched cards are due.
+
+    Read off the deck rather than written as a literal. `created_at` comes from
+    SQLite's `datetime('now')`, and a card with no review yet is due *as of
+    deck creation* -- so pinning `now` to a fixed timestamp silently asserts
+    against wall-clock time. The literal here was written at 09:00 and started
+    failing at 12:19 the same day, which is the worst way to learn this. The
+    one second of slack absorbs `datetime('now')`'s second granularity.
+    """
+    row = conn.execute(
+        "SELECT created_at FROM flashcard_decks WHERE id = ?", (deck_id,)
+    ).fetchone()
+    return scheduler.parse_dt(row["created_at"]) + timedelta(seconds=1)
 
 
 @pytest.fixture()
@@ -62,7 +76,8 @@ def test_listing_reports_the_real_card_count(conn: sqlite3.Connection) -> None:
 def test_deleting_a_deck_takes_its_cards_reviews_and_scores(conn: sqlite3.Connection) -> None:
     deck_id = _deck_with(conn, "a")
     ref = store.load_deck(conn, deck_id).card_list[0].ref
-    store.grade_card(conn, deck_id, ref, "good", NOW)
+    now = _due_base(conn, deck_id)
+    store.grade_card(conn, deck_id, ref, "good", now)
     store.record_match_score(conn, deck_id, 12_000, 6)
 
     assert store.delete_deck(conn, deck_id) == 1
@@ -139,7 +154,8 @@ def test_editing_an_unknown_card_is_an_error(conn: sqlite3.Connection) -> None:
 def test_deleting_a_card_takes_its_review_history(conn: sqlite3.Connection) -> None:
     deck_id = _deck_with(conn, "a", "b")
     ref = store.load_deck(conn, deck_id).card_list[0].ref
-    store.grade_card(conn, deck_id, ref, "good", NOW)
+    now = _due_base(conn, deck_id)
+    store.grade_card(conn, deck_id, ref, "good", now)
     assert store.delete_card(conn, deck_id, ref) == 1
     assert len(store.load_deck(conn, deck_id).card_list) == 1
 
@@ -168,7 +184,8 @@ def test_a_new_card_is_due_immediately_and_carries_a_full_preview(
     conn: sqlite3.Connection,
 ) -> None:
     deck_id = _deck_with(conn, "a")
-    [due] = store.due_cards(conn, deck_id, now=NOW)
+    now = _due_base(conn, deck_id)
+    [due] = store.due_cards(conn, deck_id, now=now)
     assert due.state == "New"
     assert set(due.preview) == {"again", "hard", "good", "easy"}
 
@@ -178,8 +195,9 @@ def test_grading_removes_a_card_from_the_queue_until_it_is_due_again(
 ) -> None:
     deck_id = _deck_with(conn, "a")
     ref = store.load_deck(conn, deck_id).card_list[0].ref
-    result = store.grade_card(conn, deck_id, ref, "easy", NOW)
-    assert store.due_cards(conn, deck_id, now=NOW) == []
+    now = _due_base(conn, deck_id)
+    result = store.grade_card(conn, deck_id, ref, "easy", now)
+    assert store.due_cards(conn, deck_id, now=now) == []
     # ...and comes back exactly when the grade said it would.
     due_at = scheduler.parse_dt(result.due_at)
     assert store.due_cards(conn, deck_id, now=due_at - timedelta(seconds=1)) == []
@@ -189,31 +207,36 @@ def test_grading_removes_a_card_from_the_queue_until_it_is_due_again(
 def test_a_suspended_card_is_never_due(conn: sqlite3.Connection) -> None:
     deck_id = _deck_with(conn, "a", "b")
     ref = store.load_deck(conn, deck_id).card_list[0].ref
+    now = _due_base(conn, deck_id)
     store.update_card(conn, deck_id, ref, suspended=True)
-    assert [c.id for c in store.due_cards(conn, deck_id, now=NOW)] != [ref]
-    assert len(store.due_cards(conn, deck_id, now=NOW)) == 1
+    assert [c.id for c in store.due_cards(conn, deck_id, now=now)] != [ref]
+    assert len(store.due_cards(conn, deck_id, now=now)) == 1
 
 
 def test_the_latest_review_is_the_one_that_counts(conn: sqlite3.Connection) -> None:
     deck_id = _deck_with(conn, "a")
     ref = store.load_deck(conn, deck_id).card_list[0].ref
-    store.grade_card(conn, deck_id, ref, "easy", NOW)
-    store.grade_card(conn, deck_id, ref, "again", NOW + timedelta(minutes=1))
+    now = _due_base(conn, deck_id)
+    store.grade_card(conn, deck_id, ref, "easy", now)
+    store.grade_card(conn, deck_id, ref, "again", now + timedelta(minutes=1))
     # `again` sends it back to the front of the queue, so it is due again soon.
-    assert store.due_cards(conn, deck_id, now=NOW + timedelta(hours=1)) != []
+    assert store.due_cards(conn, deck_id, now=now + timedelta(hours=1)) != []
 
 
 def test_grading_an_unknown_grade_is_an_error(conn: sqlite3.Connection) -> None:
     deck_id = _deck_with(conn, "a")
     ref = store.load_deck(conn, deck_id).card_list[0].ref
+    now = _due_base(conn, deck_id)
     with pytest.raises(FlashcardsError, match="invalid grade"):
-        store.grade_card(conn, deck_id, ref, "brilliant", NOW)
+        store.grade_card(conn, deck_id, ref, "brilliant", now)
 
 
 def test_due_summary_counts_every_deck(conn: sqlite3.Connection) -> None:
     _deck_with(conn, "a", "b")
-    _deck_with(conn, "c")
-    summary = store.due_summary(conn, now=NOW)
+    # The later deck: its creation is the last one every card has to be due by.
+    second = _deck_with(conn, "c")
+    now = _due_base(conn, second)
+    summary = store.due_summary(conn, now=now)
     assert summary.total == 3
     assert sorted(deck.due for deck in summary.decks) == [1, 2]
 
@@ -233,9 +256,10 @@ def test_match_keeps_the_fastest_round(conn: sqlite3.Connection) -> None:
 def test_match_scores_never_touch_the_schedule(conn: sqlite3.Connection) -> None:
     """Match is a game. Playing it must not spend a card's review."""
     deck_id = _deck_with(conn, "a", "b")
-    before = store.due_summary(conn, now=NOW).total
+    now = _due_base(conn, deck_id)
+    before = store.due_summary(conn, now=now).total
     store.record_match_score(conn, deck_id, 9_000, 2)
-    assert store.due_summary(conn, now=NOW).total == before
+    assert store.due_summary(conn, now=now).total == before
 
 
 def test_a_nonsense_match_score_is_refused(conn: sqlite3.Connection) -> None:
