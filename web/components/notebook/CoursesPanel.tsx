@@ -153,7 +153,7 @@ export default function CoursesPanel() {
    *
    * `background: true` is what stops this being a fetch held open for minutes
    * whose only progress state was `busyAction`, a local of a component that
-   * unmounts the moment you leave /study. The backend has accepted the flag
+   * unmounts the moment you leave /notebook. The backend has accepted the flag
    * since the job store was generalised; nothing sent it.
    *
    * The generation is *not* scoped to a source selection here, unlike the
@@ -371,7 +371,7 @@ export default function CoursesPanel() {
                     {busy("exam", course.code) ? "GENERATING…" : "+ EXAM"}
                   </button>
                   <Link
-                    href={`/study/course/${encodeURIComponent(course.code)}`}
+                    href={`/notebook/course/${encodeURIComponent(course.code)}`}
                     className="ml-auto font-mono text-meta uppercase tracking-wide text-[var(--ac)] transition-colors hover:opacity-80"
                   >
                     HUB →

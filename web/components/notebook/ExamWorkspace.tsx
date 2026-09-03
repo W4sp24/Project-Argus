@@ -30,7 +30,7 @@ interface AttemptResult {
 }
 
 /**
- * /study/exam workspace (§4): real exam data end-to-end —
+ * /notebook/exam workspace (§4): real exam data end-to-end —
  * `GET /api/study/exams` lists generated exams, `GET /api/study/exams/{id}`
  * fetches quiz questions (no answers), `POST /api/study/exams/{id}/attempt`
  * grades the whole attempt in one call (backend/study/grader.py). Grading is

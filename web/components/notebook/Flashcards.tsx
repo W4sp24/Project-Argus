@@ -31,7 +31,7 @@ const GRADE_STYLE: Record<FlashcardGrade, string> = {
 };
 
 /**
- * /study/flashcards (§4, §5, §9 file plan): DECK.MANAGE (left) generates a
+ * /notebook/flashcards (§4, §5, §9 file plan): DECK.MANAGE (left) generates a
  * deck by parsing `Q:: A::` pairs from the course's `flashcards.md`
  * (`POST /api/flashcards/decks`) and lists prior decks. STUDY.SESSION
  * (right) pulls the real due queue for the selected deck

@@ -12,7 +12,7 @@ import { useUi } from "@/lib/ui";
 
 const TABS: { mode: Mode; label: string; short: string }[] = [
   { mode: "general", label: "GENERAL", short: "GE" },
-  { mode: "study", label: "STUDY", short: "ST" },
+  { mode: "notebook", label: "NOTEBOOK", short: "NB" },
   { mode: "research", label: "RESEARCH", short: "RE" },
   { mode: "code", label: "CODE", short: "CO" },
   { mode: "system", label: "SYSTEM", short: "SY" },

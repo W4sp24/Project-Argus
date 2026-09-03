@@ -83,7 +83,7 @@ const config: Config = {
         rail: "21.25rem",
       },
       gridTemplateColumns: {
-        // The content + rail split shared by /dashboard, /study, /research,
+        // The content + rail split shared by /dashboard, /notebook, /research,
         // /code, /system and the two study sub-pages. Defined once here so the
         // rail width is not seven independent literals that can drift.
         shell: "minmax(0, 1fr) 21.25rem",

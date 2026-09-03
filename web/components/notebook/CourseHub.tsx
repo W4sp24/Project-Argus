@@ -206,14 +206,14 @@ export function CourseStudio({ code }: { code: string }) {
       // Carries its id. Every EXAM row used to point at the bare route, so
       // clicking "EXAM · Midterm review" opened whatever exam the page
       // happened to load rather than that one.
-      href: `/study/exam?id=${exam.id}`,
+      href: `/notebook/exam?id=${exam.id}`,
     })),
     ...(decks ?? []).map((deck) => ({
       key: `deck-${deck.id}`,
       label: deck.title,
       date: deck.created_at,
       kind: "DECK" as const,
-      href: `/study/flashcards?deck=${deck.id}`,
+      href: `/notebook/flashcards?deck=${deck.id}`,
     })),
     // A guide that took minutes to write used to render as unclickable text,
     // with its path announced only in a toast that had since auto-dismissed.

@@ -3,15 +3,15 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { EngineTrigger } from "@/components/EnginePicker";
-import { CourseChat, CourseStudio } from "@/components/study/CourseHub";
-import CourseSourcesPanel from "@/components/study/CourseSourcesPanel";
+import { CourseChat, CourseStudio } from "@/components/notebook/CourseHub";
+import CourseSourcesPanel from "@/components/notebook/CourseSourcesPanel";
 import { useStudyCourses } from "@/lib/api";
 import { CourseSelectionProvider } from "@/lib/courseSelection";
 
 /**
  * Course Hub (§4 Course Hub) — NotebookLM-style 3-pane workspace opened via a
  * course row's `HUB →`. This is deliberately NOT part of the
- * OVERVIEW | FLASHCARDS | PRACTICE EXAM sub-nav triad (no <StudyTabs/> here)
+ * OVERVIEW | FLASHCARDS | PRACTICE EXAM sub-nav triad (no <NotebookTabs/> here)
  * — it's a separate fullscreen workspace with its own back-button header,
  * matching the spec's Course Hub section which never mentions the tab row.
  *
@@ -19,7 +19,7 @@ import { CourseSelectionProvider } from "@/lib/courseSelection";
  * `GET /api/study/courses/<code>/sources`, chat over `/ws/chat` with the
  * course forced into the retrieval filter (backend/agent/runtime.py), and
  * STUDIO's generate buttons + "generated" list hitting the same endpoints
- * `CoursesPanel`/`Flashcards` use — see components/study/CourseHub.tsx.
+ * `CoursesPanel`/`Flashcards` use — see components/notebook/CourseHub.tsx.
  *
  * The three panes share one `CourseSelectionProvider`: SOURCES ticks the
  * boxes, chat sends them on every frame, STUDIO sends them to the generators.

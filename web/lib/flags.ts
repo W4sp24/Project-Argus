@@ -18,7 +18,7 @@ export const FLAGS = {
   // `+ ADD COURSE` renders the vault's course template client-side and creates
   // it for real via POST /api/note/create (backend/writer.py create_note).
   courseCreate: "enabled",
-  // /study/course/[code] — NotebookLM-style workspace. Chat is real (course
+  // /notebook/course/[code] — NotebookLM-style workspace. Chat is real (course
   // filter forced through search_vault, backend/agent/runtime.py); STUDIO
   // generates real study guides/decks/exams; SOURCES lists real files
   // (GET /api/study/courses/<code>/sources, not markdown-only /api/notes),

@@ -10,7 +10,7 @@ function formatToday(): string {
 }
 
 /**
- * `// SYS.STUDY :: {date}` status line (§4). No typed greeting on Study
+ * `// SYS.NOTEBOOK :: {date}` status line (§4). No typed greeting on Notebook
  * pages — Overview is already stat-tile + two-panel dense, and Flashcards /
  * Practice Exam are workspace pages where a re-typing greeting on every mode
  * switch would just be noise (§10: one typewriter interval at a time is a
@@ -20,10 +20,10 @@ function formatToday(): string {
  * exams are model calls too, and generating a whole exam is exactly where
  * someone wants to pick a cheaper — or a local — model deliberately.
  */
-export default function StudyStatusLine({ title }: { title: string }) {
+export default function NotebookStatusLine({ title }: { title: string }) {
   return (
     <header className="mb-6 animate-rise">
-      <p className="eyebrow mb-2">{`// SYS.STUDY :: ${formatToday()}`}</p>
+      <p className="eyebrow mb-2">{`// SYS.NOTEBOOK :: ${formatToday()}`}</p>
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="min-w-0 flex-1 font-mono text-display font-semibold tracking-tight text-ink-bright">
           {title}

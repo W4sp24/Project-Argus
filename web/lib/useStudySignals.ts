@@ -60,7 +60,7 @@ export function useWeakTopics(): WeakTopic[] {
   const { data: notes } = useNotes();
   const coursesDir = vault?.courses_dir;
   const reviewQueueRe = coursesDir
-    ? new RegExp(`^${coursesDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^/]+)/study/review-queue\\.md$`)
+    ? new RegExp(`^${coursesDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^/]+)/notebook/review-queue\\.md$`)
     : null;
   const reviewPaths = reviewQueueRe
     ? (notes ?? []).filter((note) => reviewQueueRe.test(note.path)).map((note) => note.path)

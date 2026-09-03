@@ -9,27 +9,27 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
-  { href: "/study", label: "OVERVIEW", match: (p) => p === "/study" },
-  { href: "/study/flashcards", label: "FLASHCARDS", match: (p) => p.startsWith("/study/flashcards") },
-  { href: "/study/exam", label: "PRACTICE EXAM", match: (p) => p.startsWith("/study/exam") },
+  { href: "/notebook", label: "OVERVIEW", match: (p) => p === "/notebook" },
+  { href: "/notebook/flashcards", label: "FLASHCARDS", match: (p) => p.startsWith("/notebook/flashcards") },
+  { href: "/notebook/exam", label: "PRACTICE EXAM", match: (p) => p.startsWith("/notebook/exam") },
 ];
 
 /**
- * Study in-mode sub-nav (§4 Study, §5 file plan): OVERVIEW | FLASHCARDS |
- * PRACTICE EXAM — router.push between the three deep-linkable /study* routes.
+ * Notebook in-mode sub-nav (§4 Study, §5 file plan): OVERVIEW | FLASHCARDS |
+ * PRACTICE EXAM — router.push between the three deep-linkable /notebook* routes.
  * Styled like TopBar's mode tabs (segmented, accent underline on the active
- * tab). Not rendered on /study/course/[code] — the Course Hub is its own
+ * tab). Not rendered on /notebook/course/[code] — the Course Hub is its own
  * fullscreen workspace with a distinct header (§4 Course Hub), not part of
  * this triad.
  */
-export default function StudyTabs() {
-  const pathname = usePathname() ?? "/study";
+export default function NotebookTabs() {
+  const pathname = usePathname() ?? "/notebook";
   const router = useRouter();
 
   return (
     <div
       role="tablist"
-      aria-label="Study sections"
+      aria-label="Notebook sections"
       className="mb-6 flex border border-line font-mono text-label uppercase tracking-[0.14em]"
     >
       {TABS.map((tab) => {

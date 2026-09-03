@@ -88,7 +88,7 @@ test("model registry rows show the local/hosted privacy badge", async ({ page })
 });
 
 test("study tab carries the same model selector as chat", async ({ page }) => {
-  await page.goto("/study");
+  await page.goto("/notebook");
   // Study generation is a model call too — the selector would be misleading
   // if it governed only chat. Scoped to the page body: the top bar now carries
   // the same trigger on every route, so an unscoped locator matches both.

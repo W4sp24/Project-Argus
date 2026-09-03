@@ -76,6 +76,21 @@ const nextConfig = {
     ];
   },
 
+  /**
+   * Study became Notebook.
+   *
+   * Unlike `rewrites()` below, these are safe to bake at build time: they are
+   * same-origin and carry no runtime port, so the packaged app resolves them
+   * exactly as dev does. They are what keeps every existing bookmark,
+   * `obsidian://` deep link and note reference to /study working.
+   */
+  async redirects() {
+    return [
+      { source: "/study", destination: "/notebook", permanent: true },
+      { source: "/study/:path*", destination: "/notebook/:path*", permanent: true },
+    ];
+  },
+
   async rewrites() {
     // Next bakes rewrites into .next/routes-manifest.json at build time, so
     // they can't carry a runtime port. Dev and `argus web` use the fixed 8000

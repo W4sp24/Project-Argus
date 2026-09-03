@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import CoursesPanel from "@/components/study/CoursesPanel";
-import StudyStatusLine from "@/components/study/StudyStatusLine";
-import StudyTabs from "@/components/study/StudyTabs";
+import CoursesPanel from "@/components/notebook/CoursesPanel";
+import NotebookStatusLine from "@/components/notebook/NotebookStatusLine";
+import NotebookTabs from "@/components/notebook/NotebookTabs";
 import IngestPanel from "@/components/dashboard/IngestPanel";
 import Panel from "@/components/Panel";
 import StatRow, { type StatItem } from "@/components/StatRow";
@@ -29,17 +29,17 @@ export default function StudyOverviewPage() {
   const cardsDue = dueSummary?.total ?? 0;
 
   const stats: StatItem[] = [
-    { href: "/study", label: "courses", value: courses?.length ?? "–" },
-    { href: "/study/exam", label: "next exam", value: nextExam ? `T-${nextExam.days}` : "—" },
-    { href: "/study/flashcards", label: "cards due", value: dueSummary ? cardsDue : "–" },
-    { href: "/study", label: "streak", value: insights?.study.streak_days ?? "–", unit: "days" },
-    { href: "/study", label: "weak topics", value: weakTopics.length },
+    { href: "/notebook", label: "courses", value: courses?.length ?? "–" },
+    { href: "/notebook/exam", label: "next exam", value: nextExam ? `T-${nextExam.days}` : "—" },
+    { href: "/notebook/flashcards", label: "cards due", value: dueSummary ? cardsDue : "–" },
+    { href: "/notebook", label: "streak", value: insights?.study.streak_days ?? "–", unit: "days" },
+    { href: "/notebook", label: "weak topics", value: weakTopics.length },
   ];
 
   return (
     <>
-      <StudyStatusLine title="Study" />
-      <StudyTabs />
+      <NotebookStatusLine title="Notebook" />
+      <NotebookTabs />
 
       <div className="flex flex-col gap-4">
         <StatRow items={stats} />
@@ -82,7 +82,7 @@ export default function StudyOverviewPage() {
                 {cardsDue} card{cardsDue === 1 ? "" : "s"} due for review.
               </p>
               <Link
-                href="/study/flashcards"
+                href="/notebook/flashcards"
                 className="mt-3 inline-block font-mono text-label uppercase tracking-[0.14em] text-[var(--ac)] transition-opacity hover:opacity-80"
               >
                 OPEN DECK →
@@ -94,7 +94,7 @@ export default function StudyOverviewPage() {
                 {exams?.length ?? 0} generated exam{(exams?.length ?? 0) === 1 ? "" : "s"} ready to take.
               </p>
               <Link
-                href="/study/exam"
+                href="/notebook/exam"
                 className="mt-3 inline-block font-mono text-label uppercase tracking-[0.14em] text-[var(--ac)] transition-opacity hover:opacity-80"
               >
                 TAKE EXAM →

@@ -52,7 +52,7 @@ export interface PaletteAction {
   run: (ctx: PaletteContext) => void;
 }
 
-const MODES: Mode[] = ["general", "study", "research", "code", "system", "automations"];
+const MODES: Mode[] = ["general", "notebook", "research", "code", "system", "automations"];
 
 /** Reindex polling cadence and giving-up point, for the palette's own toast —
  * the run itself has no fixed deadline server-side, this is just how long the

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("study sub-nav deep-links between overview, flashcards, and exam", async ({ page }) => {
-  await page.goto("/study");
+  await page.goto("/notebook");
   await expect(page.getByRole("tab", { name: "OVERVIEW" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("▍COURSES")).toBeVisible(); // exact panel eyebrow — "COURSES" alone matches 3 nodes
   // Seeded vault course. `.first()`: "CS000" appears twice since Phase H —
@@ -9,24 +9,24 @@ test("study sub-nav deep-links between overview, flashcards, and exam", async ({
   await expect(page.getByText("CS000").first()).toBeVisible();
 
   await page.getByRole("tab", { name: "FLASHCARDS" }).click();
-  await expect(page).toHaveURL(/\/study\/flashcards$/);
+  await expect(page).toHaveURL(/\/notebook\/flashcards$/);
   await expect(page.getByText("DECK.MANAGE")).toBeVisible();
   await expect(page.getByText("STUDY.SESSION")).toBeVisible();
 
   await page.getByRole("tab", { name: "PRACTICE EXAM" }).click();
-  await expect(page).toHaveURL(/\/study\/exam$/);
+  await expect(page).toHaveURL(/\/notebook\/exam$/);
   await expect(page.getByText("PRACTICE.EXAM")).toBeVisible();
   await expect(page.getByText("SCORES.HISTORY")).toBeVisible();
 
   // Deep link directly to a sub-page and back to overview.
-  await page.goto("/study/flashcards");
+  await page.goto("/notebook/flashcards");
   await expect(page.getByRole("tab", { name: "FLASHCARDS" })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "OVERVIEW" }).click();
-  await expect(page).toHaveURL(/\/study$/);
+  await expect(page).toHaveURL(/\/notebook$/);
 });
 
 test("flashcard flip and grading advance the mock study session", async ({ page }) => {
-  await page.goto("/study/flashcards");
+  await page.goto("/notebook/flashcards");
   // Named explicitly rather than relying on which deck lands first in the
   // list: there is now a second, notation-carrying deck beside this one.
   await page.getByRole("button", { name: /CS000 flashcards/ }).click();
@@ -54,7 +54,7 @@ test("flashcard flip and grading advance the mock study session", async ({ page 
 });
 
 test("a flashcard carrying notation is typeset on both faces", async ({ page }) => {
-  await page.goto("/study/flashcards");
+  await page.goto("/notebook/flashcards");
 
   // Its own deck, selected by name. The suite runs with workers: 1 against one
   // shared vault, so the test above grades its card out of the due queue for
@@ -75,9 +75,9 @@ test("a flashcard carrying notation is typeset on both faces", async ({ page }) 
 });
 
 test("course hub opens from a course row and links back", async ({ page }) => {
-  await page.goto("/study");
+  await page.goto("/notebook");
   await page.getByRole("link", { name: "HUB →" }).click();
-  await expect(page).toHaveURL(/\/study\/course\/CS000$/);
+  await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
   await expect(page.getByText("COURSE.HUB · CS000")).toBeVisible();
   // "Sample Course" is ambiguous here by design: course.md (the hub note
   // itself, title "Sample Course") lives inside 15-Courses/CS000/ and so
@@ -85,7 +85,7 @@ test("course hub opens from a course row and links back", async ({ page }) => {
   await expect(page.locator("header").getByText("Sample Course")).toBeVisible();
 
   await page.getByRole("button", { name: "← BACK" }).click();
-  await expect(page).toHaveURL(/\/study$/);
+  await expect(page).toHaveURL(/\/notebook$/);
 });
 
 // Regression test for the reported bug: "Study … still retains sample data
@@ -93,7 +93,7 @@ test("course hub opens from a course row and links back", async ({ page }) => {
 // React state — the course came right back on the next reload, route
 // change, or app restart. The reload below is the whole point of this test.
 test("deleting a course removes it permanently, even after a reload", async ({ page }) => {
-  await page.goto("/study");
+  await page.goto("/notebook");
 
   await page.getByRole("button", { name: "+ ADD COURSE" }).click();
   await page.getByLabel("Course code").fill("CS999");
@@ -122,7 +122,7 @@ test("deleting a course removes it permanently, even after a reload", async ({ p
 test("uploading through the shared ingest panel lands in materials/ and unlocks GUIDE/EXAM", async ({
   page,
 }) => {
-  await page.goto("/study");
+  await page.goto("/notebook");
 
   const guideButton = page.getByRole("button", { name: "GUIDE" });
   await expect(guideButton).toBeDisabled();
@@ -164,7 +164,7 @@ test("uploading through the shared ingest panel lands in materials/ and unlocks 
 test("the course hub ingests into materials/ and reports every stage in place", async ({
   page,
 }) => {
-  await page.goto("/study/course/CS000");
+  await page.goto("/notebook/course/CS000");
 
   const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
   await expect(sources).toBeVisible();
@@ -198,7 +198,7 @@ test("the course hub ingests into materials/ and reports every stage in place", 
 });
 
 test("unticking a source sticks across a reload and is counted everywhere", async ({ page }) => {
-  await page.goto("/study/course/CS000");
+  await page.goto("/notebook/course/CS000");
 
   const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
   // course.md is seeded by start-backend.mjs, so the rail is never empty.
@@ -225,7 +225,7 @@ test("unticking a source sticks across a reload and is counted everywhere", asyn
 });
 
 test("selecting nothing disables the generators rather than widening them", async ({ page }) => {
-  await page.goto("/study/course/CS000");
+  await page.goto("/notebook/course/CS000");
 
   const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
   await sources.getByRole("button", { name: "NONE" }).click();
@@ -300,7 +300,7 @@ test("a course opened for the first time has everything selected, not nothing", 
   // passed all along and this defect still shipped. Hence: ingest, reload,
   // then look.
   await page.addInitScript(() => window.localStorage.clear());
-  await page.goto("/study");
+  await page.goto("/notebook");
   await page.getByRole("link", { name: "HUB →" }).click();
   await ingestProbe(page, "e2e-fresh-mount");
 
@@ -311,9 +311,9 @@ test("a course opened for the first time has everything selected, not nothing", 
   // never reproduces it — the fetch is still in flight on mount, so the reset
   // runs harmlessly before there is any data to reconcile.
   await page.getByRole("button", { name: "← BACK" }).click();
-  await expect(page).toHaveURL(/\/study$/);
+  await expect(page).toHaveURL(/\/notebook$/);
   await page.getByRole("link", { name: "HUB →" }).click();
-  await expect(page).toHaveURL(/\/study\/course\/CS000$/);
+  await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
 
   const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
   const boxes = sources.getByRole("checkbox");
@@ -331,7 +331,7 @@ test("ALL under a filter selects what is on screen, not what the filter hides", 
   page,
 }) => {
   await page.addInitScript(() => window.localStorage.clear());
-  await page.goto("/study/course/CS000");
+  await page.goto("/notebook/course/CS000");
   await ingestProbe(page, "e2e-filter-probe");
 
   const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
@@ -372,7 +372,7 @@ test("ALL under a filter selects what is on screen, not what the filter hides", 
  * pass a naive "row is clickable" check and still be a regression.
  */
 test("a source row's toggle target is the whole row, not a 14px box", async ({ page }) => {
-  await page.goto("/study/course/CS000");
+  await page.goto("/notebook/course/CS000");
 
   const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
   const box = sources.getByRole("checkbox").first();
@@ -406,7 +406,7 @@ test("shift-click ticks a run, and only the rows on screen", async ({ page }) =>
   // list rather than the visible one re-creates the ALL-under-a-filter bug in
   // a new place. This asserts the range is bounded by what is on screen.
   await page.addInitScript(() => window.localStorage.clear());
-  await page.goto("/study");
+  await page.goto("/notebook");
   await page.getByRole("link", { name: "HUB →" }).click();
 
   // Ingests its own rows so it does not depend on what an earlier spec left
@@ -489,7 +489,7 @@ test("a generation started in the course hub survives leaving the tab", async ({
                 status: "running",
                 kind: "guide",
                 params: { course: "CS000" },
-                target: "15-Courses/CS000/study",
+                target: "15-Courses/CS000/notebook",
                 summary_prompt: "",
                 note_style: "",
                 total: 1,
@@ -502,7 +502,7 @@ test("a generation started in the course hub survives leaving the tab", async ({
     });
   });
 
-  await page.goto("/study/course/CS000");
+  await page.goto("/notebook/course/CS000");
   const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
   await studio.getByRole("button", { name: /^study guide/ }).click();
 
@@ -515,7 +515,7 @@ test("a generation started in the course hub survives leaving the tab", async ({
   // Leaving the route it was started from used to be the end of the story.
   // (The Course Hub renders no sub-nav of its own -- it is a workspace, not
   // one of the three tabbed pages -- so this leaves by URL.)
-  await page.goto("/study/flashcards");
+  await page.goto("/notebook/flashcards");
   await expect(page.getByRole("tab", { name: "FLASHCARDS" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -527,4 +527,27 @@ test("a generation started in the course hub survives leaving the tab", async ({
   await expect(tray).toBeVisible();
   await tray.click();
   await expect(page.getByText("study guide", { exact: true })).toBeVisible();
+});
+
+test("the old study URLs still land on the notebook", async ({ page }) => {
+  // Study became Notebook. Every bookmark, obsidian:// deep link and note
+  // reference to /study predates the rename, so the redirects are what keep
+  // the rename from being a breaking change for the one user who has them.
+  await page.goto("/study");
+  await expect(page).toHaveURL(/\/notebook$/);
+  await expect(page.getByRole("tab", { name: "OVERVIEW" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.goto("/study/flashcards");
+  await expect(page).toHaveURL(/\/notebook\/flashcards$/);
+  await expect(page.getByRole("tab", { name: "FLASHCARDS" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  // Deep paths keep their tail, not just their prefix.
+  await page.goto("/study/course/CS000");
+  await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
 });
