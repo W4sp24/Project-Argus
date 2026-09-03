@@ -6,6 +6,7 @@ import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
+import GenerateDialog from "@/components/notebook/GenerateDialog";
 import {
   createDeck,
   deleteDeck,
@@ -43,6 +44,7 @@ export default function DeckList() {
   const [title, setTitle] = useState("");
   const [course, setCourse] = useState("");
   const [creating, setCreating] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
   const dueFor = (deckId: number) =>
     due?.decks.find((entry) => entry.deck_id === deckId)?.due ?? 0;
@@ -93,12 +95,32 @@ export default function DeckList() {
     <Panel
       label="DECKS"
       headerRight={
-        <Button variant="quiet" onClick={() => setShowForm((value) => !value)}>
-          {showForm ? "CANCEL" : "+ NEW DECK"}
-        </Button>
+        <span className="flex gap-2">
+          {/* Generation lives here as well as in a Course Hub: a hub knows
+              which sources you ticked, but needing to walk into one just to
+              make a deck is the friction this removes. */}
+          <Button variant="quiet" onClick={() => setGenerating(true)}>
+            ✨ GENERATE
+          </Button>
+          <Button variant="quiet" onClick={() => setShowForm((value) => !value)}>
+            {showForm ? "CANCEL" : "+ NEW DECK"}
+          </Button>
+        </span>
       }
     >
       {confirmDialog}
+
+      {generating && (
+        <GenerateDialog
+          kind="deck"
+          // No SOURCES rail out here, so the whole course is the corpus.
+          sources={null}
+          onClose={() => {
+            setGenerating(false);
+            void refresh();
+          }}
+        />
+      )}
 
       {showForm && (
         <form onSubmit={create} className="mb-4 flex flex-wrap items-end gap-2 border-b border-line pb-4">
@@ -150,10 +172,14 @@ export default function DeckList() {
               >
                 <Link href={`/notebook/flashcards/${deck.id}`} className="min-w-0 flex-1">
                   <span className="block truncate text-body text-ink">{deck.title}</span>
-                  <span className="font-mono text-meta text-ink-faint">
+                  <span className="block truncate font-mono text-meta text-ink-faint">
                     {deck.cards} card{deck.cards === 1 ? "" : "s"}
                     {deck.course ? ` · ${deck.course}` : ""} ·{" "}
                     {SOURCE_LABEL[deck.source] ?? deck.source}
+                    {/* What a generated deck was asked for. A job row is
+                        transient; this is where you look weeks later
+                        wondering why one deck is harder than another. */}
+                    {deck.description ? ` · ${deck.description}` : ""}
                   </span>
                 </Link>
                 {dueCount > 0 && (

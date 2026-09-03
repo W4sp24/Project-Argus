@@ -14,6 +14,7 @@ import {
 } from "@/lib/api";
 import { ChatProvider } from "@/lib/chat";
 import { obsidianUri } from "@/lib/citations";
+import GenerateDialog, { type GenerateKind } from "@/components/notebook/GenerateDialog";
 import { useCourseSelection } from "@/lib/courseSelection";
 import { useJobs } from "@/lib/jobs";
 import { selectedModel, useSelectedModel } from "@/lib/models";
@@ -183,6 +184,7 @@ export function CourseStudio({ code }: { code: string }) {
   const { data: vault } = useVault();
   const { paths, available, refresh: refreshSelection } = useCourseSelection();
   const { jobs, track, isBusy } = useJobs();
+  const [generating, setGenerating] = useState<GenerateKind | null>(null);
   const [showAllGenerated, setShowAllGenerated] = useState(false);
   const [showAllTopics, setShowAllTopics] = useState(false);
   const scoped = paths.length < available.length;
@@ -249,48 +251,29 @@ export function CourseStudio({ code }: { code: string }) {
    * caller that never sent it, so every generation was a fetch held open for
    * minutes with its only progress state in a component local.
    */
-  async function startGeneration(kind: "guide" | "exam") {
-    const endpoint = kind === "guide" ? "/api/study/guide" : "/api/study/exam";
-    const label = kind === "guide" ? "study guide" : "practice exam";
+  /**
+   * Queue a study guide. Still one click: a guide has nothing to configure,
+   * unlike a deck or an exam.
+   *
+   * `background: true` is the whole fix for work vanishing on navigation. The
+   * backend has accepted it since the job store was generalised; this was the
+   * caller that never sent it.
+   */
+  async function startGuide() {
     try {
-      const { job_id } = await mutateJSON<{ job_id: string }>(endpoint, {
+      const { job_id } = await mutateJSON<{ job_id: string }>("/api/study/guide", {
         course: code,
         model: selectedModel(),
         sources: paths,
         background: true,
-        ...(kind === "exam" ? { n: 10 } : {}),
       });
       track(job_id);
-      show(`${label} queued — it keeps running if you leave this tab`);
+      show("study guide queued — it keeps running if you leave this tab");
     } catch (error) {
       // A 422 here is about the *request* (nothing selected, nothing indexed)
       // and is answered before a job row exists, which is why it still
       // arrives as a rejected promise rather than as a failed job.
-      show(`${label} could not start: ${error instanceof Error ? error.message : "backend offline?"}`, {
-        tone: "error",
-      });
-    }
-  }
-
-  /**
-   * Generate a deck from the selected sources.
-   *
-   * This used to parse the course's `flashcards.md` and nothing else, which is
-   * why the button carried an apology: the selection genuinely did not apply,
-   * because the file nothing in Argus ever wrote was the only input. It now
-   * reads the same corpus the guide and the exam read, so the apology is gone
-   * and the source count is on the label with its siblings.
-   */
-  async function startDeck() {
-    try {
-      const { job_id } = await mutateJSON<{ job_id: string; deck_id: number }>(
-        "/api/flashcards/decks/generate",
-        { course: code, sources: paths, model: selectedModel() },
-      );
-      track(job_id);
-      show("flashcard deck queued — it keeps running if you leave this tab");
-    } catch (error) {
-      show(`deck could not start: ${error instanceof Error ? error.message : "backend offline?"}`, {
+      show(`study guide could not start: ${error instanceof Error ? error.message : "backend offline?"}`, {
         tone: "error",
       });
     }
@@ -323,21 +306,21 @@ export function CourseStudio({ code }: { code: string }) {
           running={busy("guide")}
           runningLabel="writing the guide"
           disabled={busy("guide") || nothingSelected}
-          onClick={() => void startGeneration("guide")}
+          onClick={() => void startGuide()}
         />
         <StudioAction
           label={`flashcard deck${scopeNote}`}
           running={busy("deck")}
           runningLabel="writing cards"
           disabled={busy("deck") || nothingSelected}
-          onClick={() => void startDeck()}
+          onClick={() => setGenerating("deck")}
         />
         <StudioAction
           label={`practice exam${scopeNote}`}
           running={busy("exam")}
           runningLabel="generating questions"
           disabled={busy("exam") || nothingSelected}
-          onClick={() => void startGeneration("exam")}
+          onClick={() => setGenerating("exam")}
         />
       </div>
 
@@ -396,6 +379,15 @@ export function CourseStudio({ code }: { code: string }) {
           </button>
         )}
       </div>
+
+      {generating && (
+        <GenerateDialog
+          kind={generating}
+          course={code}
+          sources={paths}
+          onClose={() => setGenerating(null)}
+        />
+      )}
 
       {weakTopics.length > 0 && (
         <div className="mt-4 border-t border-line pt-3">

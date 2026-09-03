@@ -961,3 +961,119 @@ test("a file that is not text is refused before anything is read", async ({ page
 
   await expect(page.getByText(/isn't a text file/)).toBeVisible();
 });
+
+test("generation options reach the request, and the deck records them", async ({ page }) => {
+  // Routed rather than live: the claim under test is that what the dialog
+  // collects is what gets sent. Whether a model then honours it is the
+  // backend's contract, covered by tests/features/flashcards/test_generate.py.
+  let sent: Record<string, unknown> | null = null;
+  await page.route("**/api/flashcards/decks/generate", async (route) => {
+    sent = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ job_id: "e2e-deck", deck_id: 999 }),
+    });
+  });
+
+  await page.goto("/notebook/course/CS000");
+  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
+  await studio.getByRole("button", { name: /^flashcard deck/ }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
+  await dialog.getByRole("button", { name: "HARD" }).click();
+
+  // Start from a known state rather than whatever localStorage remembered.
+  for (const style of ["Definition", "Concept", "Cloze", "Application"]) {
+    const box = dialog.getByRole("checkbox", { name: new RegExp(style) });
+    if (await box.isChecked()) await box.uncheck();
+  }
+  await dialog.getByRole("checkbox", { name: /Cloze/ }).check();
+  await dialog.getByLabel("Your instructions (optional)").fill("Keep answers under ten words.");
+  await dialog.getByRole("button", { name: "GENERATE" }).click();
+
+  expect(sent).toMatchObject({
+    course: "CS000",
+    difficulty: "hard",
+    styles: ["cloze"],
+    instructions: "Keep answers under ten words.",
+  });
+  // Not the job tray: the registry drops a tracked id the server does not
+  // know about, and only /decks/generate is routed here. The tray is covered
+  // by "a generation started in the course hub survives leaving the tab".
+  await expect(page.getByText(/flashcard deck queued/)).toBeVisible();
+});
+
+test("a deck needs at least one card type before it can be generated", async ({ page }) => {
+  await page.goto("/notebook/course/CS000");
+  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
+  await studio.getByRole("button", { name: /^flashcard deck/ }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
+  for (const style of ["Definition", "Concept", "Cloze", "Application"]) {
+    const box = dialog.getByRole("checkbox", { name: new RegExp(style) });
+    if (await box.isChecked()) await box.uncheck();
+  }
+  await expect(dialog.getByText("Pick at least one card type.")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+});
+
+test("exams finally send the difficulty and focus the backend has always accepted", async ({
+  page,
+}) => {
+  // /api/study/exam has taken `difficulty` and `topics` since it was written,
+  // and no UI ever sent either — so every exam silently generated at "medium"
+  // with no focus. This is that gap closed.
+  let sent: Record<string, unknown> | null = null;
+  await page.route("**/api/study/exam", async (route) => {
+    sent = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ job_id: "e2e-exam" }),
+    });
+  });
+
+  await page.goto("/notebook/course/CS000");
+  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
+  await studio.getByRole("button", { name: /^practice exam/ }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Generate a practice exam" });
+  // No card types on an exam — those are a flashcard idea.
+  await expect(dialog.getByRole("checkbox", { name: /Cloze/ })).toHaveCount(0);
+
+  await dialog.getByRole("button", { name: "EASY" }).click();
+  await dialog.getByLabel("Focus on (optional)").fill("dynamic programming");
+  await dialog.getByRole("button", { name: "GENERATE" }).click();
+
+  expect(sent).toMatchObject({
+    course: "CS000",
+    difficulty: "easy",
+    topics: "dynamic programming",
+    background: true,
+  });
+});
+
+test("the deck library can generate without walking into a course hub", async ({ page }) => {
+  let sent: Record<string, unknown> | null = null;
+  await page.route("**/api/flashcards/decks/generate", async (route) => {
+    sent = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ job_id: "e2e-lib", deck_id: 998 }),
+    });
+  });
+
+  await page.goto("/notebook/flashcards");
+  await page.getByRole("button", { name: /GENERATE/ }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
+  // Out here there is no SOURCES rail, so a course has to be named.
+  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+  await dialog.getByLabel("Course").selectOption("CS000");
+  await expect(dialog.getByText("reads the whole course")).toBeVisible();
+  await dialog.getByRole("button", { name: "GENERATE" }).click();
+
+  expect(sent).toMatchObject({ course: "CS000", sources: null });
+});
