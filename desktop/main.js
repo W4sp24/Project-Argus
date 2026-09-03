@@ -281,29 +281,13 @@ function createMainWindow() {
       }
       return {
         action: "allow",
-        overrideBrowserWindowOptions: {
-          width: 1280,
-          height: 880,
-          minWidth: 900,
-          minHeight: 600,
-          backgroundColor: "#06040c",
-          title: "Argus · Notebook",
-          icon: path.join(__dirname, "build", "icon.ico"),
-          ...windows.readBounds(notebookStateFile()),
-          // Re-declared rather than assumed inherited. `additionalArguments`
-          // carries the backend port that preload.js reads into
-          // window.__ARGUS__; without it every API call in this window
-          // resolves against the Next origin and 404s -- and only when
-          // packaged, because dev is same-origin through the Next rewrite.
-          webPreferences: {
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: true,
-            webSecurity: true,
-            preload: path.join(__dirname, "preload.js"),
-            additionalArguments: [`--argus-api=${apiOrigin}`],
-          },
-        },
+        // Built in lib/windows.js so the two fields that fail only in a
+        // packaged build -- preload and additionalArguments -- have a test.
+        overrideBrowserWindowOptions: windows.notebookWindowOptions({
+          dirname: __dirname,
+          apiOrigin,
+          bounds: windows.readBounds(notebookStateFile()),
+        }),
       };
     }
     if (/^(https:|obsidian:)/i.test(url)) shell.openExternal(url);

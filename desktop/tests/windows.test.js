@@ -83,3 +83,37 @@ test("nonsense dimensions are refused rather than passed to the window", () => {
   writeBounds(file, { width: null, height: "big" });
   assert.deepEqual(readBounds(file), {});
 });
+
+const { notebookWindowOptions } = require("../lib/windows");
+
+test("the notebook window carries the preload and the backend port", () => {
+  // These two fail ONLY in a packaged build: dev is same-origin through the
+  // Next rewrite, so a window missing them works fine until it ships.
+  const options = notebookWindowOptions({
+    dirname: "C:\app",
+    apiOrigin: "http://127.0.0.1:41234",
+  });
+  assert.equal(options.webPreferences.preload, path.join("C:\app", "preload.js"));
+  assert.deepEqual(options.webPreferences.additionalArguments, [
+    "--argus-api=http://127.0.0.1:41234",
+  ]);
+});
+
+test("the notebook window keeps the shell's security posture", () => {
+  const { webPreferences } = notebookWindowOptions({ dirname: ".", apiOrigin: "http://x" });
+  assert.equal(webPreferences.contextIsolation, true);
+  assert.equal(webPreferences.sandbox, true);
+  assert.equal(webPreferences.nodeIntegration, false);
+  assert.equal(webPreferences.webSecurity, true);
+});
+
+test("remembered bounds override the defaults but never the webPreferences", () => {
+  const options = notebookWindowOptions({
+    dirname: ".",
+    apiOrigin: "http://x",
+    bounds: { width: 1000, height: 700, x: 5, y: 6 },
+  });
+  assert.equal(options.width, 1000);
+  assert.equal(options.x, 5);
+  assert.equal(options.webPreferences.sandbox, true);
+});

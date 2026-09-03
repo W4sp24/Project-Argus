@@ -72,4 +72,40 @@ function writeBounds(file, bounds) {
   }
 }
 
-module.exports = { isNotebookUrl, readBounds, writeBounds };
+/**
+ * The options the Notebook window is opened with.
+ *
+ * Extracted from `main.js` so it is testable: the two fields that matter here
+ * fail *only in the packaged app*, because dev is same-origin through the Next
+ * rewrite and would work with them missing.
+ *
+ *   - `preload` is what defines `window.argus` and `window.__ARGUS__`.
+ *   - `additionalArguments` carries the backend port preload reads out of
+ *     `process.argv`. Without it, `web/lib/api.ts` resolves every call against
+ *     the Next origin and 404s.
+ *
+ * Both are declared explicitly rather than assumed inherited from the opener,
+ * and this is the check that says so.
+ */
+function notebookWindowOptions({ dirname, apiOrigin, bounds = {} }) {
+  return {
+    width: 1280,
+    height: 880,
+    minWidth: 900,
+    minHeight: 600,
+    backgroundColor: "#06040c",
+    title: "Argus · Notebook",
+    icon: path.join(dirname, "build", "icon.ico"),
+    ...bounds,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      preload: path.join(dirname, "preload.js"),
+      additionalArguments: [`--argus-api=${apiOrigin}`],
+    },
+  };
+}
+
+module.exports = { isNotebookUrl, readBounds, writeBounds, notebookWindowOptions };
