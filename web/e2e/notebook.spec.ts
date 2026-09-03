@@ -10,8 +10,7 @@ test("study sub-nav deep-links between overview, flashcards, and exam", async ({
 
   await page.getByRole("tab", { name: "FLASHCARDS" }).click();
   await expect(page).toHaveURL(/\/notebook\/flashcards$/);
-  await expect(page.getByText("DECK.MANAGE")).toBeVisible();
-  await expect(page.getByText("STUDY.SESSION")).toBeVisible();
+  await expect(page.getByText("▍DECKS")).toBeVisible();
 
   await page.getByRole("tab", { name: "PRACTICE EXAM" }).click();
   await expect(page).toHaveURL(/\/notebook\/exam$/);
@@ -25,42 +24,92 @@ test("study sub-nav deep-links between overview, flashcards, and exam", async ({
   await expect(page).toHaveURL(/\/notebook$/);
 });
 
-test("flashcard flip and grading advance the mock study session", async ({ page }) => {
+test("a review session flips, grades, and says what each grade will cost", async ({ page }) => {
   await page.goto("/notebook/flashcards");
-  // Named explicitly rather than relying on which deck lands first in the
-  // list: there is now a second, notation-carrying deck beside this one.
-  await page.getByRole("button", { name: /CS000 flashcards/ }).click();
+  // Named explicitly rather than relying on list order: there is a second,
+  // notation-carrying deck beside this one.
+  await page.getByRole("link", { name: /CS000 flashcards/ }).click();
+  await expect(page).toHaveURL(/\/notebook\/flashcards\/\d+$/);
+
+  await page.getByRole("link", { name: /^REVIEW/ }).click();
+  await expect(page).toHaveURL(/\/review$/);
+
   const front = page.getByTestId("flashcard-front");
   await expect(front).toContainText("What is Big-O of binary search?");
+
   // Both faces stay mounted (CSS backface-visibility, not display:none), so
   // flip state is asserted structurally via the inner wrapper's class, not
   // text visibility — Playwright's visibility check doesn't model 3D backfaces.
   const inner = page.getByTestId("flashcard-inner");
   await expect(inner).not.toHaveClass(/is-flipped/);
-  // The faces are no longer buttons — they render markdown, and an <a> inside
-  // a <button> is invalid while an aria-label built from the raw card text
-  // would have a screen reader read LaTeX source. The flip is its own control.
+
+  // The faces are not buttons — they render markdown, and an <a> inside a
+  // <button> is invalid while an aria-label built from the raw card text would
+  // have a screen reader read LaTeX source. The flip is its own control.
   const flip = page.getByTestId("flashcard-flip");
   await expect(flip).toHaveAttribute("aria-pressed", "false");
   await flip.click();
   await expect(inner).toHaveClass(/is-flipped/);
   await expect(flip).toHaveAttribute("aria-pressed", "true");
 
-  await page.getByRole("button", { name: "GOOD" }).click();
-  // Real wording (Flashcards.tsx): "scheduled :: <grade> — next due <date>" —
-  // the exact due date is FSRS-computed and locale-formatted, so only the
-  // fixed prefix is asserted.
-  await expect(page.getByText(/scheduled :: good — next due/)).toBeVisible();
+  // Every grade button carries its real next interval, computed by FSRS
+  // without committing. Four unlabelled verbs asked the user to guess.
+  const good = page.getByRole("button", { name: /3 · good/ });
+  await expect(good).toContainText(/\d+[mhdy]|mo/);
+
+  await good.click();
+  // The toast reports the same interval the button promised — they come out of
+  // one function, so a drift between them is a bug rather than a rounding.
+  await expect(page.getByText(/good :: back in /)).toBeVisible();
+  await expect(page.getByText("session complete")).toBeVisible();
+});
+
+test("space flips and a number grades, without reaching for the mouse", async ({
+  page,
+  request,
+}) => {
+  // Its own deck, built here. This test *grades*, and grading spends a card
+  // out of the due queue for every later test -- the suite runs workers: 1
+  // against one shared vault, so borrowing a seeded deck would decide whether
+  // the notation test below can see its fixture.
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e keyboard deck" } })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: { cards: [{ front: "keyboard front", back: "keyboard back" }] },
+  });
+
+  // A review session is dozens of identical interactions in a row, which is
+  // exactly the shape that should never require a pointer.
+  await page.goto(`/notebook/flashcards/${deck.id}/review`);
+
+  const inner = page.getByTestId("flashcard-inner");
+  // Wait for the card before pressing anything: this asserts how keys are
+  // handled, not how fast the queue loads, and a keypress into a page that has
+  // not hydrated tests neither.
+  await expect(page.getByTestId("flashcard-front")).toBeAttached();
+
+  await page.keyboard.press("Space");
+  await expect(inner).toHaveClass(/is-flipped/);
+  await page.keyboard.press("Space");
+  await expect(inner).not.toHaveClass(/is-flipped/);
+
+  // A number before the answer is showing flips instead of grading: grading a
+  // card you have not seen the back of is almost always a misfire.
+  await page.keyboard.press("3");
+  await expect(inner).toHaveClass(/is-flipped/);
+  await page.keyboard.press("3");
+  await expect(page.getByText("session complete")).toBeVisible();
 });
 
 test("a flashcard carrying notation is typeset on both faces", async ({ page }) => {
   await page.goto("/notebook/flashcards");
+  await page.getByRole("link", { name: /CS000 notation/ }).click();
 
-  // Its own deck, selected by name. The suite runs with workers: 1 against one
-  // shared vault, so the test above grades its card out of the due queue for
-  // everything that follows — a notation card behind it in the same deck would
-  // be reachable or not depending on test order.
-  await page.getByRole("button", { name: /CS000 notation/ }).click();
+  // Its own deck, reached by name. The suite runs with workers: 1 against one
+  // shared vault, so an earlier test grading a card out of the queue must not
+  // decide whether this one can see its fixture.
+  await page.getByRole("link", { name: /^REVIEW/ }).click();
   const front = page.getByTestId("flashcard-front");
 
   // `.katex-mathml math` rather than `.katex`: that node exists only under
@@ -70,7 +119,7 @@ test("a flashcard carrying notation is typeset on both faces", async ({ page }) 
   await expect(front.locator(".katex-mathml math").first()).toBeAttached();
   await expect(page.getByTestId("flashcard-back").locator(".katex").first()).toBeAttached();
   // The delimiters are gone and nothing failed to parse.
-  await expect(page.getByText("$\\nabla")).toHaveCount(0);
+  await expect(page.getByText("$\nabla")).toHaveCount(0);
   await expect(page.locator(".katex-error")).toHaveCount(0);
 });
 
@@ -580,4 +629,69 @@ test("the notebook opens in a window of its own", async ({ page, context }) => {
   await expect(page.getByRole("tablist", { name: "Mode" })).toBeVisible();
 
   await popup.close();
+});
+
+test("a deck is created, filled by hand, and filled by paste", async ({ page }) => {
+  // Everything this test needs, it builds. Nothing is seeded at startup: the
+  // suite runs workers: 1 against one shared vault, so a startup fixture is
+  // global state that decides other tests' outcomes.
+  await page.goto("/notebook/flashcards");
+  await page.getByRole("button", { name: "+ NEW DECK" }).click();
+  await page.getByLabel("Deck title").fill("Hand-written deck");
+  await page.getByRole("button", { name: "CREATE" }).click();
+
+  await page.getByRole("link", { name: /Hand-written deck/ }).click();
+  await expect(page).toHaveURL(/\/notebook\/flashcards\/\d+$/);
+
+  // Typed in.
+  await page.getByPlaceholder("the question").fill("capital of France");
+  await page.getByPlaceholder("the answer").fill("Paris");
+  await page.getByRole("button", { name: "+ ADD CARD" }).click();
+  await expect(page.getByLabel("Front of card 1")).toHaveValue("capital of France");
+
+  // Edited in place: the list you browse is the form you edit.
+  await page.getByLabel("Back of card 1").fill("Paris, France");
+  await page.getByLabel("Back of card 1").blur();
+  await expect(page.getByText("1 card", { exact: true })).toBeVisible();
+
+  // Pasted. The preview count comes from the browser twin of the server's
+  // parser, so what it promises is what gets created.
+  await page.getByRole("button", { name: "IMPORT" }).click();
+  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  await dialog.getByLabel("Paste rows").fill("ser\tto be\nestar\tto be, temporarily");
+  await expect(dialog.getByText("2 cards will be added")).toBeVisible();
+  await dialog.getByRole("button", { name: "IMPORT 2" }).click();
+
+  await expect(page.getByText("3 cards", { exact: true })).toBeVisible();
+  // Split on the first delimiter only, so a definition keeps its commas.
+  await expect(page.getByLabel("Back of card 3")).toHaveValue("to be, temporarily");
+});
+
+test("importing a note's Q::/A:: tail fills a deck", async ({ page, request }) => {
+  // The fix for the whole feature having been unreachable: ingest writes this
+  // shape into every note it generates, and nothing could read it.
+  await request.post("/api/note/create", {
+    data: {
+      path: "50-Reference/e2e-selftest.md",
+      content: "# Notes\n\nProse.\n\n## Self-test\n\nQ:: what is P\nA:: polynomial time\n",
+    },
+  });
+
+  await page.goto("/notebook/flashcards");
+  await page.getByRole("button", { name: "+ NEW DECK" }).click();
+  await page.getByLabel("Deck title").fill("Imported deck");
+  await page.getByRole("button", { name: "CREATE" }).click();
+  await page.getByRole("link", { name: /Imported deck/ }).click();
+  // The card count only renders once `useDeck` has resolved, so it is the
+  // signal that the page is hydrated and the IMPORT click will be handled.
+  await expect(page.getByText("0 cards", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "IMPORT" }).click();
+  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  await dialog.getByRole("tab", { name: "FROM A NOTE" }).click();
+  await dialog.getByLabel("Note path").fill("50-Reference/e2e-selftest.md");
+  await dialog.getByRole("button", { name: "IMPORT", exact: true }).click();
+
+  await expect(page.getByText("1 card", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Front of card 1")).toHaveValue("what is P");
 });
