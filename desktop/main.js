@@ -11,6 +11,8 @@ const paths = require("./lib/paths");
 const conf = require("./lib/config");
 const prereqs = require("./lib/prereqs");
 const children = require("./lib/children");
+const windows = require("./lib/windows");
+const { isNotebookUrl } = windows;
 const { initUpdater } = require("./lib/updater");
 
 log.transports.file.level = "info";
@@ -19,12 +21,20 @@ log.info(`Argus desktop ${app.getVersion()} starting`);
 let splashWindow = null;
 let onboardingWindow = null;
 let mainWindow = null;
+let notebookWindow = null;
 let updater = null;
 let backendPort = null;
 let nextPort = null;
 let quitting = false;
 
 // --- helpers ---------------------------------------------------------------
+
+/** Where the Notebook window's size and position are remembered. Beside
+ *  config.env in userData, but never inside it -- that file is a strict
+ *  KEY=VALUE contract the Python side parses. */
+function notebookStateFile() {
+  return path.join(app.getPath("userData"), "notebook-window.json");
+}
 
 function stage(stageName, detail) {
   log.info(`boot: ${stageName}${detail ? ` - ${detail}` : ""}`);
@@ -259,12 +269,70 @@ function createMainWindow() {
   });
   mainWindow.setMenuBarVisibility(false);
 
-  // Never open a second BrowserWindow; hand real links to the OS browser.
-  // obsidian: is load-bearing -- backend/journal.py returns obsidian_uri deep
-  // links that the UI renders as "open in Obsidian".
+  // Exactly one extra window may exist: the Notebook. Everything else keeps
+  // the original policy -- real links go to the OS browser, nothing else
+  // opens. obsidian: is load-bearing there: backend/journal.py returns
+  // obsidian_uri deep links the UI renders as "open in Obsidian".
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isNotebookUrl(url, origin)) {
+      if (notebookWindow && !notebookWindow.isDestroyed()) {
+        notebookWindow.focus();
+        return { action: "deny" };
+      }
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 1280,
+          height: 880,
+          minWidth: 900,
+          minHeight: 600,
+          backgroundColor: "#06040c",
+          title: "Argus · Notebook",
+          icon: path.join(__dirname, "build", "icon.ico"),
+          ...windows.readBounds(notebookStateFile()),
+          // Re-declared rather than assumed inherited. `additionalArguments`
+          // carries the backend port that preload.js reads into
+          // window.__ARGUS__; without it every API call in this window
+          // resolves against the Next origin and 404s -- and only when
+          // packaged, because dev is same-origin through the Next rewrite.
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            webSecurity: true,
+            preload: path.join(__dirname, "preload.js"),
+            additionalArguments: [`--argus-api=${apiOrigin}`],
+          },
+        },
+      };
+    }
     if (/^(https:|obsidian:)/i.test(url)) shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  // The child inherits neither the menu-bar setting nor the guards, so it is
+  // given both: the same navigation fence, and the same deny-by-default popup
+  // policy, so it cannot spawn grandchildren unchecked.
+  mainWindow.webContents.on("did-create-window", (child) => {
+    notebookWindow = child;
+    child.setMenuBarVisibility(false);
+    child.webContents.setWindowOpenHandler(({ url }) => {
+      if (/^(https:|obsidian:)/i.test(url)) shell.openExternal(url);
+      return { action: "deny" };
+    });
+    child.webContents.on("will-navigate", (event, url) => {
+      if (url.startsWith(origin)) return;
+      event.preventDefault();
+      if (/^(https:|obsidian:)/i.test(url)) shell.openExternal(url);
+    });
+    const remember = () => {
+      if (!child.isDestroyed()) windows.writeBounds(notebookStateFile(), child.getBounds());
+    };
+    child.on("resize", remember);
+    child.on("move", remember);
+    child.on("closed", () => {
+      notebookWindow = null;
+    });
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (url.startsWith(origin)) return;
@@ -285,6 +353,9 @@ function createMainWindow() {
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+    // Otherwise the app keeps running with only the Notebook visible and no
+    // way back to any other mode -- its bar has no six-mode strip by design.
+    if (notebookWindow && !notebookWindow.isDestroyed()) notebookWindow.close();
   });
 
   mainWindow.loadURL(`${origin}/dashboard`);

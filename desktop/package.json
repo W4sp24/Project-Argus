@@ -12,7 +12,8 @@
     "dev": "cross-env ARGUS_DEV=1 electron .",
     "pack": "npm run icon && electron-builder --win --dir",
     "dist": "npm run icon && electron-builder --win",
-    "release": "npm run icon && electron-builder --win --publish always"
+    "release": "npm run icon && electron-builder --win --publish always",
+    "test": "node --test \"tests/*.test.js\""
   },
   "dependencies": {
     "electron-log": "^5.2.0",
