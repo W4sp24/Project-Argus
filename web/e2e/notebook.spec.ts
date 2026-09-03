@@ -754,3 +754,69 @@ test("starring a card in browse mode persists, because it is not session state",
   await page.reload();
   await expect(page.getByRole("button", { name: "Unstar this card" })).toBeVisible();
 });
+
+test("learn escalates from choosing to typing, and feeds the same schedule", async ({
+  page,
+  request,
+}) => {
+  const ANSWERS: Record<string, string> = {
+    "capital of France": "Paris",
+    "capital of Japan": "Tokyo",
+    "capital of Peru": "Lima",
+    "capital of Egypt": "Cairo",
+  };
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e learn deck" } })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: {
+      cards: Object.entries(ANSWERS).map(([front, back]) => ({ front, back })),
+    },
+  });
+  const dueBefore = (await (await request.get("/api/flashcards/due-summary")).json()).total;
+
+  await page.goto(`/notebook/flashcards/${deck.id}/learn`);
+
+  // An unseen card is asked as multiple choice: recognition before recall.
+  await expect(page.getByText("choose the answer")).toBeVisible();
+
+  // Deterministically answer WRONG, by reading the prompt and clicking an
+  // option that is not its answer. A test that clicks whichever option happens
+  // to be first asserts a different thing on every run.
+  const prompt = (await page.getByText(/^capital of /).first().innerText()).trim();
+  const wrong = Object.values(ANSWERS).find((answer) => answer !== ANSWERS[prompt]);
+  await page.getByRole("button", { name: wrong!, exact: true }).click();
+  await expect(page.getByText("not quite")).toBeVisible();
+
+  // A wrong answer offers the override, and it promotes to a near miss —
+  // never to "I knew that", which would launder a miss into a long interval.
+  await page.getByRole("button", { name: "I WAS RIGHT" }).click();
+  await expect(page.getByText("counted as a near miss")).toBeVisible();
+
+  await page.getByRole("button", { name: "CONTINUE" }).click();
+
+  // Unlike browse and match, learn does spend reviews: the whole point is that
+  // it and REVIEW feed one schedule.
+  const dueAfter = (await (await request.get("/api/flashcards/due-summary")).json()).total;
+  expect(dueAfter).toBeLessThan(dueBefore);
+});
+
+test("a typed answer with a typo is accepted as a near miss", async ({ page, request }) => {
+  // One transposed letter is a typing error, not ignorance. Being unfair here
+  // teaches the schedule a lie.
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e typing deck" } })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: { cards: [{ front: "the powerhouse of the cell", back: "mitochondria" }] },
+  });
+
+  await page.goto(`/notebook/flashcards/${deck.id}/learn`);
+  // A one-card deck cannot pose multiple choice — one distractor is a coin
+  // flip and none answers itself — so it falls back to typing.
+  await expect(page.getByText("type the answer")).toBeVisible();
+
+  await page.getByLabel("Your answer").fill("mitochondira");
+  await page.getByRole("button", { name: "ANSWER" }).click();
+  await expect(page.getByText("close enough")).toBeVisible();
+});
