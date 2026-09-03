@@ -1,44 +1,62 @@
-"""Flashcard decks parsed from the vault, scheduled with real FSRS.
+"""Decks and cards, as rows you can author.
 
-Decks are generated from ``Q:: A::`` pairs in a course's
-``<courses>/<CODE>/flashcards.md`` note (mirrors ``backend/features/study/corpus.py``'s
-vault-relative course layout, see :mod:`backend.core.taxonomy`) and persisted as a JSON blob
-(``flashcard_decks.cards_json``), the same JSON-blob-column shape
-``backend/study/practice_exam.py`` uses for ``exams.questions_json``.
+A deck used to be a course name plus a JSON blob of cards parsed once from
+``<courses>/<CODE>/flashcards.md`` — a file nothing in Argus ever wrote. That
+made the whole feature unreachable unless you hand-authored it, and made every
+card immutable once created.
 
-Per-card scheduling state is normalized activity, one row per grading event
-in ``flashcard_reviews`` — mirroring ``attempts`` for exams. The **latest**
-row per ``card_id`` is a card's current FSRS state; a card with no review row
-yet is "new" and due immediately.
+Now a deck is a row you can rename and describe, belonging to a course or to
+nothing at all (``course = ''``), holding ``flashcard_cards`` rows you can add,
+edit, reorder, star and suspend. Where the cards *came* from is a separate
+question with four answers, none of which is privileged: typed in
+(``add_cards``), pasted (``parsing.parse_delimited``), imported from any vault
+note (:mod:`backend.features.flashcards.vault`), or generated from the corpus
+(:mod:`backend.features.flashcards.generate`).
 
-Scheduling itself is delegated to ``fsrs`` (PyPI: ``fsrs``, the maintained
-reference implementation of the Free Spaced Repetition Scheduler) rather than
-a hand-rolled reimplementation of the published FSRS update rules.
+Scheduling still belongs to :mod:`backend.features.flashcards.scheduler`, and
+per-card state is still normalized activity: one ``flashcard_reviews`` row per
+grading event, latest row per ``card_id`` wins. Cards are keyed for review by
+``card_ref``, a string, because that is what let the migration from the blob
+preserve every review ever recorded — see
+``backend.core.db._migrate_flashcard_cards``.
 """
 
 from __future__ import annotations
 
-import json
 import sqlite3
+import uuid
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import Any
 
-from fsrs import Card as FsrsCard
-from fsrs import Rating, Scheduler, State
 from pydantic import BaseModel
 
-from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.features.flashcards import scheduler
+from backend.features.flashcards.scheduler import GradeResult, SchedulerError
 
-# Deprecated for 0.3 — bound to Taxonomy()'s default; prefer
-# settings.taxonomy.courses / active_taxonomy().courses.
-COURSES_DIR = Taxonomy().courses
-
-GRADE_TO_RATING: dict[str, Rating] = {
-    "again": Rating.Again,
-    "hard": Rating.Hard,
-    "good": Rating.Good,
-    "easy": Rating.Easy,
-}
+__all__ = [
+    "CardInfo",
+    "DeckDetail",
+    "DeckDueSummary",
+    "DeckSummary",
+    "DueCard",
+    "DueSummary",
+    "FlashcardsError",
+    "GradeResult",
+    "add_cards",
+    "best_match_score",
+    "create_deck",
+    "delete_card",
+    "delete_deck",
+    "due_cards",
+    "due_summary",
+    "grade_card",
+    "list_decks",
+    "load_deck",
+    "record_match_score",
+    "reorder_cards",
+    "update_card",
+    "update_deck",
+]
 
 
 class FlashcardsError(RuntimeError):
@@ -46,38 +64,52 @@ class FlashcardsError(RuntimeError):
 
 
 class DeckSummary(BaseModel):
-    """One generated deck (list view — card count only, not full content)."""
+    """One deck in the library view — counts, not content."""
 
     id: int
     course: str
     title: str
+    description: str
+    source: str
     created_at: str
+    updated_at: str
     cards: int
 
 
+class CardInfo(BaseModel):
+    """One card, as the editor and the study activities see it."""
+
+    ref: str
+    front: str
+    back: str
+    hint: str | None
+    position: int
+    starred: bool
+    suspended: bool
+    source_path: str | None
+
+
+class DeckDetail(DeckSummary):
+    """A deck with all of its cards, ordered."""
+
+    card_list: list[CardInfo]
+
+
 class DueCard(BaseModel):
-    """A card that is due for review, with its current FSRS state label."""
+    """A card due for review, with its FSRS state and what each grade costs."""
 
     id: str
     front: str
     back: str
+    hint: str | None
     due_at: str
     state: str
-
-
-class GradeResult(BaseModel):
-    """FSRS state after grading one card."""
-
-    card_id: str
-    grade: str
-    stability: float
-    difficulty: float
-    due_at: str
-    state: str
+    #: `{again, hard, good, easy}` -> a human interval. Computed, not stored.
+    preview: dict[str, str]
 
 
 class DeckDueSummary(BaseModel):
-    """One deck's due-card count, as part of the whole-vault summary below."""
+    """One deck's due-card count, as part of the whole-vault summary."""
 
     deck_id: int
     course: str
@@ -88,146 +120,324 @@ class DeckDueSummary(BaseModel):
 class DueSummary(BaseModel):
     """Cards due across every deck, in one request.
 
-    ``useDueCards()`` only takes a single deck id, so a whole-vault "cards
-    due" total (the Study overview's stat row + FLASHCARDS panel) would
-    otherwise cost one request per deck. Backs the real replacement for the
-    previously hardcoded ``MOCK_CARDS_DUE = 7``.
+    ``useDueCards()`` only takes a single deck id, so a whole-vault total (the
+    Notebook overview's stat row) would otherwise cost one request per deck.
     """
 
     total: int
     decks: list[DeckDueSummary]
 
 
-def parse_qa_pairs(text: str) -> list[tuple[str, str]]:
-    """Parse ``Q:: <front>`` / ``A:: <back>`` pairs from markdown.
-
-    Each field may continue on following lines up to the next ``Q::``
-    marker (or end of text). Pairs missing either half are dropped.
-    """
-    pairs: list[tuple[str, str]] = []
-    front_lines: list[str] | None = None
-    back_lines: list[str] | None = None
-    mode: str | None = None
-
-    def flush() -> None:
-        if front_lines is not None and back_lines is not None:
-            front = "\n".join(front_lines).strip()
-            back = "\n".join(back_lines).strip()
-            if front and back:
-                pairs.append((front, back))
-
-    for line in text.splitlines():
-        if line.startswith("Q::"):
-            flush()
-            front_lines = [line[3:].strip()]
-            back_lines = None
-            mode = "q"
-        elif line.startswith("A::"):
-            back_lines = [line[3:].strip()]
-            mode = "a"
-        elif mode == "q" and front_lines is not None:
-            front_lines.append(line)
-        elif mode == "a" and back_lines is not None:
-            back_lines.append(line)
-    flush()
-    return pairs
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
-def _flashcards_path(vault_path: Path, course: str, *, taxonomy: Taxonomy | None = None) -> Path:
-    tax = taxonomy or active_taxonomy()
-    return vault_path / tax.courses / course / "flashcards.md"
+def new_card_ref() -> str:
+    """A card key that cannot collide with a migrated ``"{deck}:{index}"``."""
+    return f"c{uuid.uuid4().hex}"
 
 
-def generate_deck(
-    vault_path: Path, conn: sqlite3.Connection, course: str, *, taxonomy: Taxonomy | None = None
+# --- decks -----------------------------------------------------------------
+
+
+def create_deck(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    course: str = "",
+    description: str = "",
+    source: str = "manual",
 ) -> int:
-    """Parse ``flashcards.md`` for ``course`` and persist a new deck.
+    """Create an empty deck. Returns its id.
 
-    Returns the new ``flashcard_decks.id``. Raises :class:`FlashcardsError`
-    if the file is missing or has no valid ``Q:: A::`` pairs.
+    ``course=""`` is a deck that belongs to no course, which is the common case
+    for one typed in by hand. It is a value rather than NULL because relaxing
+    the column's NOT NULL would cost a table rebuild to buy nothing that ``''``
+    cannot already say.
     """
-    path = _flashcards_path(vault_path, course, taxonomy=taxonomy)
-    if not path.is_file():
-        raise FlashcardsError(f"no flashcards.md for course {course}")
-    pairs = parse_qa_pairs(path.read_text(encoding="utf-8"))
-    if not pairs:
-        raise FlashcardsError(f"no Q:: A:: pairs found in {path}")
-
+    clean = title.strip()
+    if not clean:
+        raise FlashcardsError("a deck needs a title")
     cursor = conn.execute(
-        "INSERT INTO flashcard_decks (course, title, cards_json) VALUES (?, ?, ?)",
-        (course, f"{course} flashcards", "[]"),
+        "INSERT INTO flashcard_decks"
+        " (course, title, description, source, cards_json, updated_at)"
+        " VALUES (?, ?, ?, ?, '[]', ?)",
+        (course.strip(), clean, description.strip(), source, _now()),
     )
     conn.commit()
-    deck_id = int(cursor.lastrowid)
-    cards = [
-        {"id": f"{deck_id}:{index}", "front": front, "back": back}
-        for index, (front, back) in enumerate(pairs)
-    ]
-    conn.execute(
-        "UPDATE flashcard_decks SET cards_json = ? WHERE id = ?", (json.dumps(cards), deck_id)
-    )
-    conn.commit()
-    return deck_id
+    return int(cursor.lastrowid)
 
 
-def load_deck(conn: sqlite3.Connection, deck_id: int) -> dict:
-    """Full deck record (id, course, title, created_at, cards)."""
+def _deck_row(conn: sqlite3.Connection, deck_id: int) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM flashcard_decks WHERE id = ?", (deck_id,)).fetchone()
     if row is None:
         raise FlashcardsError(f"no flashcard deck {deck_id}")
-    return {
-        "id": row["id"],
-        "course": row["course"],
-        "title": row["title"],
-        "created_at": row["created_at"],
-        "cards": json.loads(row["cards_json"]),
-    }
+    return row
+
+
+def _summary(row: sqlite3.Row, cards: int) -> DeckSummary:
+    return DeckSummary(
+        id=row["id"],
+        course=row["course"],
+        title=row["title"],
+        description=row["description"],
+        source=row["source"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"] or row["created_at"],
+        cards=cards,
+    )
+
+
+def _card_info(row: sqlite3.Row) -> CardInfo:
+    return CardInfo(
+        ref=row["card_ref"],
+        front=row["front"],
+        back=row["back"],
+        hint=row["hint"],
+        position=row["position"],
+        starred=bool(row["starred"]),
+        suspended=bool(row["suspended"]),
+        source_path=row["source_path"],
+    )
+
+
+def load_deck(conn: sqlite3.Connection, deck_id: int) -> DeckDetail:
+    """A deck and all of its cards, in author order."""
+    row = _deck_row(conn, deck_id)
+    cards = [
+        _card_info(card)
+        for card in conn.execute(
+            "SELECT * FROM flashcard_cards WHERE deck_id = ? ORDER BY position, id", (deck_id,)
+        )
+    ]
+    return DeckDetail(**_summary(row, len(cards)).model_dump(), card_list=cards)
 
 
 def list_decks(conn: sqlite3.Connection, course: str | None = None) -> list[DeckSummary]:
     """All decks, newest first, optionally scoped to one course."""
     rows = conn.execute(
-        "SELECT id, course, title, created_at, cards_json FROM flashcard_decks"
-        + (" WHERE course = ?" if course else "")
-        + " ORDER BY id DESC",
+        "SELECT d.*, (SELECT COUNT(*) FROM flashcard_cards c WHERE c.deck_id = d.id) AS n"
+        " FROM flashcard_decks d"
+        + (" WHERE d.course = ?" if course else "")
+        + " ORDER BY d.id DESC",
         (course,) if course else (),
     ).fetchall()
-    return [
-        DeckSummary(
-            id=row["id"],
-            course=row["course"],
-            title=row["title"],
-            created_at=row["created_at"],
-            cards=len(json.loads(row["cards_json"])),
+    return [_summary(row, row["n"]) for row in rows]
+
+
+def update_deck(
+    conn: sqlite3.Connection,
+    deck_id: int,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    course: str | None = None,
+) -> DeckSummary:
+    """Rename, re-describe, or re-file a deck. Omitted fields are untouched."""
+    _deck_row(conn, deck_id)
+    sets: list[str] = []
+    values: list[Any] = []
+    if title is not None:
+        clean = title.strip()
+        if not clean:
+            raise FlashcardsError("a deck needs a title")
+        sets.append("title = ?")
+        values.append(clean)
+    if description is not None:
+        sets.append("description = ?")
+        values.append(description.strip())
+    if course is not None:
+        sets.append("course = ?")
+        values.append(course.strip())
+    if sets:
+        sets.append("updated_at = ?")
+        values.append(_now())
+        conn.execute(
+            f"UPDATE flashcard_decks SET {', '.join(sets)} WHERE id = ?", (*values, deck_id)
         )
-        for row in rows
-    ]
+        conn.commit()
+    row = _deck_row(conn, deck_id)
+    count = conn.execute(
+        "SELECT COUNT(*) AS n FROM flashcard_cards WHERE deck_id = ?", (deck_id,)
+    ).fetchone()["n"]
+    return _summary(row, count)
 
 
 def delete_deck(conn: sqlite3.Connection, deck_id: int) -> int:
-    """Delete one deck and its reviews (children first). Returns reviews removed.
+    """Delete one deck, its cards, its reviews and its scores. Returns reviews removed.
 
-    Mirrors ``backend/features/study/deletes.py::delete_exam`` — same
-    children-before-parent shape, since ``flashcard_reviews.deck_id``
-    references ``flashcard_decks`` and ``connect()`` runs with
-    ``PRAGMA foreign_keys=ON`` (no ``ON DELETE CASCADE`` on this table).
+    Children first: ``connect()`` runs with ``PRAGMA foreign_keys=ON`` and none
+    of these tables declares ``ON DELETE CASCADE``.
     """
-    exists = conn.execute("SELECT 1 FROM flashcard_decks WHERE id = ?", (deck_id,)).fetchone()
-    if exists is None:
-        raise FlashcardsError(f"no flashcard deck {deck_id}")
+    _deck_row(conn, deck_id)
     reviews_removed = conn.execute(
         "DELETE FROM flashcard_reviews WHERE deck_id = ?", (deck_id,)
     ).rowcount
+    conn.execute("DELETE FROM flashcard_match_scores WHERE deck_id = ?", (deck_id,))
+    conn.execute("DELETE FROM flashcard_cards WHERE deck_id = ?", (deck_id,))
     conn.execute("DELETE FROM flashcard_decks WHERE id = ?", (deck_id,))
     conn.commit()
     return reviews_removed
 
 
-def _parse_dt(value: str) -> datetime:
-    dt = datetime.fromisoformat(value)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt
+# --- cards -----------------------------------------------------------------
+
+
+def add_cards(
+    conn: sqlite3.Connection,
+    deck_id: int,
+    cards: list[dict[str, Any]],
+    *,
+    source_path: str | None = None,
+) -> int:
+    """Append cards to a deck. Returns how many were added.
+
+    Cards missing either face are dropped rather than stored half-formed —
+    every import path relies on this, so the count returned is what the user
+    actually got.
+    """
+    _deck_row(conn, deck_id)
+    start = conn.execute(
+        "SELECT COALESCE(MAX(position), -1) AS p FROM flashcard_cards WHERE deck_id = ?",
+        (deck_id,),
+    ).fetchone()["p"]
+
+    rows = []
+    position = start
+    for card in cards:
+        front = str(card.get("front", "")).strip()
+        back = str(card.get("back", "")).strip()
+        if not front or not back:
+            continue
+        position += 1
+        hint = card.get("hint")
+        rows.append(
+            (
+                deck_id,
+                new_card_ref(),
+                front,
+                back,
+                str(hint).strip() if hint else None,
+                position,
+                card.get("source_path") or source_path,
+            )
+        )
+    if not rows:
+        return 0
+    conn.executemany(
+        "INSERT INTO flashcard_cards"
+        " (deck_id, card_ref, front, back, hint, position, source_path)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.execute("UPDATE flashcard_decks SET updated_at = ? WHERE id = ?", (_now(), deck_id))
+    conn.commit()
+    return len(rows)
+
+
+def _card_row(conn: sqlite3.Connection, deck_id: int, ref: str) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT * FROM flashcard_cards WHERE deck_id = ? AND card_ref = ?", (deck_id, ref)
+    ).fetchone()
+    if row is None:
+        raise FlashcardsError(f"no card {ref} in deck {deck_id}")
+    return row
+
+
+def update_card(
+    conn: sqlite3.Connection,
+    deck_id: int,
+    ref: str,
+    *,
+    front: str | None = None,
+    back: str | None = None,
+    hint: str | None = None,
+    starred: bool | None = None,
+    suspended: bool | None = None,
+) -> CardInfo:
+    """Edit one card. Omitted fields are untouched.
+
+    ``hint=""`` clears the hint; ``hint=None`` leaves it alone. Front and back
+    may not be blanked — a card with one face is not a card.
+    """
+    _card_row(conn, deck_id, ref)
+    sets: list[str] = []
+    values: list[Any] = []
+    for column, value in (("front", front), ("back", back)):
+        if value is None:
+            continue
+        clean = value.strip()
+        if not clean:
+            raise FlashcardsError(f"a card needs a {column}")
+        sets.append(f"{column} = ?")
+        values.append(clean)
+    if hint is not None:
+        sets.append("hint = ?")
+        values.append(hint.strip() or None)
+    if starred is not None:
+        sets.append("starred = ?")
+        values.append(int(starred))
+    if suspended is not None:
+        sets.append("suspended = ?")
+        values.append(int(suspended))
+    if sets:
+        sets.append("updated_at = ?")
+        values.append(_now())
+        conn.execute(
+            f"UPDATE flashcard_cards SET {', '.join(sets)} WHERE deck_id = ? AND card_ref = ?",
+            (*values, deck_id, ref),
+        )
+        conn.execute("UPDATE flashcard_decks SET updated_at = ? WHERE id = ?", (_now(), deck_id))
+        conn.commit()
+    return _card_info(_card_row(conn, deck_id, ref))
+
+
+def delete_card(conn: sqlite3.Connection, deck_id: int, ref: str) -> int:
+    """Delete one card and its review history. Returns reviews removed.
+
+    The reviews go too, deliberately: their ``card_id`` would otherwise point
+    at nothing, and a later card reusing the ref -- which cannot happen for new
+    refs, but can for a re-migrated legacy deck -- would inherit a stranger's
+    schedule.
+    """
+    _card_row(conn, deck_id, ref)
+    reviews_removed = conn.execute(
+        "DELETE FROM flashcard_reviews WHERE deck_id = ? AND card_id = ?", (deck_id, ref)
+    ).rowcount
+    conn.execute("DELETE FROM flashcard_cards WHERE deck_id = ? AND card_ref = ?", (deck_id, ref))
+    conn.execute("UPDATE flashcard_decks SET updated_at = ? WHERE id = ?", (_now(), deck_id))
+    conn.commit()
+    return reviews_removed
+
+
+def reorder_cards(conn: sqlite3.Connection, deck_id: int, order: list[str]) -> None:
+    """Rewrite card positions to match ``order``.
+
+    ``order`` must name every card in the deck exactly once. A partial order is
+    refused rather than applied: silently leaving unnamed cards at stale
+    positions produces an order nobody asked for.
+    """
+    existing = [
+        row["card_ref"]
+        for row in conn.execute(
+            "SELECT card_ref FROM flashcard_cards WHERE deck_id = ?", (deck_id,)
+        )
+    ]
+    if not existing:
+        _deck_row(conn, deck_id)
+    if sorted(order) != sorted(existing):
+        raise FlashcardsError(
+            f"order must name each of the deck's {len(existing)} cards exactly once"
+        )
+    conn.executemany(
+        "UPDATE flashcard_cards SET position = ? WHERE deck_id = ? AND card_ref = ?",
+        [(index, deck_id, ref) for index, ref in enumerate(order)],
+    )
+    conn.execute("UPDATE flashcard_decks SET updated_at = ? WHERE id = ?", (_now(), deck_id))
+    conn.commit()
+
+
+# --- scheduling ------------------------------------------------------------
 
 
 def _latest_reviews(conn: sqlite3.Connection, deck_id: int) -> dict[str, sqlite3.Row]:
@@ -248,54 +458,73 @@ def _latest_reviews(conn: sqlite3.Connection, deck_id: int) -> dict[str, sqlite3
     return {row["card_id"]: row for row in rows}
 
 
-def due_cards(conn: sqlite3.Connection, deck_id: int, now: datetime | None = None) -> list[DueCard]:
-    """Cards in ``deck_id`` due for review, soonest-due first.
+def _state_of(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "state": row["state"],
+        "step": row["step"],
+        "stability": row["stability"],
+        "difficulty": row["difficulty"],
+        "due_at": row["due_at"],
+        "last_review_at": row["last_review_at"],
+    }
 
-    A card with no review row yet is "new" and due as of deck creation
-    (i.e. immediately).
+
+def due_cards(
+    conn: sqlite3.Connection, deck_id: int, now: datetime | None = None
+) -> list[DueCard]:
+    """Cards due for review, soonest-due first.
+
+    A card with no review row yet is new and due as of deck creation, i.e.
+    immediately. A suspended card is never due — that is what suspending is.
     """
-    now = now or datetime.now(UTC)
-    deck = load_deck(conn, deck_id)
+    at = now or datetime.now(UTC)
+    deck = _deck_row(conn, deck_id)
     latest = _latest_reviews(conn, deck_id)
-    deck_created = _parse_dt(deck["created_at"])
+    created = scheduler.parse_dt(deck["created_at"])
 
     scored: list[tuple[datetime, DueCard]] = []
-    for card in deck["cards"]:
-        row = latest.get(card["id"])
-        if row is None:
-            due_dt, due_at, state = deck_created, deck["created_at"], "New"
+    for row in conn.execute(
+        "SELECT * FROM flashcard_cards WHERE deck_id = ? AND suspended = 0 ORDER BY position, id",
+        (deck_id,),
+    ):
+        review_row = latest.get(row["card_ref"])
+        state = _state_of(review_row)
+        if review_row is None:
+            due_dt, due_at, label = created, deck["created_at"], "New"
         else:
-            due_at = row["due_at"]
-            due_dt = _parse_dt(due_at)
-            state = State(row["state"]).name
-        if due_dt <= now:
-            scored.append(
-                (
-                    due_dt,
-                    DueCard(
-                        id=card["id"],
-                        front=card["front"],
-                        back=card["back"],
-                        due_at=due_at,
-                        state=state,
-                    ),
-                )
+            due_at = review_row["due_at"]
+            due_dt = scheduler.parse_dt(due_at)
+            label = scheduler.State(review_row["state"]).name
+        if due_dt > at:
+            continue
+        scored.append(
+            (
+                due_dt,
+                DueCard(
+                    id=row["card_ref"],
+                    front=row["front"],
+                    back=row["back"],
+                    hint=row["hint"],
+                    due_at=due_at,
+                    state=label,
+                    preview=scheduler.preview(state, at),
+                ),
             )
+        )
 
     scored.sort(key=lambda pair: pair[0])
-    return [item for _, item in scored]
+    return [card for _, card in scored]
 
 
 def due_summary(conn: sqlite3.Connection, now: datetime | None = None) -> DueSummary:
     """Due-card counts for every deck, newest deck first."""
-    now = now or datetime.now(UTC)
-    rows = conn.execute(
-        "SELECT id, course, title FROM flashcard_decks ORDER BY id DESC"
-    ).fetchall()
+    at = now or datetime.now(UTC)
     decks: list[DeckDueSummary] = []
     total = 0
-    for row in rows:
-        count = len(due_cards(conn, row["id"], now=now))
+    for row in conn.execute("SELECT id, course, title FROM flashcard_decks ORDER BY id DESC"):
+        count = len(due_cards(conn, row["id"], now=at))
         decks.append(
             DeckDueSummary(deck_id=row["id"], course=row["course"], title=row["title"], due=count)
         )
@@ -306,46 +535,27 @@ def due_summary(conn: sqlite3.Connection, now: datetime | None = None) -> DueSum
 def grade_card(
     conn: sqlite3.Connection,
     deck_id: int,
-    card_id: str,
-    grade: str,
+    ref: str,
+    name: str,
     now: datetime | None = None,
 ) -> GradeResult:
-    """Apply an FSRS review to one card and persist the new state.
-
-    Raises :class:`FlashcardsError` if the deck/card doesn't exist or
-    ``grade`` isn't one of again/hard/good/easy.
-    """
-    if grade not in GRADE_TO_RATING:
-        raise FlashcardsError(f"invalid grade {grade!r} — expected again/hard/good/easy")
-    deck = load_deck(conn, deck_id)
-    if not any(card["id"] == card_id for card in deck["cards"]):
-        raise FlashcardsError(f"no card {card_id} in deck {deck_id}")
-
-    now = now or datetime.now(UTC)
-    row = _latest_reviews(conn, deck_id).get(card_id)
-    if row is None:
-        card = FsrsCard()
-    else:
-        card = FsrsCard(
-            state=State(row["state"]),
-            step=row["step"],
-            stability=row["stability"],
-            difficulty=row["difficulty"],
-            due=_parse_dt(row["due_at"]),
-            last_review=_parse_dt(row["last_review_at"]) if row["last_review_at"] else None,
-        )
-
-    scheduler = Scheduler()
-    new_card, _log = scheduler.review_card(card, GRADE_TO_RATING[grade], review_datetime=now)
+    """Apply an FSRS review to one card and persist the new state."""
+    _card_row(conn, deck_id, ref)
+    at = now or datetime.now(UTC)
+    state = _state_of(_latest_reviews(conn, deck_id).get(ref))
+    try:
+        new_card = scheduler.review(state, name, at)
+    except SchedulerError as exc:
+        raise FlashcardsError(str(exc)) from exc
 
     conn.execute(
         "INSERT INTO flashcard_reviews"
         " (card_id, deck_id, grade, state, step, stability, difficulty, due_at, last_review_at)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            card_id,
+            ref,
             deck_id,
-            grade,
+            name,
             int(new_card.state),
             new_card.step,
             new_card.stability,
@@ -355,12 +565,31 @@ def grade_card(
         ),
     )
     conn.commit()
+    return scheduler.result_for(new_card, name, at, card_id=ref)
 
-    return GradeResult(
-        card_id=card_id,
-        grade=grade,
-        stability=new_card.stability,
-        difficulty=new_card.difficulty,
-        due_at=new_card.due.isoformat(),
-        state=State(new_card.state).name,
+
+# --- match scores ----------------------------------------------------------
+
+
+def record_match_score(conn: sqlite3.Connection, deck_id: int, elapsed_ms: int, pairs: int) -> int:
+    """Record one finished Match round. Returns the deck's best time in ms."""
+    _deck_row(conn, deck_id)
+    if elapsed_ms <= 0 or pairs <= 0:
+        raise FlashcardsError("a match score needs a positive time and pair count")
+    conn.execute(
+        "INSERT INTO flashcard_match_scores (deck_id, elapsed_ms, pairs) VALUES (?, ?, ?)",
+        (deck_id, elapsed_ms, pairs),
     )
+    conn.commit()
+    best = best_match_score(conn, deck_id)
+    # A row was just inserted, so there is always a best.
+    return best if best is not None else elapsed_ms
+
+
+def best_match_score(conn: sqlite3.Connection, deck_id: int) -> int | None:
+    """The deck's fastest recorded round, or ``None`` if it has never been played."""
+    row = conn.execute(
+        "SELECT MIN(elapsed_ms) AS best FROM flashcard_match_scores WHERE deck_id = ?",
+        (deck_id,),
+    ).fetchone()
+    return row["best"] if row and row["best"] is not None else None
