@@ -33,6 +33,14 @@ Argus is currently pre-1.0 (0.x releases).
   rewrite spacing built over weeks.
 - **Decks export back to `flashcards.md`** and round-trip with the note
   importer.
+- **Importing no longer means typing a vault path.** "From a note" is a
+  searchable list of your notes, and you can drop a `.md`/`.txt`/`.csv`/`.tsv`
+  straight onto the dialog — read in the browser, never uploaded, no model
+  involved. The layout is guessed and the guess is always overridable.
+- **Generation takes a difficulty, card types and your own instructions.**
+  Easy/medium/hard, any mix of Definition / Concept / Cloze / Application, and
+  a free-text prompt. Reachable from a Course Hub or the deck library. A
+  generated deck records what it was asked for.
 
 ### Fixed
 
@@ -44,6 +52,9 @@ Argus is currently pre-1.0 (0.x releases).
 - **One generation no longer blocks the others.** A single busy flag disabled
   every action on every course while anything ran, which is not something the
   backend ever asked for.
+- **Practice exams finally honour difficulty and topic focus.** The endpoint
+  has accepted both since it was written and no UI ever sent them, so every
+  exam silently generated at "medium" over the whole course.
 
 #### Note relationships
 

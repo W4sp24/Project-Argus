@@ -40,8 +40,9 @@ Four routes, and only one of them involves a model.
 |---|---|---|
 | **Type them** | the deck page | Front, back, optional hint. `Tab` between fields; a click away saves. |
 | **Paste rows** | IMPORT → PASTE ROWS | Choose what separates front from back (tab, comma, dash) and what separates cards (new line, semicolon). The preview counts what will actually be created. |
-| **From a note** | IMPORT → FROM A NOTE | Reads every `Q::` / `A::` pair in any vault note. |
-| **Generate** | Course Hub → STUDIO → flashcard deck | Writes cards from the sources you have ticked, in the background. |
+| **Drop a file** | IMPORT → A FILE, or drop anywhere on the dialog | `.md`, `.txt`, `.csv`, `.tsv` from your computer. Read in the browser, never uploaded, no model involved. |
+| **From a note** | IMPORT → FROM A NOTE | Search your vault's notes and pick one; reads every `Q::` / `A::` pair in it. |
+| **Generate** | Course Hub → STUDIO, or the deck library's ✨ GENERATE | Writes cards from your sources, in the background, with the options below. |
 
 The third one is worth knowing about: **every note Argus generates already
 carries a `Q::`/`A::` self-test section**, so a lecture note usually imports
@@ -49,6 +50,30 @@ as-is. You do not need a special file.
 
 Paste import splits on the *first* delimiter only, so a definition keeps its
 own commas: `photosynthesis,light, water, and CO2` is one card, not three.
+
+A dropped file has its layout guessed: `Q::` anywhere in it wins outright (so a
+lecture note with an indented line is read as prose, not as a two-column
+table), and otherwise every delimiter pairing is tried and the one producing
+the most cards wins. **The guess is always shown and always overridable** — a
+detector you cannot correct is worse than none, because a wrong guess then
+looks like a broken file.
+
+### Generating with options
+
+Three dials, matching what actually changes the output:
+
+| | |
+|---|---|
+| **Difficulty** | `easy` is recall — one fact, a few words. `medium` wants a short explanation. `hard` combines facts or applies them to a case the material does not state outright. |
+| **Card types** | **Definition** (term → meaning), **Concept** (why/how), **Cloze** (a sentence with `___` blanked out — pairs especially well with Learn's typing), **Application** (a scenario to apply the material to). Pick any combination. |
+| **Your instructions** | Free text: *"keep answers under ten words"*, *"use my professor's terminology"*. It goes last in the prompt, where a later instruction wins — but it cannot change the card format, or nothing would parse. |
+
+Your settings are remembered. A generated deck records what it was asked for
+(`hard · cloze, application · up to 20 cards`) and shows it in the library, so
+weeks later you can see why one deck is harder than another.
+
+Practice exams take the same difficulty and a **Focus on** box, which is the
+same idea as the deck's instructions.
 
 ### Getting cards out
 
