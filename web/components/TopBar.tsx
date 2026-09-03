@@ -8,7 +8,9 @@ import FocusTimer from "@/components/FocusTimer";
 import JobTray from "@/components/JobTray";
 import Button from "@/components/ui/Button";
 import { type Mode, useMode } from "@/lib/mode";
+import { NOTEBOOK_WINDOW } from "@/components/notebook/PopOutButton";
 import { useStandalone } from "@/lib/standalone";
+import { announceStandalone, useNotebookWindowOpen } from "@/lib/windowBus";
 import { useUi } from "@/lib/ui";
 
 const TABS: { mode: Mode; label: string; short: string }[] = [
@@ -136,6 +138,10 @@ function OverflowMenu() {
 function StandaloneBar() {
   const { setPaletteOpen } = useUi();
 
+  // Tells the main window this mode has moved here, so its NOTEBOOK tab
+  // re-focuses this window rather than opening a second copy.
+  useEffect(() => announceStandalone(), []);
+
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-void">
       <div className="shell flex h-14 items-center gap-3 px-4 md:px-8">
@@ -175,6 +181,7 @@ export default function TopBar() {
   // returns null on the server and on the first client render, so both trees
   // hydrate against the same markup.
   const standalone = useStandalone();
+  const notebookElsewhere = useNotebookWindowOpen();
   const { mode, setMode } = useMode();
   const { toggleDrawer, setNoteOpen, setPaletteOpen } = useUi();
   // The drawer and /chat share one ChatProvider, so on /chat the control only
@@ -191,9 +198,29 @@ export default function TopBar() {
   // arrow keys move focus (and activate, per the standard tabs pattern —
   // automatic activation), Home/End jump to the ends, Enter/Space activate
   // explicitly.
+  /**
+   * Going to a mode that already has a window of its own means raising that
+   * window, not navigating this one into a duplicate of it.
+   *
+   * `window.open` with only a name and no URL is the standard way to address
+   * an existing named window; it navigates nothing. If the window has since
+   * gone (and the channel has not caught up), this falls through to ordinary
+   * navigation rather than doing nothing.
+   */
+  function goToMode(next: Mode) {
+    if (next === "notebook" && notebookElsewhere) {
+      const existing = window.open("", NOTEBOOK_WINDOW);
+      if (existing !== null) {
+        existing.focus();
+        return;
+      }
+    }
+    setMode(next);
+  }
+
   function activateTab(index: number) {
     const clamped = (index + TABS.length) % TABS.length;
-    setMode(TABS[clamped].mode);
+    goToMode(TABS[clamped].mode);
     tabRefs.current[clamped]?.focus();
   }
 
@@ -218,7 +245,7 @@ export default function TopBar() {
       case "Enter":
       case " ":
         event.preventDefault();
-        setMode(TABS[index].mode);
+        goToMode(TABS[index].mode);
         break;
       default:
         break;
@@ -276,7 +303,7 @@ export default function TopBar() {
                 aria-label={label}
                 aria-selected={active}
                 tabIndex={active ? 0 : -1}
-                onClick={() => setMode(tabMode)}
+                onClick={() => goToMode(tabMode)}
                 onKeyDown={(event) => onTabKeyDown(event, index)}
                 className={`shrink-0 border-r border-line px-2 py-1.5 transition-colors last:border-r-0 sm:px-2.5 md:px-3 ${
                   active
@@ -285,7 +312,10 @@ export default function TopBar() {
                 }`}
               >
                 <span className="md:hidden">{short}</span>
-                <span className="hidden md:inline">{label}</span>
+                <span className="hidden md:inline">
+                  {label}
+                  {tabMode === "notebook" && notebookElsewhere ? " ↗" : ""}
+                </span>
               </button>
             );
           })}

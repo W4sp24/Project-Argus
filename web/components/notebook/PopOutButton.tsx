@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useStandalone } from "@/lib/standalone";
 
@@ -28,6 +29,7 @@ export const NOTEBOOK_STANDALONE_URL = "/notebook?window=standalone";
  */
 export default function PopOutButton() {
   const { show } = useToast();
+  const router = useRouter();
   const standalone = useStandalone();
 
   // The window that *is* the pop-out must not offer to pop itself out again.
@@ -46,6 +48,9 @@ export default function PopOutButton() {
           return;
         }
         opened.focus();
+        // Yield the mode rather than showing it twice. The NOTEBOOK tab in
+        // this window now re-focuses that one, so nothing is lost.
+        router.push("/dashboard");
       }}
       className="min-h-8 shrink-0 border border-line px-2 py-1 font-mono text-label uppercase tracking-[0.12em] text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
     >
