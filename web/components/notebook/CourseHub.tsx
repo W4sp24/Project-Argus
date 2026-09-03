@@ -6,7 +6,6 @@ import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
 import ChatPanel from "@/components/chat/ChatPanel";
 import {
-  generateFlashcardDeck,
   mutateJSON,
   useCourseSources,
   useFlashcardDecks,
@@ -184,7 +183,6 @@ export function CourseStudio({ code }: { code: string }) {
   const { data: vault } = useVault();
   const { paths, available, refresh: refreshSelection } = useCourseSelection();
   const { jobs, track, isBusy } = useJobs();
-  const [deckBusy, setDeckBusy] = useState(false);
   const [showAllGenerated, setShowAllGenerated] = useState(false);
   const [showAllTopics, setShowAllTopics] = useState(false);
   const scoped = paths.length < available.length;
@@ -275,23 +273,26 @@ export function CourseStudio({ code }: { code: string }) {
   }
 
   /**
-   * Deck generation keeps a local flag, because it is still the synchronous
-   * `flashcards.md` parse rather than a job — a file read that returns in
-   * milliseconds, not a model call that runs for minutes. It moves onto the
-   * job path when it starts generating from the corpus.
+   * Generate a deck from the selected sources.
+   *
+   * This used to parse the course's `flashcards.md` and nothing else, which is
+   * why the button carried an apology: the selection genuinely did not apply,
+   * because the file nothing in Argus ever wrote was the only input. It now
+   * reads the same corpus the guide and the exam read, so the apology is gone
+   * and the source count is on the label with its siblings.
    */
-  async function runDeck() {
-    setDeckBusy(true);
+  async function startDeck() {
     try {
-      const deck = await generateFlashcardDeck(code);
-      show(`deck ready :: ${deck.course} — ${deck.cards} cards`);
-      refreshDecks();
+      const { job_id } = await mutateJSON<{ job_id: string; deck_id: number }>(
+        "/api/flashcards/decks/generate",
+        { course: code, sources: paths, model: selectedModel() },
+      );
+      track(job_id);
+      show("flashcard deck queued — it keeps running if you leave this tab");
     } catch (error) {
-      show(`deck generation failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
+      show(`deck could not start: ${error instanceof Error ? error.message : "backend offline?"}`, {
         tone: "error",
       });
-    } finally {
-      setDeckBusy(false);
     }
   }
 
@@ -325,16 +326,11 @@ export function CourseStudio({ code }: { code: string }) {
           onClick={() => void startGeneration("guide")}
         />
         <StudioAction
-          label="flashcard deck"
-          running={deckBusy}
-          runningLabel="parsing flashcards.md"
-          disabled={deckBusy}
-          onClick={() => void runDeck()}
-          // Decks are parsed from the course's own flashcards.md, never from
-          // the corpus (backend/features/flashcards/store.py), so the source
-          // selection genuinely does not apply. Saying so beats printing a
-          // count this button would not honour.
-          note="reads flashcards.md · ignores the selection"
+          label={`flashcard deck${scopeNote}`}
+          running={busy("deck")}
+          runningLabel="writing cards"
+          disabled={busy("deck") || nothingSelected}
+          onClick={() => void startDeck()}
         />
         <StudioAction
           label={`practice exam${scopeNote}`}

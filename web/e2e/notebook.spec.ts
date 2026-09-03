@@ -283,13 +283,15 @@ test("selecting nothing disables the generators rather than widening them", asyn
   const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
   await expect(studio.getByRole("button", { name: /^study guide/ })).toBeDisabled();
   await expect(studio.getByRole("button", { name: /^practice exam/ })).toBeDisabled();
-  // Decks read flashcards.md, not the corpus, so the selection does not
-  // apply to them — and the button says so instead of going dark.
-  await expect(studio.getByRole("button", { name: "flashcard deck" })).toBeEnabled();
-  await expect(studio.getByText("reads flashcards.md · ignores the selection")).toBeVisible();
+  // Decks are generated from the same corpus now, so the deck button obeys
+  // the selection like its siblings rather than carrying an apology for
+  // ignoring it.
+  await expect(studio.getByRole("button", { name: /^flashcard deck/ })).toBeDisabled();
+  await expect(studio.getByText("reads flashcards.md · ignores the selection")).toHaveCount(0);
 
   await sources.getByRole("button", { name: "ALL" }).click();
   await expect(studio.getByRole("button", { name: /^study guide/ })).toBeEnabled();
+  await expect(studio.getByRole("button", { name: /^flashcard deck/ })).toBeEnabled();
 });
 
 /**

@@ -1013,21 +1013,6 @@ export function exportDeck(deckId: number) {
   return mutateJSON<{ path: string }>(`/api/flashcards/decks/${deckId}/export`, undefined);
 }
 
-/**
- * The old one-call "generate a deck for this course" behaviour, expressed in
- * terms of what actually happens: create a deck, then import the course's
- * `flashcards.md` into it.
- *
- * Interim. It exists so the Course Hub and the old flashcards page keep
- * working while the deck library and corpus generation land; both callers move
- * off it, and then it goes.
- */
-export async function generateFlashcardDeck(course: string) {
-  const deck = await createDeck({ title: `${course} flashcards`, course });
-  const { added } = await importFromNote(deck.id, `15-Courses/${course}/flashcards.md`);
-  return { ...deck, cards: added };
-}
-
 export function postMatchScore(deckId: number, elapsedMs: number, pairs: number) {
   return mutateJSON<{ best_ms: number | null }>(
     `/api/flashcards/decks/${deckId}/match-score`,
