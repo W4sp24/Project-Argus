@@ -154,6 +154,7 @@ export default function DeckPage() {
       {importing && (
         <ImportDialog
           deckId={deck.id}
+          course={deck.course || undefined}
           onClose={() => setImporting(false)}
           onImported={() => void refresh()}
         />

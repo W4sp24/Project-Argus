@@ -1003,9 +1003,48 @@ export function importFromNote(deckId: number, path: string) {
 
 export function importPaste(
   deckId: number,
-  body: { text: string; field: string; row: string },
+  body: { text: string; field: string; row: string; format?: "delimited" | "qa" },
 ) {
   return mutateJSON<{ added: number }>(`/api/flashcards/decks/${deckId}/import/paste`, body);
+}
+
+export interface GenerateOptions {
+  difficulties: string[];
+  styles: string[];
+  default_difficulty: string;
+  default_styles: string[];
+  max_cards: number;
+  max_instructions: number;
+}
+
+/**
+ * What deck generation will accept.
+ *
+ * Read from the server rather than duplicated here, for the same reason
+ * `/import/delimiters` is: the vocabulary lives in one Python module, and a
+ * second copy in the UI is a copy that drifts and starts offering values the
+ * server rejects.
+ */
+export function useGenerateOptions() {
+  return useSWR<GenerateOptions>("/api/flashcards/generate/options", fetcher);
+}
+
+export interface GenerateDeckBody {
+  course: string;
+  sources?: string[] | null;
+  model?: string | null;
+  n?: number;
+  title?: string | null;
+  difficulty?: string;
+  styles?: string[];
+  instructions?: string;
+}
+
+export function generateDeck(body: GenerateDeckBody) {
+  return mutateJSON<{ job_id: string; deck_id: number }>(
+    "/api/flashcards/decks/generate",
+    body,
+  );
 }
 
 /** Write the deck to its course's `flashcards.md`, through the normal writer. */

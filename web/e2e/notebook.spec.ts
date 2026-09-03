@@ -691,8 +691,10 @@ test("importing a note's Q::/A:: tail fills a deck", async ({ page, request }) =
   await page.getByRole("button", { name: "IMPORT" }).click();
   const dialog = page.getByRole("dialog", { name: "Import cards" });
   await dialog.getByRole("tab", { name: "FROM A NOTE" }).click();
-  await dialog.getByLabel("Note path").fill("50-Reference/e2e-selftest.md");
-  await dialog.getByRole("button", { name: "IMPORT", exact: true }).click();
+  // Picked from a list, never typed. Typing a path meant already knowing it,
+  // spelled exactly, with no listing and no completion.
+  await dialog.getByLabel("Search your notes").fill("e2e-selftest");
+  await dialog.getByRole("button", { name: /e2e-selftest/ }).click();
 
   await expect(page.getByText("1 card", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Front of card 1")).toHaveValue("what is P");
@@ -880,4 +882,82 @@ test("a mispair clears the selection instead of pairing", async ({ page, request
   await page.getByRole("button", { name: "alpha front", exact: true }).click();
   await page.getByRole("button", { name: "alpha back", exact: true }).click();
   await expect(page.getByText("1 / 2 paired")).toBeVisible();
+});
+
+test("a dropped file becomes cards without touching the vault", async ({ page, request }) => {
+  // The zone is a real file input as well as a drop target: a drop-only
+  // surface cannot be reached from a keyboard, and setInputFiles exercises the
+  // identical handler a drop would.
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e file deck" } })
+  ).json();
+
+  await page.goto(`/notebook/flashcards/${deck.id}`);
+  await expect(page.getByText("0 cards", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "IMPORT" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  await dialog.getByRole("tab", { name: "A FILE" }).click();
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "verbs.tsv",
+    mimeType: "text/tab-separated-values",
+    buffer: Buffer.from("ser\tto be\nestar\tto be, temporarily\n"),
+  });
+
+  // The format was guessed, and the count previewed is the count that lands.
+  await expect(dialog.getByText("2 cards will be added")).toBeVisible();
+  await dialog.getByRole("button", { name: "IMPORT 2" }).click();
+
+  await expect(page.getByText("2 cards", { exact: true })).toBeVisible();
+  // Split on the first delimiter only, so a definition keeps its commas.
+  await expect(page.getByLabel("Back of card 2")).toHaveValue("to be, temporarily");
+});
+
+test("a dropped markdown file is recognised as Q::/A:: rather than delimited", async ({
+  page,
+  request,
+}) => {
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e md deck" } })
+  ).json();
+
+  await page.goto(`/notebook/flashcards/${deck.id}`);
+  await expect(page.getByText("0 cards", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "IMPORT" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  await dialog.getByRole("tab", { name: "A FILE" }).click();
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "lecture.md",
+    mimeType: "text/markdown",
+    // Contains a tab as well, to prove Q:: wins the detection outright: an
+    // indented aside is prose, not a second column.
+    buffer: Buffer.from("# Lecture\n\n\tan indented aside\n\nQ:: what is P\nA:: polynomial time\n"),
+  });
+
+  await expect(dialog.getByLabel("Q:: / A:: pairs")).toBeChecked();
+  await expect(dialog.getByText("1 card will be added")).toBeVisible();
+  await dialog.getByRole("button", { name: "IMPORT 1" }).click();
+
+  await expect(page.getByLabel("Front of card 1")).toHaveValue("what is P");
+});
+
+test("a file that is not text is refused before anything is read", async ({ page, request }) => {
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e reject deck" } })
+  ).json();
+
+  await page.goto(`/notebook/flashcards/${deck.id}`);
+  await expect(page.getByText("0 cards", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "IMPORT" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  await dialog.getByRole("tab", { name: "A FILE" }).click();
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "slides.pptx",
+    mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    buffer: Buffer.from("not text"),
+  });
+
+  await expect(page.getByText(/isn't a text file/)).toBeVisible();
 });
