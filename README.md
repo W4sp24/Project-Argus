@@ -48,7 +48,7 @@ in the UI, so whether your notes leave the machine is always visible.
   AI-initiated changes still go through the suggest-then-approve **Review** queue —
   direct edit/delete is for changes *you* make yourself.
 - **Today's flow** — quick capture to `00-Inbox/` (click, or drag a file straight
-  onto a course card on **Study**), and the morning **briefing** (07:00 job or
+  onto a course card on **Notebook**), and the morning **briefing** (07:00 job or
   on-demand): schedule, due/overdue, yesterday's leftovers, exam countdowns, weak
   topics.
 - **Planner** — type `/plan tomorrow` in chat; the agent proposes schedule blocks,
