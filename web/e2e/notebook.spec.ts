@@ -1175,3 +1175,55 @@ test("a file Argus cannot read is refused before it is uploaded", async ({ page 
   await expect(page.getByText(/isn't a kind Argus can read/)).toBeVisible();
   await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
 });
+
+test("a deck can be renamed from the library, and the rename sticks", async ({
+  page,
+  request,
+}) => {
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e rename me" } })
+  ).json();
+
+  await page.goto("/notebook/flashcards");
+  const row = page.getByRole("listitem").filter({ hasText: "e2e rename me" });
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "Rename e2e rename me" }).click();
+
+  // Not scoped to `row`: entering edit mode swaps the title out for the field,
+  // so a `hasText` filter on the old title stops matching its own row. Only one
+  // row can be editing at a time, so the page-level field is unambiguous.
+  const field = page.getByRole("textbox", { name: "Deck name" });
+  await field.fill("e2e renamed deck");
+  await field.press("Enter");
+
+  const renamed = page.getByRole("listitem").filter({ hasText: "e2e renamed deck" });
+  await expect(renamed).toBeVisible();
+
+  // Survives a reload: the rename went to the database, not to local state.
+  await page.reload();
+  await expect(page.getByRole("listitem").filter({ hasText: "e2e renamed deck" })).toBeVisible();
+
+  expect(deck.id).toBeTruthy();
+});
+
+test("a courseless deck can be given the course EXPORT needs", async ({ page, request }) => {
+  // EXPORT writes to the course's flashcards.md, so it is disabled without one
+  // -- and its tooltip has said "set a course on this deck" since it shipped,
+  // with nothing in the app able to do that.
+  const deck = await (
+    await request.post("/api/flashcards/decks", { data: { title: "e2e courseless deck" } })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: { cards: [{ front: "needs a course", back: "to be exported" }] },
+  });
+
+  await page.goto(`/notebook/flashcards/${deck.id}`);
+  const exportButton = page.getByRole("button", { name: "EXPORT" });
+  await expect(exportButton).toBeDisabled();
+
+  await page.getByRole("button", { name: "Rename e2e courseless deck" }).click();
+  await page.getByLabel("Deck course").fill("CS000");
+  await page.getByRole("button", { name: "SAVE" }).click();
+
+  await expect(exportButton).toBeEnabled();
+});

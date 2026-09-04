@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
@@ -10,6 +10,7 @@ import GenerateDialog from "@/components/notebook/GenerateDialog";
 import {
   createDeck,
   deleteDeck,
+  updateDeck,
   useDueSummary,
   useFlashcardDecks,
   type FlashcardDeck,
@@ -21,6 +22,25 @@ const SOURCE_LABEL: Record<string, string> = {
   imported: "imported",
   generated: "generated",
 };
+
+/** "15-Courses/CS201/materials/lecture-04.pdf" -> "lecture-04.pdf". */
+function filename(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
+/**
+ * What a deck was written from, in one line.
+ *
+ * Named files rather than a count, because "from lecture-04.pdf" answers the
+ * question a count only restates. Two is the limit: past that the line runs
+ * longer than the deck's own name and stops being scannable.
+ */
+function provenance(paths: string[]): string {
+  if (paths.length === 0) return "";
+  const shown = paths.map(filename);
+  if (shown.length <= 2) return " · from " + shown.join(", ");
+  return " · from " + shown[0] + " +" + (shown.length - 1) + " more";
+}
 
 /**
  * The deck library.
@@ -46,6 +66,14 @@ export default function DeckList() {
   const [creating, setCreating] = useState(false);
   const [generating, setGenerating] = useState(false);
 
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editValue, setEditValue] = useState("");
+  // A rename commits on Enter *or* on the field losing focus, and Escape has to
+  // win when both fire from one keystroke -- it closes the field, which blurs
+  // it. Recording the cancel here makes that trailing blur a no-op instead of a
+  // second, unwanted save.
+  const cancelledRef = useRef(false);
+
   const dueFor = (deckId: number) =>
     due?.decks.find((entry) => entry.deck_id === deckId)?.due ?? 0;
 
@@ -66,6 +94,49 @@ export default function DeckList() {
       });
     } finally {
       setCreating(false);
+    }
+  }
+
+  function startRename(deck: FlashcardDeck) {
+    setEditingId(deck.id);
+    setEditValue(deck.title);
+  }
+
+  function cancelRename() {
+    cancelledRef.current = true;
+    setEditingId(null);
+  }
+
+  async function commitRename(deck: FlashcardDeck) {
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      return;
+    }
+    setEditingId(null);
+    const next = editValue.trim();
+    // Blank means "cancel", not "clear the name": the backend refuses an empty
+    // title, so sending it would only bounce back as an error.
+    if (!next || next === deck.title) return;
+    try {
+      await updateDeck(deck.id, { title: next });
+    } catch (error) {
+      show(`rename failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
+    } finally {
+      // Refetch either way: on success to show the new name, on failure so the
+      // row snaps back to what the server actually holds.
+      await refresh();
+    }
+  }
+
+  function onEditKeyDown(event: KeyboardEvent<HTMLInputElement>, deck: FlashcardDeck) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void commitRename(deck);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelRename();
     }
   }
 
@@ -171,16 +242,43 @@ export default function DeckList() {
                 key={deck.id}
                 className="flex items-center gap-2 border border-line px-3 py-2 transition-colors hover:border-lineHi"
               >
-                <Link href={`/notebook/flashcards/${deck.id}`} className="min-w-0 flex-1">
+                {editingId === deck.id ? (
+                  <input
+                    autoFocus
+                    value={editValue}
+                    onChange={(event) => setEditValue(event.target.value)}
+                    onKeyDown={(event) => onEditKeyDown(event, deck)}
+                    onFocus={() => {
+                      cancelledRef.current = false;
+                    }}
+                    onBlur={() => void commitRename(deck)}
+                    // "Deck name", not "Deck title": the create form above owns
+                    // that label, and one page-level query matching two fields
+                    // is a strict-mode failure in every test that types here.
+                    aria-label="Deck name"
+                    className="min-h-9 min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1.5 font-body text-body text-ink"
+                  />
+                ) : (
+                  <>
+                <Link
+                  href={`/notebook/flashcards/${deck.id}`}
+                  onDoubleClick={(event) => {
+                    event.preventDefault();
+                    startRename(deck);
+                  }}
+                  className="min-w-0 flex-1"
+                >
                   <span className="block truncate text-body text-ink">{deck.title}</span>
                   <span className="block truncate font-mono text-meta text-ink-faint">
                     {deck.cards} card{deck.cards === 1 ? "" : "s"}
                     {deck.course ? ` · ${deck.course}` : ""} ·{" "}
                     {SOURCE_LABEL[deck.source] ?? deck.source}
-                    {/* What a generated deck was asked for. A job row is
-                        transient; this is where you look weeks later
-                        wondering why one deck is harder than another. */}
+                    {/* What a generated deck was asked for, and what it read.
+                        A job row is transient; this is where you look weeks
+                        later wondering why one deck is harder than another, or
+                        which lecture it came out of. */}
                     {deck.description ? ` · ${deck.description}` : ""}
+                    {provenance(deck.source_paths)}
                   </span>
                 </Link>
                 {dueCount > 0 && (
@@ -190,11 +288,20 @@ export default function DeckList() {
                 )}
                 <Button
                   variant="quiet"
+                  aria-label={`Rename ${deck.title}`}
+                  onClick={() => startRename(deck)}
+                >
+                  ✎
+                </Button>
+                <Button
+                  variant="quiet"
                   aria-label={`Delete ${deck.title}`}
                   onClick={() => void remove(deck)}
                 >
                   ×
                 </Button>
+                  </>
+                )}
               </li>
             );
           })}

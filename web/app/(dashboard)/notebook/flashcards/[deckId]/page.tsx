@@ -9,7 +9,7 @@ import Button from "@/components/ui/Button";
 import DeckEditor from "@/components/notebook/flashcards/DeckEditor";
 import ImportDialog from "@/components/notebook/flashcards/ImportDialog";
 import NotebookStatusLine from "@/components/notebook/NotebookStatusLine";
-import { exportDeck, useDeck, useDueCards } from "@/lib/api";
+import { exportDeck, updateDeck, useDeck, useDueCards } from "@/lib/api";
 
 /** One study activity, and what it does to the schedule. Saying so is the point. */
 const ACTIVITIES = [
@@ -55,6 +55,42 @@ export default function DeckPage() {
   const { show } = useToast();
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const [course, setCourse] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  /** Open the editor seeded with what the server currently holds. */
+  function startEditing(current: { title: string; course: string }) {
+    setName(current.title);
+    setCourse(current.course);
+    setEditing(true);
+  }
+
+  /**
+   * Rename the deck, and file it under a course.
+   *
+   * The course half is not a nicety. EXPORT writes to the course's
+   * `flashcards.md`, so a deck without one cannot export -- and the disabled
+   * button has been telling people to "set a course on this deck" since it
+   * shipped, with nothing anywhere in the app able to do it.
+   */
+  async function saveMeta(event: React.FormEvent) {
+    event.preventDefault();
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    try {
+      await updateDeck(deckId, { title: name.trim(), course: course.trim() });
+      setEditing(false);
+      await refresh();
+    } catch (error) {
+      show(`could not save: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function runExport() {
     setExporting(true);
@@ -97,6 +133,13 @@ export default function DeckPage() {
           {deck.course ? ` · ${deck.course}` : ""} · {dueCount} due
         </span>
         <div className="ml-auto flex gap-2">
+          <Button
+            variant="quiet"
+            aria-label={`Rename ${deck.title}`}
+            onClick={() => startEditing(deck)}
+          >
+            ✎ EDIT
+          </Button>
           <Button variant="quiet" onClick={() => setImporting(true)}>
             IMPORT
           </Button>
@@ -114,6 +157,49 @@ export default function DeckPage() {
           </Button>
         </div>
       </div>
+
+      {editing && (
+        <form
+          onSubmit={saveMeta}
+          className="mb-4 flex flex-wrap items-end gap-2 border-b border-line pb-4"
+        >
+          <label className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
+              Deck name
+            </span>
+            <input
+              autoFocus
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              aria-label="Deck name"
+              className="min-h-9 border border-line bg-sunken px-2 py-1.5 font-body text-body text-ink focus:border-lineHi"
+            />
+          </label>
+          <label className="flex w-40 flex-col gap-1">
+            <span className="font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
+              Deck course
+            </span>
+            <input
+              value={course}
+              onChange={(event) => setCourse(event.target.value)}
+              aria-label="Deck course"
+              placeholder="CS201"
+              className="min-h-9 border border-line bg-sunken px-2 py-1.5 font-mono text-label uppercase text-ink focus:border-lineHi"
+            />
+          </label>
+          <Button type="submit" disabled={!name.trim() || saving}>
+            {saving ? "SAVING…" : "SAVE"}
+          </Button>
+          <Button variant="quiet" onClick={() => setEditing(false)}>
+            CANCEL
+          </Button>
+          <p className="w-full font-mono text-micro text-ink-faint">
+            A course is where EXPORT writes this deck&apos;s{" "}
+            <code className="font-mono">flashcards.md</code>. Leave it blank for a deck that
+            belongs to no course.
+          </p>
+        </form>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-shell">
         <DeckEditor deck={deck} onChanged={() => void refresh()} />
