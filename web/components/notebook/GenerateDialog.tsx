@@ -277,6 +277,7 @@ export default function GenerateDialog({
           // Keeping the file is a vault write, so it goes through the normal
           // ingest flow rather than being smuggled in on the generate request.
           if (alsoSave && course) {
+            show("flashcard deck queued — now say where to keep the file");
             setSaving(file);
             setBusy(false);
             return;
@@ -329,6 +330,9 @@ export default function GenerateDialog({
     picking &&
     ((mode === "pick" && picked.length === 0) ||
       (mode === "upload" && !file) ||
+      // Asked to keep the file, but named nowhere to keep it. Silently not
+      // saving it would be the worst of the three possible behaviours.
+      (mode === "upload" && alsoSave && !course) ||
       (mode !== "upload" && !course));
   const blocked = noStyles || busy || needsSource || (!picking && !course);
 
