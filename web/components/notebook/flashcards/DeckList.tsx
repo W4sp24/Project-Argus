@@ -286,9 +286,13 @@ export default function DeckList() {
                     {dueCount} due
                   </span>
                 )}
+                {/* Constant, like ThreadRail's, not `Rename ${deck.title}`:
+                    a name built from the deck's own title collides with any
+                    other control whose name it happens to contain. The row is
+                    found by its text; this is reached through the row. */}
                 <Button
                   variant="quiet"
-                  aria-label={`Rename ${deck.title}`}
+                  aria-label="Rename deck"
                   onClick={() => startRename(deck)}
                 >
                   ✎

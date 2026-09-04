@@ -133,11 +133,12 @@ export default function DeckPage() {
           {deck.course ? ` · ${deck.course}` : ""} · {dueCount} due
         </span>
         <div className="ml-auto flex gap-2">
-          <Button
-            variant="quiet"
-            aria-label={`Rename ${deck.title}`}
-            onClick={() => startEditing(deck)}
-          >
+          {/* A constant name, not `Rename ${deck.title}`. An accessible name
+              that interpolates a deck's title collides with whatever else is on
+              screen -- a deck called "Imported deck" made this button answer to
+              "IMPORT" alongside the IMPORT button beside it. There is one deck
+              on this page, so the title adds nothing anyway. */}
+          <Button variant="quiet" aria-label="Rename this deck" onClick={() => startEditing(deck)}>
             ✎ EDIT
           </Button>
           <Button variant="quiet" onClick={() => setImporting(true)}>

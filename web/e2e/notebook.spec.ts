@@ -1187,7 +1187,7 @@ test("a deck can be renamed from the library, and the rename sticks", async ({
   await page.goto("/notebook/flashcards");
   const row = page.getByRole("listitem").filter({ hasText: "e2e rename me" });
   await expect(row).toBeVisible();
-  await row.getByRole("button", { name: "Rename e2e rename me" }).click();
+  await row.getByRole("button", { name: "Rename deck" }).click();
 
   // Not scoped to `row`: entering edit mode swaps the title out for the field,
   // so a `hasText` filter on the old title stops matching its own row. Only one
@@ -1223,7 +1223,7 @@ test("a courseless deck can be given the course EXPORT needs", async ({ page, re
   const exportButton = page.getByRole("button", { name: "EXPORT" });
   await expect(exportButton).toBeDisabled();
 
-  await page.getByRole("button", { name: "Rename e2e courseless deck" }).click();
+  await page.getByRole("button", { name: "Rename this deck" }).click();
   await page.getByLabel("Deck course").fill("CS000");
   await page.getByRole("button", { name: "SAVE" }).click();
 
