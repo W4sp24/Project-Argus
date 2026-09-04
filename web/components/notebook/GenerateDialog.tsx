@@ -396,10 +396,10 @@ export default function GenerateDialog({
           </div>
         )}
 
-        {!fixedCourse && (!picking || mode !== "upload" || alsoSave) && (
+        {!fixedCourse && (
           <label className="mb-4 block">
             <span className="mb-1 block font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-              Course
+              Course{picking && mode === "upload" ? " (optional)" : ""}
             </span>
             <select
               value={course}
@@ -414,6 +414,14 @@ export default function GenerateDialog({
                 </option>
               ))}
             </select>
+            {picking && mode === "upload" && (
+              // Optional, but not pointless: it is what files the deck under a
+              // course, which is what puts it in that course's DECKS panel.
+              <span className="mt-1 block font-mono text-micro text-ink-faint">
+                a deck can be about a file rather than a course — naming one
+                just files it there
+              </span>
+            )}
           </label>
         )}
 
