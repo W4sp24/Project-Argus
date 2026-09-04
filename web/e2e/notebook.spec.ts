@@ -1203,7 +1203,9 @@ test("a deck can be renamed from the library, and the rename sticks", async ({
   await page.reload();
   await expect(page.getByRole("listitem").filter({ hasText: "e2e renamed deck" })).toBeVisible();
 
-  expect(deck.id).toBeTruthy();
+  // And the deck's own page agrees, because its heading reads the same row.
+  await page.goto(`/notebook/flashcards/${deck.id}`);
+  await expect(page.getByRole("heading", { name: "e2e renamed deck" })).toBeVisible();
 });
 
 test("a courseless deck can be given the course EXPORT needs", async ({ page, request }) => {
