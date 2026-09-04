@@ -41,6 +41,21 @@ Argus is currently pre-1.0 (0.x releases).
   Easy/medium/hard, any mix of Definition / Concept / Cloze / Application, and
   a free-text prompt. Reachable from a Course Hub or the deck library. A
   generated deck records what it was asked for.
+- **Generation asks what to read.** From the deck library you can now sweep a
+  whole course, tick the specific files you want cards from, or hand over a
+  `.pdf`/`.pptx`/`.docx`/`.md` of your own — read once for that deck and never
+  stored, with an opt-in to keep it in the course afterwards. Previously the
+  library's dialog offered a course dropdown and a line promising to read the
+  entire course, with no way to narrow it and no route in for a file that was
+  not already in the vault.
+- **Decks can be renamed.** Inline in the library (`✎`, or double-click),
+  and on the deck page along with the deck's course. Generated decks are now
+  named after what they read instead of all being "CS201 — generated".
+- **A deck records the files it was written from**, shown in the library and in
+  the Course Hub, and used to badge each file in the SOURCES rail with how many
+  decks came out of it.
+- **A course's decks have their own panel in its Course Hub**, with due counts
+  and a link straight into a review session.
 
 ### Fixed
 
@@ -55,6 +70,16 @@ Argus is currently pre-1.0 (0.x releases).
 - **Practice exams finally honour difficulty and topic focus.** The endpoint
   has accepted both since it was written and no UI ever sent them, so every
   exam silently generated at "medium" over the whole course.
+- **A deck's Course Hub row opens that deck.** Every one pointed at
+  `/notebook/flashcards?deck=<id>`, a parameter nothing in the app reads, so it
+  landed on the library and left you to find the deck by eye.
+- **A courseless deck can be given a course.** `EXPORT` is disabled without one
+  and its tooltip said to set a course on the deck — which nothing in the app
+  could do, so a deck created without one could never be exported.
+- **Generating from sources that are not indexed is refused on the request.**
+  It answered `202` and then failed a minute later with "no indexed material for
+  CS201", which is the wrong sentence when you have ticked three files and sends
+  you off to upload material you already have.
 
 #### Note relationships
 

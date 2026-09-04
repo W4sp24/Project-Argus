@@ -42,7 +42,7 @@ Five routes, and only one of them involves a model.
 | **Paste rows** | IMPORT → PASTE ROWS | Choose what separates front from back (tab, comma, dash) and what separates cards (new line, semicolon). The preview counts what will actually be created. |
 | **Drop a file** | IMPORT → A FILE, or drop anywhere on the dialog | `.md`, `.txt`, `.csv`, `.tsv` from your computer. Read in the browser, never uploaded, no model involved. |
 | **From a note** | IMPORT → FROM A NOTE | Search your vault's notes and pick one; reads every `Q::` / `A::` pair in it. |
-| **Generate** | Course Hub → STUDIO, or the deck library's ✨ GENERATE | Writes cards from your sources, in the background, with the options below. |
+| **Generate** | Course Hub → STUDIO, or the deck library's ✨ GENERATE | Writes cards from material you choose, in the background, with the options below. |
 
 **From a note** is worth knowing about: **every note Argus generates already
 carries a `Q::`/`A::` self-test section**, so a lecture note usually imports
@@ -57,6 +57,30 @@ table), and otherwise every delimiter pairing is tried and the one producing
 the most cards wins. **The guess is always shown and always overridable** — a
 detector you cannot correct is worse than none, because a wrong guess then
 looks like a broken file.
+
+### Choosing what it reads
+
+Opened from a Course Hub, generation reads the sources ticked in the SOURCES
+rail — you already answered "from what" before the dialog appeared.
+
+Opened from the deck library there is no rail, so the dialog asks. Three
+answers:
+
+| | |
+|---|---|
+| **Whole course** | Everything indexed under the course you name. |
+| **Pick sources** | The course's files, listed with their index state. Tick the lecture you are actually revising. Nothing is generated until at least one is ticked. |
+| **My own file** | Drop a `.pdf`, `.pptx`, `.docx` or `.md` from your computer. It is read once for this deck and **never stored** — nothing is written to your vault and nothing is indexed. A course is optional here: a deck can be about a PDF rather than about a course. |
+
+Tick **Also keep this file** and the ingest dialog opens once the deck is
+queued, so the file lands in the course's materials and is indexed for next
+time. That is a separate, deliberate act, because saving a file *is* a write to
+your vault.
+
+A deck is named after what it read — the lecture's filename, or
+`CS201 — hard` for a whole-course sweep — and the name is shown before you
+generate, so you can change it. **Deck name** is a normal field; leave it blank
+to take the suggestion.
 
 ### Generating with options
 
@@ -74,6 +98,22 @@ weeks later you can see why one deck is harder than another.
 
 Practice exams take the same difficulty and a **Focus on** box, which is the
 same idea as the deck's instructions.
+
+### Naming, filing and finding a deck
+
+Rename a deck from the library: click the `✎` on its row, or double-click its
+name. `Enter` saves, `Escape` cancels, and the change is in the database — it
+survives a reload.
+
+The deck page's `✎ EDIT` renames it too, and sets its **course**. That matters
+more than it sounds: `EXPORT` writes to the course's `flashcards.md`, so a deck
+with no course cannot export, and until now nothing in the app could give it
+one.
+
+A course's decks have their own **DECKS** panel in its Course Hub, under STUDIO,
+with each deck's due count and a `review →` link straight into a session. Each
+deck says what it was written from (`from lecture-04.pdf`), and the SOURCES rail
+badges each file with how many decks came out of it.
 
 ### Getting cards out
 
