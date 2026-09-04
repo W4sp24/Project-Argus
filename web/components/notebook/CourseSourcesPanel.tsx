@@ -65,11 +65,21 @@ export default function CourseSourcesPanel({
   } = useCourseSelection();
 
   const { data: decks } = useFlashcardDecks(code);
-  /** How many decks were generated from this exact file. The join needs no
-   * normalisation: `source_paths` is written from the corpus, which
-   * `course_corpus` filters on the very strings this rail ticks. */
-  const decksFrom = (path: string) =>
-    (decks ?? []).filter((deck) => deck.source_paths.includes(path)).length;
+  /** How many decks were generated from each file, counted once for the whole
+   * rail rather than per row.
+   *
+   * The join needs no normalisation: `source_paths` is written from the
+   * resolved corpus, and `course_corpus` filters on the very strings this rail
+   * ticks, so the path written is the path rendered. */
+  const deckCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const deck of decks ?? []) {
+      for (const path of deck.source_paths) {
+        counts.set(path, (counts.get(path) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [decks]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -203,7 +213,9 @@ export default function CourseSourcesPanel({
                   {label} · {rows.length}
                 </p>
                 <ul className="space-y-1.5">
-                  {rows.map((source) => (
+                  {rows.map((source) => {
+                    const fromHere = deckCounts.get(source.path) ?? 0;
+                    return (
                     <li
                       key={source.path}
                       className="border border-line transition-colors hover:border-lineHi"
@@ -252,10 +264,9 @@ export default function CourseSourcesPanel({
                             {source.chunks === null && " · not indexed"}
                           </span>
                         </span>
-                        {decksFrom(source.path) > 0 && (
+                        {fromHere > 0 && (
                           <span className="shrink-0 border border-[var(--ac)] px-1 py-px font-mono text-micro text-[var(--ac)]">
-                            {decksFrom(source.path)} deck
-                            {decksFrom(source.path) === 1 ? "" : "s"}
+                            {fromHere} deck{fromHere === 1 ? "" : "s"}
                           </span>
                         )}
                         <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
@@ -263,7 +274,8 @@ export default function CourseSourcesPanel({
                         </span>
                       </button>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               </div>
             );
