@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { EngineTrigger } from "@/components/EnginePicker";
+import CourseDecksPanel from "@/components/notebook/CourseDecksPanel";
 import { CourseChat, CourseStudio } from "@/components/notebook/CourseHub";
 import CourseSourcesPanel from "@/components/notebook/CourseSourcesPanel";
 import { useStudyCourses } from "@/lib/api";
@@ -90,7 +91,7 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
           <div
             className={`min-h-0 overflow-y-auto ${active === "sources" ? "" : "hidden"} lg:block`}
           >
-            <CourseSourcesPanel materialsPath={course?.materials_path} />
+            <CourseSourcesPanel code={code} materialsPath={course?.materials_path} />
           </div>
           {/* Kept mounted, not unmounted: the chat thread and any in-flight
               answer belong to the pane, and re-mounting on every tab switch
@@ -101,7 +102,12 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
           <div
             className={`min-h-0 overflow-y-auto ${active === "studio" ? "" : "hidden"} lg:block`}
           >
-            <CourseStudio code={code} />
+            <div className="flex flex-col gap-4">
+              <CourseStudio code={code} />
+              {/* Under STUDIO, not above it: you come here to make something,
+                  and what you have already made is what you scroll to. */}
+              <CourseDecksPanel code={code} />
+            </div>
           </div>
         </div>
       </CourseSelectionProvider>

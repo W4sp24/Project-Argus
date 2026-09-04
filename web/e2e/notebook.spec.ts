@@ -1227,3 +1227,26 @@ test("a courseless deck can be given the course EXPORT needs", async ({ page, re
 
   await expect(exportButton).toBeEnabled();
 });
+
+test("a course's decks are one click away from the course", async ({ page, request }) => {
+  const deck = await (
+    await request.post("/api/flashcards/decks", {
+      data: { title: "e2e hub deck", course: "CS000" },
+    })
+  ).json();
+  await request.post(`/api/flashcards/decks/${deck.id}/cards`, {
+    data: { cards: [{ front: "reachable?", back: "yes" }] },
+  });
+
+  await page.goto("/notebook/course/CS000");
+  const panel = page.locator("section").filter({ hasText: "▍DECKS · CS000" });
+  const row = panel.getByRole("link", { name: /e2e hub deck/ });
+  await expect(row).toBeVisible();
+  await expect(panel.getByRole("link", { name: /review/i })).toBeVisible();
+
+  // The old row pointed at /notebook/flashcards?deck=<id> -- a parameter nothing
+  // in the app has ever read, so it landed on the library and left you to find
+  // the deck by eye.
+  await row.click();
+  await expect(page).toHaveURL(new RegExp(`/notebook/flashcards/${deck.id}$`));
+});

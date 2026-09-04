@@ -160,7 +160,12 @@ interface GeneratedItem {
   key: string;
   label: string;
   date: string;
-  kind: "GUIDE" | "EXAM" | "DECK";
+  /** No DECK: decks have their own panel. They were drowning here -- mixed with
+   * guides and exams under one heading capped at eight rows, so a course's
+   * decks fell off the end of the only list that named them -- and every deck
+   * row pointed at `/notebook/flashcards?deck=<id>`, a parameter nothing in the
+   * app has ever read. */
+  kind: "GUIDE" | "EXAM";
   href?: string;
   /** An obsidian:// target, which `next/link` must not try to route. */
   external?: boolean;
@@ -171,15 +176,19 @@ interface GeneratedItem {
  * the real endpoints `CoursesPanel` already uses (`/api/study/guide`,
  * `/api/study/exam`, `/api/flashcards/decks`), instead of every button just
  * toasting `generation :: preview`. "Generated" lists real artifacts:
- * exams (`GET /api/study/exams?course=`), decks (`useFlashcardDecks`), and
- * study guides — the latter read off `GET /api/study/courses/<code>/sources`
- * (the `study` zone), filtered to `guide-*` files so exam markdown (already
- * covered by the exams list) isn't double-counted.
+ * exams (`GET /api/study/exams?course=`) and study guides — the latter read
+ * off `GET /api/study/courses/<code>/sources` (the `study` zone), filtered to
+ * `guide-*` files so exam markdown (already covered by the exams list) isn't
+ * double-counted. Decks were listed here too and now have their own
+ * `CourseDecksPanel`: a deck is the one artifact you come back to daily, and a
+ * due count belongs somewhere it cannot be pushed off the end of a shared list.
  */
 export function CourseStudio({ code }: { code: string }) {
   const { show } = useToast();
   const { data: exams, mutate: refreshExams } = useStudyExams(code);
-  const { data: decks, mutate: refreshDecks } = useFlashcardDecks(code);
+  // Read only to refresh: decks have their own panel now, so this holds the
+  // shared SWR key open and re-fetches it when this course's work lands.
+  const { mutate: refreshDecks } = useFlashcardDecks(code);
   const { data: sources, mutate: refreshSources } = useCourseSources(code);
   const { data: vault } = useVault();
   const { paths, available, refresh: refreshSelection } = useCourseSelection();
@@ -207,13 +216,6 @@ export function CourseStudio({ code }: { code: string }) {
       // clicking "EXAM · Midterm review" opened whatever exam the page
       // happened to load rather than that one.
       href: `/notebook/exam?id=${exam.id}`,
-    })),
-    ...(decks ?? []).map((deck) => ({
-      key: `deck-${deck.id}`,
-      label: deck.title,
-      date: deck.created_at,
-      kind: "DECK" as const,
-      href: `/notebook/flashcards?deck=${deck.id}`,
     })),
     // A guide that took minutes to write used to render as unclickable text,
     // with its path announced only in a toast that had since auto-dismissed.

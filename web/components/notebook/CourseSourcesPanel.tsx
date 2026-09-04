@@ -6,7 +6,7 @@ import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress from "@/components/sources/IngestJobProgress";
 import Button from "@/components/ui/Button";
 import { FIELD_CONTROL } from "@/components/ui/Field";
-import { useIngestJob, type CourseSource } from "@/lib/api";
+import { useFlashcardDecks, useIngestJob, type CourseSource } from "@/lib/api";
 import { useCourseSelection } from "@/lib/courseSelection";
 import { formatRelativeTime } from "@/lib/relativeTime";
 
@@ -32,8 +32,12 @@ const ZONES: { key: CourseSource["zone"]; label: string }[] = [
  * replaced with the word "uploading…".
  */
 export default function CourseSourcesPanel({
+  code,
   materialsPath,
 }: {
+  /** The course this rail belongs to, so a row can say how many decks came out
+   * of it. The same SWR key STUDIO already holds, so the count is free. */
+  code: string;
   /** The course's real materials folder, from `GET /api/study/courses`.
    * Never built here — a literal `15-Courses/<CODE>/materials` in the
    * frontend is the bug the configurable-taxonomy refactor fixed. */
@@ -59,6 +63,13 @@ export default function CourseSourcesPanel({
     refresh,
     isLoading,
   } = useCourseSelection();
+
+  const { data: decks } = useFlashcardDecks(code);
+  /** How many decks were generated from this exact file. The join needs no
+   * normalisation: `source_paths` is written from the corpus, which
+   * `course_corpus` filters on the very strings this rail ticks. */
+  const decksFrom = (path: string) =>
+    (decks ?? []).filter((deck) => deck.source_paths.includes(path)).length;
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -241,6 +252,12 @@ export default function CourseSourcesPanel({
                             {source.chunks === null && " · not indexed"}
                           </span>
                         </span>
+                        {decksFrom(source.path) > 0 && (
+                          <span className="shrink-0 border border-[var(--ac)] px-1 py-px font-mono text-micro text-[var(--ac)]">
+                            {decksFrom(source.path)} deck
+                            {decksFrom(source.path) === 1 ? "" : "s"}
+                          </span>
+                        )}
                         <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
                           {source.kind}
                         </span>
