@@ -303,6 +303,63 @@ def test_a_generation_that_fails_still_knows_what_it_was_asked_to_read(tmp_path:
     ]
 
 
+def test_an_empty_selection_is_refused_on_the_request(client: TestClient) -> None:
+    """422 now, not 202 and a job that fails a minute later.
+
+    `main.py` injects the bare `course_corpus` lambda, so this router had none
+    of the guard `study/router.py` puts in front of the same call. With the
+    deck library able to tick sources, it is reachable in one click.
+    """
+    response = client.post(
+        "/api/flashcards/decks/generate", json={"course": "CS201", "sources": []}
+    )
+    assert response.status_code == 422
+    assert "no sources are selected" in response.json()["detail"]
+
+
+def test_a_selection_with_nothing_indexed_says_so_rather_than_blaming_the_course(
+    client: TestClient,
+) -> None:
+    """"no indexed material for CS201" is the wrong sentence when three files
+    are ticked -- it sends the user off to upload what they already have."""
+    response = client.post(
+        "/api/flashcards/decks/generate",
+        json={"course": "CS201", "sources": ["15-Courses/CS201/materials/never-indexed.pdf"]},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "none of the 1 selected source(s) are indexed" in detail
+    assert "CS201" in detail
+
+
+def test_the_whole_course_is_still_the_generators_error_to_raise(tmp_path: Path) -> None:
+    """`sources is None` is not a selection, so an empty course is not a 422
+    here -- it is the job's failure, phrased for that case."""
+
+    class EmptyIndex:
+        def all_chunks(self) -> list[dict[str, Any]]:
+            return []
+
+        def chunk_counts(self) -> dict[str, int]:
+            return {}
+
+    vault = tmp_path / "vault"
+    (vault / "15-Courses" / "CS201" / "materials").mkdir(parents=True)
+    client = TestClient(
+        create_app(
+            Settings(_vault_path=vault),
+            generator=_generator(REPLY),
+            index_factory=EmptyIndex,
+            ingest_job_runner=lambda run: run(),
+        )
+    )
+    response = client.post(
+        "/api/flashcards/decks/generate", json={"course": "CS201", "sources": None}
+    )
+    assert response.status_code == 202
+    assert client.get(f"/api/flashcards/decks/{response.json()['deck_id']}").json()["cards"] == 0
+
+
 def test_a_generated_deck_is_immediately_studiable(client: TestClient) -> None:
     deck_id = client.post("/api/flashcards/decks/generate", json={"course": "CS201"}).json()[
         "deck_id"
