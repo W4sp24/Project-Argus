@@ -155,12 +155,16 @@ def test_new_deck_columns_default_sensibly(tmp_path: Path) -> None:
     init_schema(conn)
 
     row = conn.execute(
-        "SELECT source, description, updated_at, created_at FROM flashcard_decks WHERE id = ?",
+        "SELECT source, source_paths, description, updated_at, created_at"
+        " FROM flashcard_decks WHERE id = ?",
         (deck_id,),
     ).fetchone()
     # Everything that existed before decks could be authored was generated.
     assert row["source"] == "generated"
     assert row["description"] == ""
+    # A constant default, so the ALTER fills the row itself -- no backfill line,
+    # and a deck that predates the column honestly claims no sources.
+    assert row["source_paths"] == "[]"
     # ALTER TABLE cannot take a non-constant default, so this is backfilled.
     assert row["updated_at"] == row["created_at"]
 

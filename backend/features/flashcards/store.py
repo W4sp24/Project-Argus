@@ -23,12 +23,13 @@ preserve every review ever recorded — see
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.features.flashcards import scheduler
 from backend.features.flashcards.scheduler import GradeResult, SchedulerError
@@ -71,6 +72,10 @@ class DeckSummary(BaseModel):
     title: str
     description: str
     source: str
+    #: Which files this deck was written from, vault-relative. Empty for a deck
+    #: nobody generated -- and for one generated before the column existed.
+    #: Not user-editable: it is a fact about a generation, not a preference.
+    source_paths: list[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
     cards: int
@@ -147,6 +152,7 @@ def create_deck(
     course: str = "",
     description: str = "",
     source: str = "manual",
+    source_paths: list[str] | None = None,
 ) -> int:
     """Create an empty deck. Returns its id.
 
@@ -154,18 +160,50 @@ def create_deck(
     for one typed in by hand. It is a value rather than NULL because relaxing
     the column's NOT NULL would cost a table rebuild to buy nothing that ``''``
     cannot already say.
+
+    ``source_paths`` is written once, here, because the deck row is created
+    before the generation job runs -- so a generation that fails still leaves a
+    deck that knows what it was asked to read.
     """
     clean = title.strip()
     if not clean:
         raise FlashcardsError("a deck needs a title")
     cursor = conn.execute(
         "INSERT INTO flashcard_decks"
-        " (course, title, description, source, cards_json, updated_at)"
-        " VALUES (?, ?, ?, ?, '[]', ?)",
-        (course.strip(), clean, description.strip(), source, _now()),
+        " (course, title, description, source, source_paths, cards_json, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, '[]', ?)",
+        (
+            course.strip(),
+            clean,
+            description.strip(),
+            source,
+            _encode_paths(source_paths),
+            _now(),
+        ),
     )
     conn.commit()
     return int(cursor.lastrowid)
+
+
+def _encode_paths(paths: list[str] | None) -> str:
+    """A deck's provenance list, as ``audit.paths_json`` stores the same thing.
+
+    Sorted and de-duplicated so two generations over the same ticked files
+    compare equal, and ``ensure_ascii=False`` so a non-ASCII filename stays
+    readable in the database rather than becoming an escape sequence.
+    """
+    return json.dumps(sorted(set(paths or [])), ensure_ascii=False)
+
+
+def _decode_paths(raw: str | None) -> list[str]:
+    """Never raise: a deck row is not worth losing to a hand-edited column."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return []
+    return [str(item) for item in value] if isinstance(value, list) else []
 
 
 def _deck_row(conn: sqlite3.Connection, deck_id: int) -> sqlite3.Row:
@@ -182,6 +220,7 @@ def _summary(row: sqlite3.Row, cards: int) -> DeckSummary:
         title=row["title"],
         description=row["description"],
         source=row["source"],
+        source_paths=_decode_paths(row["source_paths"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"] or row["created_at"],
         cards=cards,

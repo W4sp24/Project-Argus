@@ -860,6 +860,11 @@ export interface FlashcardDeck {
   description: string;
   /** How the deck came to exist: "manual" | "imported" | "generated". */
   source: string;
+  /** The vault files this deck was generated from, so a deck can say where it
+   * came from and the SOURCES rail can badge the file it came out of. Empty
+   * for a deck nobody generated. Note the `s`: `source` above is a different
+   * field entirely. */
+  source_paths: string[];
   created_at: string;
   updated_at: string;
   cards: number;

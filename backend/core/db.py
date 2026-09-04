@@ -578,6 +578,18 @@ def init_schema(conn: sqlite3.Connection) -> None:
         # No DEFAULT (datetime('now')): SQLite rejects a non-constant default in
         # ALTER TABLE ADD COLUMN, so it is backfilled below instead.
         conn.execute("ALTER TABLE flashcard_decks ADD COLUMN updated_at TEXT")
+    if "source_paths" not in deck_columns:
+        # Which files a generated deck was written from, as a JSON array of
+        # vault-relative paths -- so a deck can say "from lecture-04.pdf" and the
+        # SOURCES rail can badge the file a deck came out of.
+        #
+        # No backfill line, unlike updated_at directly above, and the asymmetry
+        # is the point: '[]' is a *constant* default, so the ALTER fills every
+        # existing row and every future INSERT that omits the column. An empty
+        # list for a deck nobody generated is the truth, not a gap.
+        conn.execute(
+            "ALTER TABLE flashcard_decks ADD COLUMN source_paths TEXT NOT NULL DEFAULT '[]'"
+        )
     # Unconditional, not folded into the branch above: the column has no
     # default, so *any* INSERT that omits it leaves a NULL -- not just the rows
     # that predate the column. Running it every open makes the table

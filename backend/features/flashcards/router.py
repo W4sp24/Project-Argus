@@ -247,6 +247,13 @@ def build_flashcards_router(
         except FlashcardsError as exc:
             raise _fail(exc, 422) from exc
         corpus = corpus_for(request.course, request.sources)
+        # Read off the corpus, not off `request.sources`: `None` there means the
+        # whole course and names no files at all, and a path the caller ticked
+        # may have no indexed chunks. The corpus is what will actually be read,
+        # so it is the honest answer to "where did this deck come from".
+        source_paths = sorted(
+            {str(chunk["meta"]["path"]) for chunk in corpus if chunk["meta"].get("path")}
+        )
 
         conn = db()
         try:
@@ -255,6 +262,7 @@ def build_flashcards_router(
                 title=request.title or f"{request.course} — generated",
                 course=request.course,
                 source="generated",
+                source_paths=source_paths,
             )
             job_id = jobstore.create_job(
                 conn,

@@ -239,6 +239,70 @@ def test_generate_accepts_a_job_and_names_the_deck_it_will_fill(client: TestClie
     assert deck["source"] == "generated"
 
 
+def test_a_generated_deck_records_the_files_it_read(client: TestClient) -> None:
+    """Provenance comes off the corpus, not off the request.
+
+    `sources: None` means "the whole course" and names no file at all, so a
+    deck that recorded the request would have nothing to show. The corpus is
+    what the prompt is built from, so it is what the deck came from.
+    """
+    deck_id = client.post(
+        "/api/flashcards/decks/generate", json={"course": "CS201", "sources": None}
+    ).json()["deck_id"]
+
+    deck = client.get(f"/api/flashcards/decks/{deck_id}").json()
+    assert deck["source_paths"] == [
+        "15-Courses/CS201/materials/lecture-0.pdf",
+        "15-Courses/CS201/materials/lecture-1.pdf",
+    ]
+
+
+def test_a_deck_generated_from_one_source_names_only_that_source(client: TestClient) -> None:
+    picked = "15-Courses/CS201/materials/lecture-1.pdf"
+    deck_id = client.post(
+        "/api/flashcards/decks/generate", json={"course": "CS201", "sources": [picked]}
+    ).json()["deck_id"]
+
+    assert client.get(f"/api/flashcards/decks/{deck_id}").json()["source_paths"] == [picked]
+
+
+def test_a_hand_made_deck_claims_no_sources(client: TestClient) -> None:
+    """`[]` is the truth for a deck nobody generated, not a missing value."""
+    deck_id = client.post("/api/flashcards/decks", json={"title": "typed by hand"}).json()["id"]
+    assert client.get(f"/api/flashcards/decks/{deck_id}").json()["source_paths"] == []
+
+
+def test_a_generation_that_fails_still_knows_what_it_was_asked_to_read(tmp_path: Path) -> None:
+    """The deck row is written before the job runs, which is the whole point.
+
+    A failed generation leaves an empty deck by design (`run_deck_job`). An
+    empty deck that cannot say what it was pointed at is a dead end.
+    """
+
+    async def broken(prompt: str) -> str:
+        raise RuntimeError("the provider fell over")
+
+    vault = tmp_path / "vault"
+    (vault / "15-Courses" / "CS201" / "materials").mkdir(parents=True)
+    app = create_app(
+        Settings(_vault_path=vault),
+        generator=broken,
+        index_factory=FakeIndex,
+        ingest_job_runner=lambda run: run(),
+    )
+    client = TestClient(app)
+
+    deck_id = client.post("/api/flashcards/decks/generate", json={"course": "CS201"}).json()[
+        "deck_id"
+    ]
+    deck = client.get(f"/api/flashcards/decks/{deck_id}").json()
+    assert deck["cards"] == 0
+    assert deck["source_paths"] == [
+        "15-Courses/CS201/materials/lecture-0.pdf",
+        "15-Courses/CS201/materials/lecture-1.pdf",
+    ]
+
+
 def test_a_generated_deck_is_immediately_studiable(client: TestClient) -> None:
     deck_id = client.post("/api/flashcards/decks/generate", json={"course": "CS201"}).json()[
         "deck_id"
