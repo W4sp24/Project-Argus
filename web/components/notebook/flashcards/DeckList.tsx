@@ -113,8 +113,9 @@ export default function DeckList() {
       {generating && (
         <GenerateDialog
           kind="deck"
-          // No SOURCES rail out here, so the whole course is the corpus.
-          sources={null}
+          // No `sources` prop, deliberately: there is no SOURCES rail out here,
+          // so the dialog has to ask what to read rather than assume the whole
+          // course. Passing one would put it back in Course Hub shape.
           onClose={() => {
             setGenerating(false);
             void refresh();

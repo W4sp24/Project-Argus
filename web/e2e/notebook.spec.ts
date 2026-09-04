@@ -1054,7 +1054,12 @@ test("exams finally send the difficulty and focus the backend has always accepte
   });
 });
 
-test("the deck library can generate without walking into a course hub", async ({ page }) => {
+test("the deck library generates from the sources you pick, not the whole course", async ({
+  page,
+}) => {
+  // The library used to open this dialog with a course dropdown and a line
+  // promising to read the *entire* course, and no control anywhere to narrow
+  // it. This is that gap closed.
   let sent: Record<string, unknown> | null = null;
   await page.route("**/api/flashcards/decks/generate", async (route) => {
     sent = route.request().postDataJSON();
@@ -1065,6 +1070,12 @@ test("the deck library can generate without walking into a course hub", async ({
     });
   });
 
+  // Built here rather than seeded: CS000 has no listable sources at startup
+  // (course.md sits at the course root, outside the materials/notes zones),
+  // and a startup seed would silently decide other tests' outcomes.
+  await page.goto("/notebook/course/CS000");
+  await ingestProbe(page, "e2e-deck-source");
+
   await page.goto("/notebook/flashcards");
   await page.getByRole("button", { name: /GENERATE/ }).click();
 
@@ -1072,8 +1083,95 @@ test("the deck library can generate without walking into a course hub", async ({
   // Out here there is no SOURCES rail, so a course has to be named.
   await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
   await dialog.getByLabel("Course").selectOption("CS000");
-  await expect(dialog.getByText("reads the whole course")).toBeVisible();
+
+  await dialog.getByRole("button", { name: "PICK SOURCES" }).click();
+  const row = dialog.getByRole("checkbox", { name: "Use e2e-deck-source as a source" });
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  // Still refused with a course chosen and nothing ticked — "pick sources" has
+  // to mean it, or it is the old dialog with extra steps.
+  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+
+  await row.click();
+  await dialog.getByRole("button", { name: "GENERATE" }).click();
+
+  expect(sent).toMatchObject({
+    course: "CS000",
+    sources: ["15-Courses/CS000/materials/e2e-deck-source.md"],
+  });
+});
+
+test("the whole course is still one click away", async ({ page }) => {
+  let sent: Record<string, unknown> | null = null;
+  await page.route("**/api/flashcards/decks/generate", async (route) => {
+    sent = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ job_id: "e2e-whole", deck_id: 996 }),
+    });
+  });
+
+  await page.goto("/notebook/flashcards");
+  await page.getByRole("button", { name: /GENERATE/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
+  await dialog.getByLabel("Course").selectOption("CS000");
+  await expect(dialog.getByText("reads everything indexed under the course")).toBeVisible();
   await dialog.getByRole("button", { name: "GENERATE" }).click();
 
   expect(sent).toMatchObject({ course: "CS000", sources: null });
+});
+
+test("a deck can be generated from a file the vault never sees", async ({ page }) => {
+  let body: string | null = null;
+  await page.route("**/api/flashcards/decks/generate/upload", async (route) => {
+    body = route.request().postData();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ job_id: "e2e-upload", deck_id: 997 }),
+    });
+  });
+
+  await page.goto("/notebook/flashcards");
+  await page.getByRole("button", { name: /GENERATE/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
+
+  await dialog.getByRole("button", { name: "MY OWN FILE" }).click();
+  // No course needed on this route: a deck can be about a PDF rather than
+  // about a course.
+  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+
+  // `setInputFiles` drives the same handler a drop would, which is the whole
+  // reason the zone is a label around a real input rather than a bare div.
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "e2e-upload-lecture.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from(`# flow networks
+
+Capacities bound the flow on an edge.
+`),
+  });
+  await expect(dialog.getByText("▍e2e-upload-lecture.md")).toBeVisible();
+
+  await dialog.getByRole("button", { name: "GENERATE" }).click();
+  await expect(page.getByText(/flashcard deck queued/)).toBeVisible();
+  expect(body).toContain("e2e-upload-lecture.md");
+});
+
+test("a file Argus cannot read is refused before it is uploaded", async ({ page }) => {
+  await page.goto("/notebook/flashcards");
+  await page.getByRole("button", { name: /GENERATE/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
+  await dialog.getByRole("button", { name: "MY OWN FILE" }).click();
+
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "cards.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(`front,back
+`),
+  });
+
+  // A round trip to be told "that is not a PDF" is a worse way to learn it.
+  await expect(page.getByText(/isn't a kind Argus can read/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
 });

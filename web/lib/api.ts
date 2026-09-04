@@ -307,7 +307,13 @@ export interface CourseSource {
  * zone; exams/decks have their own endpoints below).
  */
 export function useCourseSources(code: string) {
-  return useSWR<CourseSource[]>(`/api/study/courses/${encodeURIComponent(code)}/sources`, fetcher);
+  // A blank code is "no course chosen yet", not a course named "". Without the
+  // null key that renders as `/api/study/courses//sources` — a request that can
+  // only 404, fired on every keystroke of a course picker.
+  return useSWR<CourseSource[]>(
+    code ? `/api/study/courses/${encodeURIComponent(code)}/sources` : null,
+    fetcher,
+  );
 }
 
 export interface ExamSummary {

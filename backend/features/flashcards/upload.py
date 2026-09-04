@@ -48,10 +48,11 @@ from typing import IO, Any
 from backend.features.flashcards.store import FlashcardsError
 from backend.rag.extract import extract_blocks
 
-#: What a one-shot upload may be. Deliberately narrower than the ingest
-#: pipeline's set: ``.md`` (and ``.txt``/``.csv``) are read in the browser and
-#: arrive as text, and ``.eml`` is not a thing anyone makes flashcards from.
-UPLOAD_SUFFIXES: tuple[str, ...] = (".pdf", ".pptx", ".docx")
+#: What a one-shot upload may be. Narrower than the ingest pipeline's set:
+#: ``.eml`` is not a thing anyone makes flashcards from, and ``.txt``/``.csv``
+#: have no extractor at all -- they would come back empty and be reported as a
+#: blank file. A ``.csv`` of card rows is IMPORT's job, not generation's.
+UPLOAD_SUFFIXES: tuple[str, ...] = (".pdf", ".pptx", ".docx", ".md")
 
 #: Far below ingest's 100MB. That number is sized for a file being committed
 #: into a git-backed vault and kept; this one is read once and deleted, and the
