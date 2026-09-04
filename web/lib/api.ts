@@ -1020,6 +1020,11 @@ export interface GenerateOptions {
   default_styles: string[];
   max_cards: number;
   max_instructions: number;
+  /** File types the one-shot upload route can read, e.g. [".pdf", ".pptx"].
+   * Served rather than mirrored here: a constant copied into the UI is a rule
+   * that goes stale on one side. */
+  upload_suffixes: string[];
+  max_upload_bytes: number;
 }
 
 /**
@@ -1050,6 +1055,55 @@ export function generateDeck(body: GenerateDeckBody) {
     "/api/flashcards/decks/generate",
     body,
   );
+}
+
+export interface UploadDeckBody extends Omit<GenerateDeckBody, "course" | "sources"> {
+  file: File;
+  /** Optional here, unlike the corpus route: a deck can be about a PDF rather
+   * than about a course. Blank files it under no course. */
+  course?: string;
+}
+
+/**
+ * Generate from a file the vault never sees.
+ *
+ * `multipart/form-data`, so this cannot go through `mutateJSON` — but it still
+ * goes through `apiFetch`, because a bare `fetch("/api/...")` works in dev and
+ * 404s only once the app is packaged. The error shape is `mutateJSON`'s on
+ * purpose, so every caller's `catch` reads the same.
+ *
+ * Note the deliberate omission of a `Content-Type` header: the browser has to
+ * set it itself to attach the multipart boundary.
+ */
+export async function generateDeckFromUpload(
+  body: UploadDeckBody,
+): Promise<{ job_id: string; deck_id: number }> {
+  const form = new FormData();
+  form.append("file", body.file, body.file.name);
+  if (body.course) form.append("course", body.course);
+  if (body.title) form.append("title", body.title);
+  if (body.model) form.append("model", body.model);
+  if (body.n !== undefined) form.append("n", String(body.n));
+  if (body.difficulty) form.append("difficulty", body.difficulty);
+  if (body.instructions) form.append("instructions", body.instructions);
+  // Repeated, not comma-joined: the server reads `styles` as a list, and a
+  // style containing a comma would otherwise split into two invalid ones.
+  for (const style of body.styles ?? []) form.append("styles", style);
+
+  const response = await apiFetch("/api/flashcards/decks/generate/upload", {
+    method: "POST",
+    body: form,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = (payload as { detail?: unknown }).detail;
+    throw new ApiError(
+      response.status,
+      payload,
+      typeof detail === "string" ? detail : `Request failed: ${response.status}`,
+    );
+  }
+  return payload as { job_id: string; deck_id: number };
 }
 
 /** Write the deck to its course's `flashcards.md`, through the normal writer. */

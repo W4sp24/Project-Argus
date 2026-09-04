@@ -18,15 +18,16 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections.abc import Callable
-from typing import Any
+from pathlib import PurePosixPath
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
-from backend.features.flashcards import generate, store, vault
+from backend.features.flashcards import generate, store, upload, vault
 from backend.features.flashcards.jobs import run_deck_job
 from backend.features.flashcards.parsing import (
     FIELD_DELIMITERS,
@@ -135,6 +136,11 @@ class GenerateOptions(BaseModel):
     default_styles: list[str]
     max_cards: int
     max_instructions: int
+    #: What `POST /decks/generate/upload` will read, served rather than mirrored
+    #: in the UI for the same reason `GET /api/ingest/limits` is: a constant
+    #: copied into the frontend is a rule that goes stale on one side.
+    upload_suffixes: list[str]
+    max_upload_bytes: int
 
 
 class CardsAdded(BaseModel):
@@ -328,6 +334,108 @@ def build_flashcards_router(
         )
         return JSONResponse(status_code=202, content={"job_id": job_id, "deck_id": deck_id})
 
+    @router.post("/decks/generate/upload")
+    def generate_deck_from_upload(
+        # Sync, not async, and deliberately so. `UploadFile.file` is a blocking
+        # file object, and `run_deck_job` calls `asyncio.run` -- both of which
+        # need a thread without a running event loop. FastAPI gives a `def`
+        # route exactly that, which is also why the sibling JSON route is one.
+        file: UploadFile,
+        course: Annotated[str, Form()] = "",
+        title: Annotated[str, Form()] = "",
+        model: Annotated[str, Form()] = "",
+        n: Annotated[int, Form()] = 20,
+        difficulty: Annotated[str, Form()] = generate.DEFAULT_DIFFICULTY,
+        styles: Annotated[list[str] | None, Form()] = None,
+        instructions: Annotated[str, Form()] = "",
+    ) -> Any:
+        """Write a deck from a file the user hands over once, and never keeps.
+
+        The twin of `POST /decks/generate`, for material that is not in the
+        vault -- or is, but is not indexed yet. Multipart rather than JSON
+        because it carries a file; everything else is the same dials, and the
+        job it queues is the same `kind="deck"` row polled at the same place.
+
+        `course` is optional here, and that is the point: a deck can be about a
+        PDF rather than about a course. When it is blank the deck belongs to no
+        course (`course=""`, which the store has always allowed), the job's
+        `target` is the file's own name rather than
+        `Taxonomy.course_study("")` -- which would render as
+        `15-Courses//study` -- and the prompt's subject is the filename, since
+        "for course " with nothing after it tells the model less than nothing.
+
+        Nothing reaches the vault. The bytes go to a temp directory, the text
+        comes out, the directory goes away; saving the file for later is a
+        separate, deliberate act through the ingest flow.
+        """
+        if generator is None:
+            raise HTTPException(
+                status_code=503, detail="deck generation is not configured on this server"
+            )
+        chosen = [style for style in (styles or []) if style] or list(generate.DEFAULT_STYLES)
+        try:
+            generate.validate_options(difficulty, chosen)
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+
+        # PurePosixPath, not Path: a browser may send a POSIX-shaped name on a
+        # Windows server, and `Path("a/b.pdf").name` there is the whole string.
+        name = PurePosixPath((file.filename or "").replace("\\", "/")).name
+        try:
+            corpus = upload.corpus_from_upload(name, file.file)
+        except upload.UploadTooLargeError as exc:
+            raise _fail(exc, 413) from exc
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+
+        subject = course or PurePosixPath(name).stem
+        conn = db()
+        try:
+            deck_id = store.create_deck(
+                conn,
+                title=title.strip() or PurePosixPath(name).stem,
+                course=course,
+                source="generated",
+                # The file has no vault path, so its own name is the honest
+                # answer to "what was this written from". It cannot collide with
+                # a real source path, which is what the SOURCES rail badges on.
+                source_paths=[name],
+            )
+            job_id = jobstore.create_job(
+                conn,
+                target=settings.taxonomy.course_study(course) if course else name,
+                filenames=[name],
+                kind="deck",
+                params={
+                    "course": course,
+                    "deck_id": deck_id,
+                    "model": model or None,
+                    "difficulty": difficulty,
+                    "styles": chosen,
+                    "upload": name,
+                },
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+        finally:
+            conn.close()
+
+        run_job(
+            lambda: run_deck_job(
+                job_id,
+                settings=settings,
+                generator=_bind_model(model or None),
+                corpus=corpus,
+                course=subject,
+                deck_id=deck_id,
+                n=n,
+                difficulty=difficulty,
+                styles=chosen,
+                instructions=instructions,
+            )
+        )
+        return JSONResponse(status_code=202, content={"job_id": job_id, "deck_id": deck_id})
+
     @router.get("/decks", response_model=list[DeckSummary])
     def decks(course: str | None = None) -> list[DeckSummary]:
         conn = db()
@@ -455,6 +563,8 @@ def build_flashcards_router(
             default_styles=list(generate.DEFAULT_STYLES),
             max_cards=generate.MAX_CARDS,
             max_instructions=generate.MAX_INSTRUCTIONS,
+            upload_suffixes=list(upload.UPLOAD_SUFFIXES),
+            max_upload_bytes=upload.MAX_UPLOAD_BYTES,
         )
 
     @router.get("/import/delimiters")
