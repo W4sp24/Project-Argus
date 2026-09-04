@@ -1242,9 +1242,12 @@ test("a course's decks are one click away from the course", async ({ page, reque
 
   await page.goto("/notebook/course/CS000");
   const panel = page.locator("section").filter({ hasText: "▍DECKS · CS000" });
-  const row = panel.getByRole("link", { name: /e2e hub deck/ });
+  // Scoped to its own row, not to the panel: by now CS000 has several decks and
+  // every one carries a `review N ->` link, so a panel-wide match finds them all.
+  const item = panel.getByRole("listitem").filter({ hasText: "e2e hub deck" });
+  const row = item.getByRole("link", { name: /e2e hub deck/ });
   await expect(row).toBeVisible();
-  await expect(panel.getByRole("link", { name: /review/i })).toBeVisible();
+  await expect(item.getByRole("link", { name: /review/i })).toBeVisible();
 
   // The old row pointed at /notebook/flashcards?deck=<id> -- a parameter nothing
   // in the app has ever read, so it landed on the library and left you to find
