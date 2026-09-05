@@ -379,3 +379,31 @@ def test_the_latest_finished_job_is_not_hidden_by_one_still_running(
 
     assert store.latest_job(conn, "reindex")["id"] == second
     assert store.latest_job(conn, "reindex", finished=True)["id"] == first
+
+
+def test_finished_jobs_do_not_accumulate_forever(conn: sqlite3.Connection) -> None:
+    """Nothing ever deleted a job row.
+
+    Every ingest, reindex, relink, guide, exam and deck an install has run wrote
+    one, plus an `ingest_job_items` row per file, in an app meant to run for
+    months. `automations.store.record_event` has capped its own table since it
+    shipped; this one never got the equivalent.
+    """
+    from backend.features.ingest.store import JOB_RETENTION_CAP
+
+    ids = [
+        store.create_job(conn, target="t", summary_prompt="", filenames=["a.md"])
+        for _ in range(JOB_RETENTION_CAP + 5)
+    ]
+
+    kept = conn.execute("SELECT COUNT(*) AS n FROM ingest_jobs").fetchone()["n"]
+    assert kept == JOB_RETENTION_CAP
+
+    # The newest survive and the oldest are the ones that went.
+    assert store.get_job(conn, ids[-1]) is not None
+    assert store.get_job(conn, ids[0]) is None
+
+    # Items go with their job rather than being orphaned -- the cascade is real
+    # because connect() turns on PRAGMA foreign_keys.
+    items = conn.execute("SELECT COUNT(*) AS n FROM ingest_job_items").fetchone()["n"]
+    assert items == JOB_RETENTION_CAP

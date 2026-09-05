@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS tasks_cache (
     recurrence TEXT
 );
 
+-- What `refresh_cache` has already read, so it can skip the files that have
+-- not changed. Every agenda, task list, insights and briefing request used to
+-- re-read every markdown file in the vault; with this it stats them and reads
+-- only what moved. Purely derived -- deleting it costs one full rescan.
+CREATE TABLE IF NOT EXISTS tasks_cache_files (
+    path     TEXT PRIMARY KEY,
+    mtime_ns INTEGER NOT NULL,
+    size     INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -81,6 +91,11 @@ CREATE TABLE IF NOT EXISTS token_usage (
     cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0
 );
+-- A row per turn, so this is one of the fastest-growing tables here, and
+-- `usage_report` filters it by exactly these two columns. `cli_usage` next to
+-- it has had its equivalents since it shipped.
+CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
 
 -- Keyed by (path, agent), not path alone: two sources legitimately read the
 -- same file. Claude Code's foreground and subagent sources share one projects

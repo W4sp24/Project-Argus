@@ -465,6 +465,11 @@ def _run_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+#: How many runs are kept, newest first. `automation_runs` is written on every
+#: fired automation and, unlike `automation_events`, had no cap at all.
+RUN_RETENTION_CAP = 1000
+
+
 def record_run_started(
     conn: sqlite3.Connection,
     run_id: str,
@@ -486,6 +491,14 @@ def record_run_started(
         "(id, workflow_id, workflow_name, instance_id, started_at, status) "
         "VALUES (?, ?, ?, ?, ?, 'running')",
         (run_id, workflow_id, workflow_name, instance_id, _isoformat(now())),
+    )
+    # `expire_stale_runs` only ever *marks* a stale run unresolved, so nothing
+    # in this module removed a run row -- the table grew for the life of the
+    # install. Same application-code retention as `record_event` below.
+    conn.execute(
+        "DELETE FROM automation_runs WHERE id NOT IN "
+        "(SELECT id FROM automation_runs ORDER BY started_at DESC, rowid DESC LIMIT ?)",
+        (RUN_RETENTION_CAP,),
     )
     conn.commit()
 
