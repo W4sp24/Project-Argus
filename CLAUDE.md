@@ -29,7 +29,7 @@ Four test runners, each with a different job:
 ```bash
 .venv/Scripts/python -m pytest                     # backend
 cd web && npm run test:unit                        # Vitest — PURE logic in lib/ only, node env, no DOM
-node --test "desktop/tests/*.test.js"              # desktop shell helpers, zero-dep node:test
+cd desktop && node --test                          # desktop shell helpers, zero-dep node:test
 cd web && npm run e2e                              # Playwright (needs ports 8000 and 3100 free)
 cd web && npx playwright test notebook.spec.ts -g "one test name"
 ```
@@ -53,7 +53,7 @@ The full local gate, identical to what CI runs (see `CONTRIBUTING.md`
 .venv/Scripts/python -m ruff check .
 .venv/Scripts/python -m pytest
 .venv/Scripts/python desktop/tests/smoke_backend.py --target desktop/backend/argus_server.py
-node --test "desktop/tests/*.test.js"
+cd desktop && node --test
 cd web && npx tsc --noEmit && npm run lint && npm run test:unit && npm run build
 node desktop/scripts/check-versions.mjs
 cd web && npm run e2e

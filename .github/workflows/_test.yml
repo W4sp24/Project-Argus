@@ -90,8 +90,18 @@ jobs:
       # Also pure node stdlib (node:test), so it runs without installing
       # electron. Covers the window-open guard, which is the shell's one
       # exception to denying every popup and is therefore worth a real test.
+      # Bare, with no path argument, because both ways of naming the files
+      # work on one Node and not the other. `node --test` only expands glob
+      # patterns itself from Node 22, so on the Node 20 pinned above a quoted
+      # "tests/*.test.js" is read as a literal path and the job dies with
+      # `Could not find .../tests/*.test.js` -- which is how this step failed
+      # its first CI run while passing on a dev machine whose newer Node
+      # expanded it. Node 22+ then loads a bare `tests/` as a *module* rather
+      # than searching it, so the directory form fails the other way round.
+      # With no argument at all, both recursively search the working directory
+      # and both skip node_modules.
       - name: Test the desktop shell's pure helpers
-        run: node --test "tests/*.test.js"
+        run: node --test
         working-directory: desktop
 
       # Pure node stdlib, so it needs no install -- the previous `npm ci` in
