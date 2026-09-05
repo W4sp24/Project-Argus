@@ -143,6 +143,35 @@ def _item_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+#: How many jobs are kept. Every ingest, reindex, relink, guide, exam and deck
+#: this install has ever run wrote a row here, plus one `ingest_job_items` row
+#: per file, and nothing ever deleted any of them -- so the table grew for the
+#: life of the vault in an app meant to run for months. Enforced in application
+#: code rather than a sqlite trigger, the same way (and for the same stated
+#: reason as) `automations.store.record_event`'s EVENT_RETENTION_CAP.
+#:
+#: Generous on purpose: `list_jobs` shows a short window, but a job's items are
+#: the record of what an ingest did to each file, and that is worth keeping far
+#: longer than anyone scrolls.
+JOB_RETENTION_CAP = 500
+
+
+def _prune(conn: sqlite3.Connection) -> None:
+    """Drop all but the newest ``JOB_RETENTION_CAP`` jobs.
+
+    By ``created_at``, then ``rowid`` -- ``id`` is a uuid hex string, so
+    ordering by it would delete essentially at random. Items go with their job
+    through ``ON DELETE CASCADE``, which `connect()`'s ``PRAGMA foreign_keys=ON``
+    makes real.
+    """
+    conn.execute(
+        "DELETE FROM ingest_jobs WHERE id NOT IN ("
+        "  SELECT id FROM ingest_jobs ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        ")",
+        (JOB_RETENTION_CAP,),
+    )
+
+
 def create_job(
     conn: sqlite3.Connection,
     *,
@@ -179,6 +208,7 @@ def create_job(
         "INSERT INTO ingest_job_items (job_id, filename, stage) VALUES (?, ?, 'queued')",
         [(job_id, name) for name in filenames],
     )
+    _prune(conn)
     conn.commit()
     return job_id
 

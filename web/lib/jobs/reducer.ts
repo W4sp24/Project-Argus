@@ -57,3 +57,20 @@ export function reconcile<T extends JobLike>(
 
   return { tracked: next, finished };
 }
+
+/**
+ * A value signature for a list of jobs: the fields the UI actually renders.
+ *
+ * SWR hands back a freshly parsed object on every revalidation, so the derived
+ * "running jobs" array changed identity on every poll tick — every 900ms while
+ * anything is in flight — even when the backend said exactly the same thing.
+ * `JobsProvider` compares this instead, and keeps the previous array when it
+ * matches, so its context value stops re-rendering every consumer for nothing.
+ *
+ * Deliberately not `JSON.stringify(jobs)`: that is key-order dependent and
+ * would fold in fields no consumer reads, making the signature change (and so
+ * the re-render happen) for reasons the UI cannot show.
+ */
+export function jobsSignature(jobs: JobLike[]): string {
+  return jobs.map((job) => `${job.id}:${job.status}:${job.kind}`).join("|");
+}

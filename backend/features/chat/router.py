@@ -10,7 +10,9 @@ from __future__ import annotations
 import inspect
 import logging
 import sqlite3
+import threading
 from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -176,10 +178,11 @@ def _tool_frame(event: ToolStarted | ToolFinished) -> dict:
     }
 
 
-# Upper bound on rows pulled out of a thread to build history. The agent
-# budgets far more tightly than this (backend/agent/history.py); this only
-# stops a very long thread from loading its entire transcript into memory
-# just to have most of it discarded a moment later.
+# Upper bound on rows pulled out of a thread to build history -- the *newest*
+# that many (see `_open_turn`). The agent budgets far more tightly than this
+# (backend/agent/history.py); this only stops a very long thread from loading
+# its entire transcript into memory just to have most of it discarded a moment
+# later.
 HISTORY_FETCH_LIMIT = 100
 
 
@@ -206,7 +209,21 @@ def _open_turn(
             thread = found
         history = [
             Message(row["role"], row["text"])
-            for row in store.list_messages(conn, thread["id"], limit=HISTORY_FETCH_LIMIT)
+            for row in store.list_messages(
+                conn,
+                thread["id"],
+                limit=HISTORY_FETCH_LIMIT,
+                # The most recent turns, not the first ones ever sent. Without
+                # this a long thread handed the agent its opening exchange and
+                # `budget_history` trimmed that to messages 81-100, so the model
+                # answered follow-ups having never seen what it was following up
+                # on. Only reachable once a thread passes HISTORY_FETCH_LIMIT,
+                # which is why it survived this long.
+                newest=True,
+                # `role` and `text` are all this builds; parsing every stored
+                # trace to throw it away cost a json.loads per row per message.
+                with_tools=False,
+            )
         ]
         store.append_message(conn, thread["id"], role="user", text=message)
         # A thread made from the sidebar's "New chat" button has the
@@ -282,19 +299,56 @@ def _connected(websocket: WebSocket) -> bool:
     )
 
 
-def default_chat_runner(settings: Settings) -> ChatRunner:
-    """Lazily build the real agent so the app boots without agent deps."""
+def default_chat_runner(
+    settings: Settings, index_factory: Callable[[], Any] | None = None
+) -> ChatRunner:
+    """Lazily build the real agent so the app boots without agent deps.
+
+    ``index_factory`` is the app's one shared index (``main.py``'s
+    ``_default_index_factory``). Without it the agent builds a ``VaultIndex`` of
+    its own -- see :meth:`backend.agent.runtime.ChatAgent.__init__`.
+    """
     import threading
 
     from backend.agent.runtime import ChatAgent
 
-    agent = ChatAgent(settings)
+    agent = ChatAgent(settings, index_factory=index_factory)
     threading.Thread(target=agent.warm, daemon=True).start()
     return agent.stream_chat
 
 
-def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> APIRouter:
+def build_chat_router(
+    settings: Settings,
+    chat_runner: ChatRunner | None,
+    index_factory: Callable[[], Any] | None = None,
+) -> APIRouter:
     router = APIRouter()
+
+    # One agent for this process, built on the first connection that needs it.
+    #
+    # This used to be `chat_runner or default_chat_runner(settings)` *inside*
+    # the socket handler, and production passes `chat_runner=None` -- so every
+    # connect built a new ChatAgent, and with it a new VaultIndex, a new chroma
+    # client and a new SentenceTransformer on a new warm thread (~20s, see
+    # ChatAgent.warm). A reload, a STOP-then-ask, a sleep/wake or a second
+    # window each paid that again and left the previous model resident, while
+    # the index's all_chunks/bm25/link_index caches restarted cold every time.
+    #
+    # Double-checked under a lock rather than built eagerly: construction stays
+    # lazy so an install without the `[rag]` extras still boots, and the
+    # warm-up thread is still started exactly once. Same idiom, and the same
+    # reasoning, as `backend.rag.index.make_index_factory`.
+    runner_lock = threading.Lock()
+    resolved_runner: list[ChatRunner] = []
+
+    def get_runner() -> ChatRunner:
+        if chat_runner is not None:
+            return chat_runner
+        if not resolved_runner:
+            with runner_lock:
+                if not resolved_runner:
+                    resolved_runner.append(default_chat_runner(settings, index_factory))
+        return resolved_runner[0]
 
     def db() -> sqlite3.Connection:
         conn = connect(settings.db_path)
@@ -321,7 +375,7 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
         {type: "notice", kind, detail} ... {type: "done"} | {type: "error", detail}.
         """
         await websocket.accept()
-        runner = chat_runner or default_chat_runner(settings)
+        runner = get_runner()
         try:
             while True:
                 payload = await websocket.receive_json()

@@ -2,8 +2,10 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   type CSSProperties,
   type ReactNode,
@@ -107,15 +109,26 @@ export function ModeProvider({ children }: { children: ReactNode }) {
     }
   }, [mode, show]);
 
-  function setMode(next: Mode) {
-    router.push(MODE_ROUTES[next]);
-  }
+  const setMode = useCallback(
+    (next: Mode) => {
+      router.push(MODE_ROUTES[next]);
+    },
+    [router],
+  );
 
-  const accent = ACCENTS[mode];
-  const style = { "--ac": accent.ac, "--ac-bg": accent.acBg } as CSSProperties;
+  // All three memoised for the same reason: this provider re-renders whenever
+  // anything above it does -- including on every toast, before Toast's own
+  // value was stabilised -- and an unmemoised context value or inline `style`
+  // object re-renders every consumer and re-applies the wrapper's inline
+  // custom properties on each one.
+  const style = useMemo(() => {
+    const accent = ACCENTS[mode];
+    return { "--ac": accent.ac, "--ac-bg": accent.acBg } as CSSProperties;
+  }, [mode]);
+  const value = useMemo(() => ({ mode, setMode }), [mode, setMode]);
 
   return (
-    <ModeContext.Provider value={{ mode, setMode }}>
+    <ModeContext.Provider value={value}>
       <div style={style}>{children}</div>
     </ModeContext.Provider>
   );

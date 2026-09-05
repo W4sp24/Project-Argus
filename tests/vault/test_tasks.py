@@ -1,6 +1,7 @@
 """Tests for the Obsidian Tasks parser and bucket views."""
 
 import sqlite3
+import time
 from datetime import date
 from pathlib import Path
 
@@ -200,3 +201,106 @@ def test_recurrence_survives_the_cache(conn: sqlite3.Connection, tmp_path: Path)
     assert today_tasks["One-off errand"].recurrence is None
     # The rule is metadata, not part of the title the panel prints.
     assert "🔁" not in today_tasks["Water the plants"].text
+
+
+# --- the cache is incremental ------------------------------------------------
+
+
+def _aged(path: Path) -> None:
+    """Backdate a file past RECENT_EDIT_SECONDS.
+
+    The scan always re-reads anything touched in the last couple of seconds,
+    because coarse filesystem timestamps could otherwise hide a same-tick edit
+    of the same length. A test writing files milliseconds ago would trip that
+    guard and see a full re-read every time, proving nothing.
+    """
+    import os
+
+    old = time.time() - 60
+    os.utime(path, (old, old))
+
+
+def test_a_second_refresh_reads_nothing_that_has_not_changed(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """This is called from /api/agenda, /api/tasks, insights, briefing and the
+    `list_tasks` chat tool. It used to read every markdown file in the vault on
+    every one of them, so opening the dashboard cost a full vault scan."""
+    vault = tmp_path / "vault"
+    (vault / "20-Projects").mkdir(parents=True)
+    for name in ("a", "b", "c"):
+        note = vault / "20-Projects" / f"{name}.md"
+        note.write_text(f"- [ ] task in {name}\n", encoding="utf-8")
+        _aged(note)
+
+    assert refresh_cache(conn, vault) == 3
+
+    reads: list[str] = []
+    original = Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        reads.append(str(self))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    assert refresh_cache(conn, vault) == 3, "the count still comes out of the cache"
+    assert reads == [], f"nothing changed, so nothing should have been read: {reads}"
+
+
+def test_an_edit_an_addition_and_a_deletion_all_still_land(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    vault = tmp_path / "vault"
+    (vault / "20-Projects").mkdir(parents=True)
+    kept = vault / "20-Projects" / "kept.md"
+    doomed = vault / "20-Projects" / "doomed.md"
+    kept.write_text("- [ ] original\n", encoding="utf-8")
+    doomed.write_text("- [ ] goes away\n", encoding="utf-8")
+    _aged(kept)
+    _aged(doomed)
+
+    assert refresh_cache(conn, vault) == 2
+
+    kept.write_text("- [ ] edited\n- [ ] and a second one\n", encoding="utf-8")
+    added = vault / "20-Projects" / "added.md"
+    added.write_text("- [ ] brand new\n", encoding="utf-8")
+    doomed.unlink()
+
+    assert refresh_cache(conn, vault) == 3
+
+    texts = {row["text"] for row in conn.execute("SELECT text FROM tasks_cache")}
+    assert texts == {"edited", "and a second one", "brand new"}
+    fingerprints = {row["path"] for row in conn.execute("SELECT path FROM tasks_cache_files")}
+    assert fingerprints == {"20-Projects/kept.md", "20-Projects/added.md"}
+
+
+def test_a_same_size_edit_within_the_grace_window_is_not_missed(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A note rewritten to the same length in the same filesystem tick has an
+    identical (mtime_ns, size) fingerprint. RECENT_EDIT_SECONDS is what stops
+    that from being read as "unchanged"."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("- [ ] aaaa\n", encoding="utf-8")
+
+    assert refresh_cache(conn, vault) == 1
+
+    note.write_text("- [ ] bbbb\n", encoding="utf-8")  # same length, just written
+    refresh_cache(conn, vault)
+
+    assert [row["text"] for row in conn.execute("SELECT text FROM tasks_cache")] == ["bbbb"]
+
+
+def test_a_file_the_taxonomy_excludes_is_never_read(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """I3: the private zone must not be scanned, incrementally or otherwise."""
+    vault = tmp_path / "vault"
+    (vault / "99-Private").mkdir(parents=True)
+    (vault / "99-Private" / "diary.md").write_text("- [ ] secret plan\n", encoding="utf-8")
+
+    assert refresh_cache(conn, vault) == 0
+    assert conn.execute("SELECT COUNT(*) FROM tasks_cache_files").fetchone()[0] == 0

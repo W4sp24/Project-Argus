@@ -10,23 +10,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { mutate } from "swr";
+import { useSWRConfig } from "swr";
 import { apiFetch, getChatThread, wsBase } from "@/lib/api";
+import { applyToolFrame, foldToolFrames, type ToolStep } from "@/lib/chat/tools";
 import { selectedModel } from "@/lib/models";
 
-/** One dispatch of one tool, assembled from the `tool` start and end frames. */
-export interface ToolStep {
-  callId: string;
-  name: string;
-  args?: Record<string, unknown>;
-  /** Present once the matching `phase:"end"` frame lands. */
-  label?: string;
-  detail?: string;
-  paths?: string[];
-  ok?: boolean;
-  startedAt: number;
-  endedAt?: number;
-}
+/** Re-exported so consumers keep importing it from "@/lib/chat"; it is
+ *  defined with the folding logic in `lib/chat/tools.ts`. */
+export type { ToolStep };
 
 export type MessageStatus = "streaming" | "done" | "error" | "stopped";
 
@@ -50,24 +41,56 @@ export interface ChatMessage {
   local?: boolean;
 }
 
-interface ChatState {
-  messages: ChatMessage[];
+/** Thread-level facts. Change once or twice a turn, not once a frame. */
+export interface ChatMeta {
   threadId: number | null;
   threadTitle: string;
   busy: boolean;
   offline: boolean;
+}
+
+/** The verbs. Every one is a stable `useCallback`, so this object never changes. */
+export interface ChatActions {
   send: (text: string) => void;
   stop: () => void;
   newThread: () => void;
   openThread: (id: number) => Promise<void>;
 }
 
-const ChatContext = createContext<ChatState | null>(null);
+/**
+ * Three contexts, not one.
+ *
+ * `ChatProvider` is the outermost provider in the dashboard layout, and the
+ * transcript changes identity on every batched delta — up to once per animation
+ * frame while an answer streams. With `messages` in the same value object as
+ * the verbs, that re-rendered *every* `useChat()` consumer at ~60Hz: the
+ * command palette (which wants nothing but `send`), the thread rail, and the
+ * /chat header. Splitting them means a consumer re-renders when the thing it
+ * actually reads changes, and the palette never re-renders mid-stream at all.
+ */
+const ChatMessagesContext = createContext<ChatMessage[] | null>(null);
+const ChatMetaContext = createContext<ChatMeta | null>(null);
+const ChatActionsContext = createContext<ChatActions | null>(null);
 
-export function useChat(): ChatState {
-  const state = useContext(ChatContext);
-  if (!state) throw new Error("useChat must be used inside <ChatProvider>");
-  return state;
+const outside = (hook: string) => new Error(`${hook} must be used inside <ChatProvider>`);
+
+/** The transcript. Only subscribe to this if you render it. */
+export function useChatMessages(): ChatMessage[] {
+  const messages = useContext(ChatMessagesContext);
+  if (!messages) throw outside("useChatMessages");
+  return messages;
+}
+
+export function useChatMeta(): ChatMeta {
+  const meta = useContext(ChatMetaContext);
+  if (!meta) throw outside("useChatMeta");
+  return meta;
+}
+
+export function useChatActions(): ChatActions {
+  const actions = useContext(ChatActionsContext);
+  if (!actions) throw outside("useChatActions");
+  return actions;
 }
 
 let keySeq = 0;
@@ -82,45 +105,6 @@ function patchLast(
   if (list.length === 0) return list;
   const next = [...list];
   next[next.length - 1] = patch(next[next.length - 1]);
-  return next;
-}
-
-/**
- * Fold one `tool` frame into a step list, upserting by `call_id`.
- *
- * The frames streamed over the socket and the `tools_json` rows a thread
- * restores from are the same objects — `_tool_frame()` produces both, and the
- * router appends every frame it sends — so they must fold through one
- * function or a reloaded trace would quietly differ from the one you watched
- * being built.
- */
-function applyToolFrame(steps: ToolStep[], frame: Record<string, unknown>): ToolStep[] {
-  const callId = String(frame.call_id ?? "");
-  const name = String(frame.name ?? "");
-  const next = [...steps];
-  const at = next.findIndex((step) => step.callId === callId);
-  if (frame.phase === "start") {
-    const started: ToolStep = {
-      callId,
-      name,
-      args: (frame.args as Record<string, unknown>) ?? undefined,
-      startedAt: Date.now(),
-    };
-    if (at === -1) next.push(started);
-    else next[at] = { ...next[at], ...started };
-    return next;
-  }
-  const finished = {
-    label: String(frame.label ?? name),
-    detail: String(frame.detail ?? ""),
-    paths: Array.isArray(frame.paths) ? (frame.paths as string[]) : [],
-    ok: frame.ok !== false,
-    endedAt: Date.now(),
-  };
-  // An end frame with no matching start can only come from a truncated
-  // persisted trace; keep the summary rather than dropping the step.
-  if (at === -1) next.push({ callId, name, startedAt: Date.now(), ...finished });
-  else next[at] = { ...next[at], ...finished };
   return next;
 }
 
@@ -155,6 +139,17 @@ export function ChatProvider({
   const [threadTitle, setThreadTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [offline, setOffline] = useState(false);
+
+  // The *scoped* mutate, not the one importable from "swr". The dashboard
+  // layout gives SWR a bounded cache provider (web/lib/swrCache.ts), and a
+  // provider puts the cache in its own scope: the global `mutate` then talks
+  // to the default cache that nothing is reading, so the thread rail never
+  // heard that a new conversation existed. Held in a ref for the same reason
+  // `sourcesRef` is one -- `handleFrame` is captured by the socket at connect
+  // time and must not be rebuilt.
+  const { mutate } = useSWRConfig();
+  const mutateRef = useRef(mutate);
+  mutateRef.current = mutate;
 
   const socketRef = useRef<WebSocket | null>(null);
   // Read inside send() and the frame handlers, which the socket captures once
@@ -232,7 +227,7 @@ export function ChatProvider({
           // the first message on, but only if its SWR list is told to look
           // again. Without this a brand-new conversation is invisible until
           // something else happens to revalidate.
-          void mutate(
+          void mutateRef.current(
             (key) => typeof key === "string" && key.startsWith("/api/chat/threads"),
             undefined,
             { revalidate: true },
@@ -461,10 +456,7 @@ export function ChatProvider({
           serverId: row.id,
           role: row.role,
           text: row.text,
-          steps: (Array.isArray(row.tools) ? row.tools : []).reduce<ToolStep[]>(
-            (steps, frame) => applyToolFrame(steps, frame),
-            [],
-          ),
+          steps: foldToolFrames(Array.isArray(row.tools) ? row.tools : []),
           status: "done" as const,
         })),
       );
@@ -472,10 +464,20 @@ export function ChatProvider({
     [stop],
   );
 
-  const value = useMemo(
-    () => ({ messages, threadId, threadTitle, busy, offline, send, stop, newThread, openThread }),
-    [messages, threadId, threadTitle, busy, offline, send, stop, newThread, openThread],
+  const meta = useMemo(
+    () => ({ threadId, threadTitle, busy, offline }),
+    [threadId, threadTitle, busy, offline],
+  );
+  const actions = useMemo(
+    () => ({ send, stop, newThread, openThread }),
+    [send, stop, newThread, openThread],
   );
 
-  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
+  return (
+    <ChatActionsContext.Provider value={actions}>
+      <ChatMetaContext.Provider value={meta}>
+        <ChatMessagesContext.Provider value={messages}>{children}</ChatMessagesContext.Provider>
+      </ChatMetaContext.Provider>
+    </ChatActionsContext.Provider>
+  );
 }

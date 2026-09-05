@@ -21,9 +21,19 @@ def test_connect_creates_parent_dirs_and_enables_wal(tmp_path: Path) -> None:
 
 
 def test_init_schema_is_idempotent_and_creates_suggestions(tmp_path: Path) -> None:
+    """The DDL itself must survive a second run, not merely be skipped.
+
+    ``init_schema`` now returns early for a database this process has already
+    initialised, so the cache is cleared between the two calls -- otherwise
+    this would assert nothing about the script and would pass even if the
+    migrations were not idempotent at all.
+    """
+    from backend.core.db import reset_schema_cache
+
     conn = connect(tmp_path / "friday.db")
     try:
         init_schema(conn)
+        reset_schema_cache()
         init_schema(conn)  # must not raise
 
         conn.execute(
@@ -174,3 +184,68 @@ def test_an_older_database_gains_the_task_recurrence_column(tmp_path) -> None:
         "SELECT recurrence FROM tasks_cache WHERE path = 'b.md'"
     ).fetchone()["recurrence"] == "every week"
     conn.close()
+
+
+def test_the_schema_is_built_once_per_process_not_once_per_connection(tmp_path: Path) -> None:
+    """There is no connection pool, so this ran on every connection in the app.
+
+    The script is 42 statements plus ~15 `PRAGMA table_info` round-trips, the
+    guarded ALTERs, four rebuild migrations and an unconditional UPDATE. Every
+    HTTP request paid it; one chat turn paid it five or more times.
+    """
+    from backend.core.db import init_schema, reset_schema_cache
+
+    db_path = tmp_path / "argus.db"
+
+    first = connect(db_path)
+    try:
+        statements: list[str] = []
+        first.set_trace_callback(statements.append)
+        init_schema(first)
+        first.set_trace_callback(None)
+        assert any("CREATE TABLE" in sql for sql in statements), "the first call builds the schema"
+    finally:
+        first.close()
+
+    # A *different* connection to the same file -- which is what every request
+    # in the app opens -- must not repeat the work.
+    second = connect(db_path)
+    try:
+        statements = []
+        second.set_trace_callback(statements.append)
+        init_schema(second)
+        second.set_trace_callback(None)
+        assert not any("CREATE TABLE" in sql for sql in statements), statements
+        assert not any("ALTER TABLE" in sql for sql in statements), statements
+    finally:
+        second.close()
+
+    # ...and the guard is per database, not global: a second database in the
+    # same process still gets its schema.
+    reset_schema_cache(str(db_path))
+    other = connect(tmp_path / "other.db")
+    try:
+        statements = []
+        other.set_trace_callback(statements.append)
+        init_schema(other)
+        other.set_trace_callback(None)
+        assert any("CREATE TABLE" in sql for sql in statements)
+    finally:
+        other.close()
+
+
+def test_an_in_memory_database_is_never_cached() -> None:
+    """Two `:memory:` handles are two unrelated databases, and both report an
+    empty file -- caching on that key would leave the second one schemaless."""
+    import sqlite3
+
+    from backend.core.db import init_schema
+
+    for _ in range(2):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            init_schema(conn)
+            assert conn.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0] == 0
+        finally:
+            conn.close()

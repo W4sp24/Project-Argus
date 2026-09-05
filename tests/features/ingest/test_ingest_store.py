@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.db import connect, init_schema
+from backend.core.db import connect, init_schema, reset_schema_cache
 from backend.features.ingest import store
 
 
@@ -198,9 +198,17 @@ def test_note_style_defaults_to_none_chosen(conn):
 
 
 def test_a_database_predating_note_style_is_migrated(tmp_path):
-    """`init_schema` runs on every connection, so an existing 0.2 database has
-    to grow the column rather than fail every ingest query with
-    `no such column`. Simulated by dropping the column back off."""
+    """An existing 0.2 database has to grow the column rather than fail every
+    ingest query with `no such column`. Simulated by dropping the column back
+    off.
+
+    `init_schema` runs once per database per *process* now, not once per
+    connection, so `reset_schema_cache()` stands in for the thing this test is
+    actually about: a database written by an older Argus, opened by a newer one
+    that has never seen it. Without it the second call would legitimately skip
+    a schema this process had already built — and the column would only be
+    missing because the test itself dropped it, which no real upgrade does.
+    """
     db_path = tmp_path / "argus.db"
     first = connect(db_path)
     init_schema(first)
@@ -208,6 +216,7 @@ def test_a_database_predating_note_style_is_migrated(tmp_path):
     first.commit()
     first.close()
 
+    reset_schema_cache()
     second = connect(db_path)
     init_schema(second)
     try:
@@ -370,3 +379,31 @@ def test_the_latest_finished_job_is_not_hidden_by_one_still_running(
 
     assert store.latest_job(conn, "reindex")["id"] == second
     assert store.latest_job(conn, "reindex", finished=True)["id"] == first
+
+
+def test_finished_jobs_do_not_accumulate_forever(conn: sqlite3.Connection) -> None:
+    """Nothing ever deleted a job row.
+
+    Every ingest, reindex, relink, guide, exam and deck an install has run wrote
+    one, plus an `ingest_job_items` row per file, in an app meant to run for
+    months. `automations.store.record_event` has capped its own table since it
+    shipped; this one never got the equivalent.
+    """
+    from backend.features.ingest.store import JOB_RETENTION_CAP
+
+    ids = [
+        store.create_job(conn, target="t", summary_prompt="", filenames=["a.md"])
+        for _ in range(JOB_RETENTION_CAP + 5)
+    ]
+
+    kept = conn.execute("SELECT COUNT(*) AS n FROM ingest_jobs").fetchone()["n"]
+    assert kept == JOB_RETENTION_CAP
+
+    # The newest survive and the oldest are the ones that went.
+    assert store.get_job(conn, ids[-1]) is not None
+    assert store.get_job(conn, ids[0]) is None
+
+    # Items go with their job rather than being orphaned -- the cascade is real
+    # because connect() turns on PRAGMA foreign_keys.
+    items = conn.execute("SELECT COUNT(*) AS n FROM ingest_job_items").fetchone()["n"]
+    assert items == JOB_RETENTION_CAP

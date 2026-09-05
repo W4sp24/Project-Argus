@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import type { ToolStep } from "@/lib/chat";
 import { obsidianUri } from "@/lib/citations";
 
@@ -12,7 +13,7 @@ import { obsidianUri } from "@/lib/citations";
  * `99-Private/` note cannot reach this list even if the model names it in the
  * answer text. That is the whole reason the chips moved off the regex.
  */
-export default function CitationChips({
+function CitationChips({
   steps,
   vaultPath,
 }: {
@@ -55,3 +56,8 @@ export default function CitationChips({
     </ul>
   );
 }
+
+/** Memoised for the same reason ToolTrace is: this rebuilds a deduped path set
+ *  out of the whole step list, and did so for every message in the thread on
+ *  every render of the transcript. */
+export default React.memo(CitationChips);

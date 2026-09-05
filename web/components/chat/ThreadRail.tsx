@@ -1,6 +1,12 @@
 "use client";
 
-import { useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+} from "react";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ui/useConfirm";
 import {
@@ -9,7 +15,7 @@ import {
   useChatThreads,
   type ThreadInfo,
 } from "@/lib/api";
-import { useChat } from "@/lib/chat";
+import { useChatActions, useChatMeta } from "@/lib/chat";
 
 // --- collapse persistence --------------------------------------------------
 //
@@ -118,14 +124,15 @@ function groupThreads(threads: ThreadInfo[]): [Bucket, ThreadInfo[]][] {
 
 /**
  * The left session rail for /chat: every persisted thread, grouped by local
- * day, with rename/delete/new-thread affordances. Reads `useChat()` for the
+ * day, with rename/delete/new-thread affordances. Reads the chat context for the
  * live thread and its actions, and `useChatThreads()` (SWR) for the list —
  * the two are separate data sources on purpose, so this rail keeps working
  * (and revalidates independently) even while a turn is streaming.
  */
 export default function ThreadRail({ course }: { course?: string }) {
   const { data, isLoading, mutate } = useChatThreads(course);
-  const { threadId, openThread, newThread } = useChat();
+  const { threadId } = useChatMeta();
+  const { openThread, newThread } = useChatActions();
   const { show } = useToast();
   const { confirm, confirmDialog } = useConfirm();
   const collapsed = useRailCollapsed();
@@ -138,8 +145,11 @@ export default function ThreadRail({ course }: { course?: string }) {
   // trailing blur is a no-op instead of a second, unwanted save.
   const cancelledRef = useRef(false);
 
-  const threads = data ?? [];
-  const groups = groupThreads(threads);
+  const threads = useMemo(() => data ?? [], [data]);
+  // Re-bucketing the whole list on every render was cheap per pass and paid on
+  // every one -- including, before the context split, every batched delta of a
+  // streaming answer.
+  const groups = useMemo(() => groupThreads(threads), [threads]);
 
   function handleOpen(thread: ThreadInfo) {
     if (editingId === thread.id) return;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { ChatMessage, ToolStep } from "@/lib/chat";
 
 interface ToolTraceProps {
@@ -103,7 +103,7 @@ function PathLine({ path, indent }: { path: string; indent: string }) {
  * Doubles as the replay view for a thread loaded from `chat_messages` —
  * same props, just `status` already settled and `startedAt` absent.
  */
-export default function ToolTrace({ steps, status, startedAt, endedAt }: ToolTraceProps) {
+function ToolTrace({ steps, status, startedAt, endedAt }: ToolTraceProps) {
   const streaming = status === "streaming";
   const [expanded, setExpanded] = useState(false);
 
@@ -209,3 +209,8 @@ export default function ToolTrace({ steps, status, startedAt, endedAt }: ToolTra
     </div>
   );
 }
+
+/** Memoised: `patchLast` (web/lib/chat.tsx) keeps every finished message's
+ *  object identity across a flush, so a historical turn's trace re-rendered on
+ *  every keystroke and every batched delta for no reason at all. */
+export default React.memo(ToolTrace);

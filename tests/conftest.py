@@ -7,6 +7,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from backend.core.db import reset_schema_cache
 from backend.core.taxonomy import Taxonomy, active_taxonomy, set_active_taxonomy
 
 
@@ -71,3 +72,23 @@ def _reset_active_taxonomy() -> Iterator[None]:
         yield
     finally:
         set_active_taxonomy(previous)
+
+
+@pytest.fixture(autouse=True)
+def _reset_schema_cache() -> Iterator[None]:
+    """Reset the process-level "schema already initialised" set around every test.
+
+    ``backend.core.db.init_schema`` records which database files it has already
+    brought up to schema, so the 40-odd-statement DDL script runs once per
+    process rather than on every connection. That set is module-level mutable
+    state and pytest reuses one process for the whole run, so — exactly like
+    ``_reset_active_taxonomy`` above — a ``tmp_path`` database from an earlier
+    test must not be able to make a later one skip its DDL. ``tmp_path`` is
+    unique per test, so this is belt-and-braces rather than load-bearing today;
+    it stops the day a fixture reuses a path from becoming a mystery.
+    """
+    reset_schema_cache()
+    try:
+        yield
+    finally:
+        reset_schema_cache()

@@ -12,6 +12,7 @@ from __future__ import annotations
 import calendar
 import re
 import sqlite3
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -173,47 +174,101 @@ def advance_date(iso: str, rule: str) -> str | None:
     return _add_months(anchor, every if unit == "month" else every * 12).isoformat()
 
 
+#: A file modified this recently is always re-read, whatever its fingerprint
+#: says. Filesystem timestamps are coarse on some volumes, and a note saved
+#: twice in the same tick with the same length would otherwise look unchanged.
+#: Costs one extra read of one file for a couple of seconds after every edit.
+RECENT_EDIT_SECONDS = 2.0
+
+
+def _task_rows(relative: Path, lines: list[str]) -> list[tuple]:
+    """Every task line in one file, as tasks_cache tuples."""
+    rows: list[tuple] = []
+    for number, raw_line in enumerate(lines, start=1):
+        task = parse_task_line(raw_line)
+        if task is None:
+            continue
+        rows.append(
+            (
+                relative.as_posix(),
+                number,
+                task.text,
+                int(task.done),
+                task.due,
+                task.scheduled,
+                task.priority,
+                ",".join(task.tags),
+                task.recurrence,
+            )
+        )
+    return rows
+
+
 def refresh_cache(
     conn: sqlite3.Connection, vault_path: Path, *, taxonomy: Taxonomy | None = None
 ) -> int:
-    """Rescan the vault into tasks_cache; returns the number of open tasks."""
+    """Rescan the vault into tasks_cache; returns the number of open tasks.
+
+    Incremental. This used to read *every* markdown file in the vault and
+    rebuild the whole table, and it is called from `/api/agenda`, `/api/tasks`,
+    insights, briefing, the external surface and the `list_tasks` chat tool —
+    so the cost of opening the dashboard scaled with the size of the vault, and
+    was paid again on every poll.
+
+    Now it stats each file and re-reads only the ones whose ``(mtime_ns, size)``
+    has moved since ``tasks_cache_files`` last saw them, the same high-water
+    mark idiom `backend.telemetry.scan.sync_rows` uses. Files that vanished
+    lose their rows; nothing else is touched. The return value is unchanged.
+    """
     tax = taxonomy or active_taxonomy()
-    rows: list[tuple] = []
+    known: dict[str, tuple[int, int]] = {
+        row["path"]: (row["mtime_ns"], row["size"])
+        for row in conn.execute("SELECT path, mtime_ns, size FROM tasks_cache_files")
+    }
+
+    recent_floor = time.time() - RECENT_EDIT_SECONDS
+    seen: set[str] = set()
+    changed: list[tuple[str, tuple]] = []
+
     for file_path in vault_path.rglob("*.md"):
         relative = file_path.relative_to(vault_path)
         if any(part in tax.excluded_top_dirs for part in relative.parts):
+            continue
+        key = relative.as_posix()
+        try:
+            stat = file_path.stat()
+        except OSError:
+            continue
+        seen.add(key)
+        fingerprint = (stat.st_mtime_ns, stat.st_size)
+        if known.get(key) == fingerprint and stat.st_mtime < recent_floor:
             continue
         try:
             lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
         except OSError:
             continue
-        for number, raw_line in enumerate(lines, start=1):
-            task = parse_task_line(raw_line)
-            if task is None:
-                continue
-            rows.append(
-                (
-                    relative.as_posix(),
-                    number,
-                    task.text,
-                    int(task.done),
-                    task.due,
-                    task.scheduled,
-                    task.priority,
-                    ",".join(task.tags),
-                    task.recurrence,
-                )
-            )
+        changed.append((key, fingerprint))
+        conn.execute("DELETE FROM tasks_cache WHERE path = ?", (key,))
+        conn.executemany(
+            "INSERT INTO tasks_cache"
+            " (path, line, text, done, due, scheduled, priority, tags, recurrence)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            _task_rows(relative, lines),
+        )
 
-    conn.execute("DELETE FROM tasks_cache")
-    conn.executemany(
-        "INSERT INTO tasks_cache"
-        " (path, line, text, done, due, scheduled, priority, tags, recurrence)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
-    )
+    for key, fingerprint in changed:
+        conn.execute(
+            "INSERT INTO tasks_cache_files (path, mtime_ns, size) VALUES (?, ?, ?) "
+            "ON CONFLICT(path) DO UPDATE SET mtime_ns = excluded.mtime_ns, size = excluded.size",
+            (key, *fingerprint),
+        )
+
+    for gone in known.keys() - seen:
+        conn.execute("DELETE FROM tasks_cache WHERE path = ?", (gone,))
+        conn.execute("DELETE FROM tasks_cache_files WHERE path = ?", (gone,))
+
     conn.commit()
-    return sum(1 for row in rows if not row[3])
+    return conn.execute("SELECT COUNT(*) FROM tasks_cache WHERE done = 0").fetchone()[0]
 
 
 def bucket_of(task: TaskItem, today: date) -> str:

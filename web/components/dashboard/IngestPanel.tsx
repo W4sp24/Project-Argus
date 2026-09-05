@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
@@ -45,6 +45,17 @@ export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
 
   const [capture, setCapture] = useState("");
   const [captureStatus, setCaptureStatus] = useState<string | null>(null);
+  // Owned in a ref and cleared on unmount, the way useTypewriter and
+  // FocusTimer already handle theirs: the bare setTimeout this replaces kept a
+  // reference to a gone component's setState for five seconds after the panel
+  // left the screen.
+  const captureTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (captureTimer.current) window.clearTimeout(captureTimer.current);
+    },
+    [],
+  );
   const [dialogFiles, setDialogFiles] = useState<File[] | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const { data: job } = useIngestJob(jobId);
@@ -68,7 +79,8 @@ export default function IngestPanel({ target, onUploaded }: IngestPanelProps) {
     });
     const payload = await response.json();
     setCaptureStatus(response.ok ? `Captured → ${payload.path}` : `Capture failed: ${payload.detail}`);
-    setTimeout(() => setCaptureStatus(null), 5000);
+    if (captureTimer.current) window.clearTimeout(captureTimer.current);
+    captureTimer.current = window.setTimeout(() => setCaptureStatus(null), 5000);
   }
 
   // EMAIL.CAPTURE (§11) — real POST /api/ingest/email; results land in the

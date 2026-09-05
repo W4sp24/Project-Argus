@@ -90,6 +90,20 @@ export default function AutomationWidgets() {
   const { confirm, confirmDialog } = useConfirm();
 
   const gridRef = useRef<HTMLDivElement>(null);
+  // `startResize` binds pointermove/pointerup on `window` and used to unbind
+  // them only from inside its own `pointerup`. Navigating away mid-drag left
+  // the move listener alive, holding a stale closure over an unmounted
+  // component's `widget`/`applyPatch`/`mutate` until some unrelated pointerup
+  // anywhere in the browser happened to fire. Every other listener in this app
+  // is torn down from an effect cleanup; this one is now too.
+  const releaseResize = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      releaseResize.current?.();
+      releaseResize.current = null;
+    },
+    [],
+  );
   const [columns, setColumns] = useState(WIDE_COLUMNS);
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [liveResize, setLiveResize] = useState<{ key: string; cols: number; rows: number } | null>(
@@ -269,8 +283,8 @@ export default function AutomationWidgets() {
     }
 
     function onUp(ev: PointerEvent) {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      releaseResize.current?.();
+      releaseResize.current = null;
       const size = nextSize(ev.clientX, ev.clientY);
       setLiveResize(null);
       if (size.cols !== startCols || size.rows !== startRows) {
@@ -280,6 +294,10 @@ export default function AutomationWidgets() {
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
+    releaseResize.current = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
   }
 
   /**

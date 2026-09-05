@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -67,8 +68,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     timers.current.push(timer);
   }, []);
 
+  // `show` is already stable, but `{ show }` was not: a new object every time
+  // the provider re-rendered, which is every toast added and every one
+  // auto-dismissed. `useToast` has the widest consumer list in the app, so
+  // that re-rendered TopBar, ChatDrawer, the command palette, the planner
+  // timeline, the ingest panel and the thread rail on every toast. Memoised,
+  // this value now never changes at all.
+  const value = useMemo(() => ({ show }), [show]);
+
   return (
-    <ToastContext.Provider value={{ show }}>
+    <ToastContext.Provider value={value}>
       {children}
 
       {/* One always-mounted live region holding the visible stack. Mirroring

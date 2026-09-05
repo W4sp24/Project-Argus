@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import threading
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -429,13 +429,21 @@ def build_vault_tools(
         from backend.core.db import connect, init_schema
         from backend.vault.tasks import bucketed_tasks, refresh_cache
 
-        conn = connect(settings.db_path)
-        try:
-            init_schema(conn)
-            refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
-            buckets = bucketed_tasks(conn, today=date.today())
-        finally:
-            conn.close()
+        def _read() -> dict[str, list]:
+            conn = connect(settings.db_path)
+            try:
+                init_schema(conn)
+                refresh_cache(conn, settings.vault_path, taxonomy=settings.taxonomy)
+                return bucketed_tasks(conn, today=date.today())
+            finally:
+                conn.close()
+
+        # to_thread for the same reason search_vault is: `refresh_cache` walks
+        # the whole vault and reads every markdown file in it. Called straight
+        # from this `async def` it stalled the event loop -- and with it every
+        # delta already streaming to the browser -- for the length of a full
+        # vault scan.
+        buckets = await asyncio.to_thread(_read)
         return _tool_text(
             {bucket: [task.model_dump() for task in tasks] for bucket, tasks in buckets.items()}
         )
@@ -448,12 +456,16 @@ def build_vault_tools(
 
         start = _as_day(args.get("start")) or date.today()
         end = _as_day(args.get("end")) or start + timedelta(days=7)
-        conn = connect(settings.db_path)
-        try:
-            init_schema(conn)
-            events = service.events_in_window(conn, start, end)
-        finally:
-            conn.close()
+
+        def _read() -> list:
+            conn = connect(settings.db_path)
+            try:
+                init_schema(conn)
+                return service.events_in_window(conn, start, end)
+            finally:
+                conn.close()
+
+        events = await asyncio.to_thread(_read)
         return _tool_text({"events": [event.model_dump() for event in events]})
 
     return [
@@ -612,9 +624,31 @@ def acknowledge_tool_steps(summaries: Sequence[ToolSummary]) -> str:
 class ChatAgent:
     """Streams RAG-grounded chat answers. One instance per app process."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        index_factory: Callable[[], VaultIndex] | None = None,
+    ) -> None:
+        """``index_factory`` shares the app's one index; omitting it builds a private one.
+
+        The app passes :func:`backend.rag.index.make_index_factory`'s callable
+        (via ``main.py``'s ``_default_index_factory``), which every other router
+        already receives. Building a ``VaultIndex`` here instead is what that
+        factory's own docstring warns about: the SentenceTransformer is
+        per-instance, so a second instance pays the ~20s model load again and
+        starts its ``all_chunks``/``bm25``/``link_index`` caches cold, unable to
+        see the shared instance's upserts.
+
+        The fallback stays because tests construct ``ChatAgent(settings)``
+        directly, and an install without the ``[rag]`` extras must still be able
+        to build the agent — ``VaultIndex`` defers its own heavy imports.
+        """
         self._settings = settings
-        self._index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
+        self._index = (
+            index_factory()
+            if index_factory is not None
+            else VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
+        )
         # Set when warming finishes, so vault searches can wait rather than
         # race the still-initializing chroma client. See build_vault_tools.
         self._ready = threading.Event()
@@ -695,7 +729,11 @@ class ChatAgent:
         # see backend/features/automations/tools.py.
         from backend.features.automations.tools import build_automation_tools
 
-        tools = tools + build_automation_tools(self._settings)
+        # to_thread, like search_vault below: this opens a connection, brings
+        # the schema up and parses a JSON schema per registered workflow, and
+        # it runs on every turn whether or not any automation exists. Inline it
+        # was blocking the loop before the first token could be produced.
+        tools = tools + await asyncio.to_thread(build_automation_tools, self._settings)
 
         turns = budget_history([*(history or []), Message("user", message)])
 

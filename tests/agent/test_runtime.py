@@ -982,3 +982,45 @@ async def test_list_events_survives_a_date_the_model_invented(settings: Settings
     listed = await tool(tools, "list_events").handler({"start": "next Tuesday"})
 
     assert json.loads(listed["content"][0]["text"])["events"] == []
+
+
+def test_the_agent_searches_through_the_index_it_is_handed(settings: Settings) -> None:
+    """`ChatAgent` builds its own `VaultIndex` only when nobody hands it one.
+
+    `make_index_factory`'s docstring is the reason this matters: the
+    SentenceTransformer is per-`VaultIndex`, so a second instance pays the model
+    load again and starts `all_chunks`/`bm25`/`link_index` cold, unable to see
+    the shared instance's upserts. Every other router already receives the app's
+    one factory; chat was the last consumer building its own.
+    """
+    shared = FakeIndex()
+    calls = 0
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        return shared
+
+    agent = ChatAgent(settings, index_factory=factory)
+
+    assert agent._index is shared
+    assert calls == 1, "the factory is called once, at construction"
+
+
+def test_an_agent_with_no_factory_still_builds_its_own_index(
+    settings: Settings, monkeypatch
+) -> None:
+    """The fallback is load-bearing: tests construct `ChatAgent(settings)`
+    directly, and `default_chat_runner` must keep working for any caller that
+    has no factory to give it."""
+    built: list[object] = []
+
+    class Recorded(FakeIndex):
+        def __init__(self, *args, **kwargs) -> None:
+            built.append(self)
+
+    monkeypatch.setattr("backend.agent.runtime.VaultIndex", Recorded)
+
+    agent = ChatAgent(settings)
+
+    assert built == [agent._index]
