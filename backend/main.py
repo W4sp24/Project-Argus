@@ -272,7 +272,10 @@ def create_app(
     app.include_router(build_review_router(resolved, planner or _default_planner()))
     app.include_router(build_briefing_router(resolved, briefing_composer or _default_composer()))
     app.include_router(build_insights_router(resolved))
-    app.include_router(build_chat_router(resolved, chat_runner))
+    # The shared index, not one of chat's own: ChatAgent used to build a second
+    # VaultIndex (and so a second embedding model) alongside the one every
+    # other router already shares.
+    app.include_router(build_chat_router(resolved, chat_runner, index))
     app.include_router(build_automations_router(resolved))
     app.include_router(build_calendar_router(resolved))
 

@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import threading
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -612,9 +612,31 @@ def acknowledge_tool_steps(summaries: Sequence[ToolSummary]) -> str:
 class ChatAgent:
     """Streams RAG-grounded chat answers. One instance per app process."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        index_factory: Callable[[], VaultIndex] | None = None,
+    ) -> None:
+        """``index_factory`` shares the app's one index; omitting it builds a private one.
+
+        The app passes :func:`backend.rag.index.make_index_factory`'s callable
+        (via ``main.py``'s ``_default_index_factory``), which every other router
+        already receives. Building a ``VaultIndex`` here instead is what that
+        factory's own docstring warns about: the SentenceTransformer is
+        per-instance, so a second instance pays the ~20s model load again and
+        starts its ``all_chunks``/``bm25``/``link_index`` caches cold, unable to
+        see the shared instance's upserts.
+
+        The fallback stays because tests construct ``ChatAgent(settings)``
+        directly, and an install without the ``[rag]`` extras must still be able
+        to build the agent — ``VaultIndex`` defers its own heavy imports.
+        """
         self._settings = settings
-        self._index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
+        self._index = (
+            index_factory()
+            if index_factory is not None
+            else VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
+        )
         # Set when warming finishes, so vault searches can wait rather than
         # race the still-initializing chroma client. See build_vault_tools.
         self._ready = threading.Event()

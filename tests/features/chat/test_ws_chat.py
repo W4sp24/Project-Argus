@@ -489,3 +489,39 @@ def test_ws_chat_sources_field_safe_with_legacy_runner(client: TestClient) -> No
         ws.send_json({"message": "shortest paths?", "sources": ["a.md"]})
         frames = _turn(ws)
     assert frames[-1]["type"] == "done"
+
+
+def test_the_agent_is_built_once_for_the_process_not_once_per_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every reconnect used to build a whole new ChatAgent.
+
+    The old line was ``runner = chat_runner or default_chat_runner(settings)``
+    *inside* the socket handler, and production passes ``chat_runner=None`` --
+    so a reload, a STOP-then-ask, a sleep/wake or a second window each built a
+    new ``ChatAgent``, and with it a new ``VaultIndex``, a new chroma client and
+    a new SentenceTransformer on a new warm thread (~20s, see ``ChatAgent.warm``),
+    while the previous one stayed resident and its caches restarted cold.
+    """
+    from backend.features.chat import router as chat_router
+
+    builds = 0
+
+    def counting_default_runner(settings, index_factory=None):
+        nonlocal builds
+        builds += 1
+        return fake_runner
+
+    monkeypatch.setattr(chat_router, "default_chat_runner", counting_default_runner)
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    # chat_runner=None is the production wiring -- that is the whole point.
+    client = TestClient(create_app(Settings(_vault_path=vault), chat_runner=None))
+
+    for _ in range(3):
+        with client.websocket_connect("/ws/chat") as ws:
+            ws.send_json({"message": "hello"})
+            _turn(ws)
+
+    assert builds == 1, f"built the agent {builds} times across three connections"

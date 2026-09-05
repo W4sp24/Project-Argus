@@ -10,7 +10,9 @@ from __future__ import annotations
 import inspect
 import logging
 import sqlite3
+import threading
 from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -282,19 +284,56 @@ def _connected(websocket: WebSocket) -> bool:
     )
 
 
-def default_chat_runner(settings: Settings) -> ChatRunner:
-    """Lazily build the real agent so the app boots without agent deps."""
+def default_chat_runner(
+    settings: Settings, index_factory: Callable[[], Any] | None = None
+) -> ChatRunner:
+    """Lazily build the real agent so the app boots without agent deps.
+
+    ``index_factory`` is the app's one shared index (``main.py``'s
+    ``_default_index_factory``). Without it the agent builds a ``VaultIndex`` of
+    its own -- see :meth:`backend.agent.runtime.ChatAgent.__init__`.
+    """
     import threading
 
     from backend.agent.runtime import ChatAgent
 
-    agent = ChatAgent(settings)
+    agent = ChatAgent(settings, index_factory=index_factory)
     threading.Thread(target=agent.warm, daemon=True).start()
     return agent.stream_chat
 
 
-def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> APIRouter:
+def build_chat_router(
+    settings: Settings,
+    chat_runner: ChatRunner | None,
+    index_factory: Callable[[], Any] | None = None,
+) -> APIRouter:
     router = APIRouter()
+
+    # One agent for this process, built on the first connection that needs it.
+    #
+    # This used to be `chat_runner or default_chat_runner(settings)` *inside*
+    # the socket handler, and production passes `chat_runner=None` -- so every
+    # connect built a new ChatAgent, and with it a new VaultIndex, a new chroma
+    # client and a new SentenceTransformer on a new warm thread (~20s, see
+    # ChatAgent.warm). A reload, a STOP-then-ask, a sleep/wake or a second
+    # window each paid that again and left the previous model resident, while
+    # the index's all_chunks/bm25/link_index caches restarted cold every time.
+    #
+    # Double-checked under a lock rather than built eagerly: construction stays
+    # lazy so an install without the `[rag]` extras still boots, and the
+    # warm-up thread is still started exactly once. Same idiom, and the same
+    # reasoning, as `backend.rag.index.make_index_factory`.
+    runner_lock = threading.Lock()
+    resolved_runner: list[ChatRunner] = []
+
+    def get_runner() -> ChatRunner:
+        if chat_runner is not None:
+            return chat_runner
+        if not resolved_runner:
+            with runner_lock:
+                if not resolved_runner:
+                    resolved_runner.append(default_chat_runner(settings, index_factory))
+        return resolved_runner[0]
 
     def db() -> sqlite3.Connection:
         conn = connect(settings.db_path)
@@ -321,7 +360,7 @@ def build_chat_router(settings: Settings, chat_runner: ChatRunner | None) -> API
         {type: "notice", kind, detail} ... {type: "done"} | {type: "error", detail}.
         """
         await websocket.accept()
-        runner = chat_runner or default_chat_runner(settings)
+        runner = get_runner()
         try:
             while True:
                 payload = await websocket.receive_json()
