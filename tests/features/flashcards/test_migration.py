@@ -12,13 +12,22 @@ import json
 import sqlite3
 from pathlib import Path
 
-from backend.core.db import connect, init_schema
+from backend.core.db import connect, init_schema, reset_schema_cache
 
 FUTURE = "2099-01-01T00:00:00+00:00"
 
 
 def _legacy_deck(conn: sqlite3.Connection, course: str = "CS201") -> int:
-    """A deck exactly as the pre-rows code wrote it, plus one review."""
+    """A deck exactly as the pre-rows code wrote it, plus one review.
+
+    Ends by forgetting that this process has already brought the database up to
+    schema, because that is what these tests are actually simulating: a
+    database an older Argus wrote, opened by a newer one that has never seen
+    it. `init_schema` only runs its DDL and migrations once per database per
+    process, so without this the second call in each test below would rightly
+    skip work this process had already done -- and the rows would only look
+    unmigrated because the test reached behind it and wrote them.
+    """
     cursor = conn.execute(
         "INSERT INTO flashcard_decks (course, title, cards_json) VALUES (?, ?, ?)",
         (course, f"{course} flashcards", "[]"),
@@ -38,6 +47,7 @@ def _legacy_deck(conn: sqlite3.Connection, course: str = "CS201") -> int:
         (f"{deck_id}:0", deck_id, FUTURE),
     )
     conn.commit()
+    reset_schema_cache()
     return deck_id
 
 
@@ -135,6 +145,7 @@ def test_migration_drops_a_half_written_card(tmp_path: Path) -> None:
         ),
     )
     conn.commit()
+    reset_schema_cache()  # see _legacy_deck: this is an upgrade, not a re-open
 
     init_schema(conn)
 

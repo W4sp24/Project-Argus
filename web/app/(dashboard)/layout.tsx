@@ -1,22 +1,15 @@
-"use client";
-
-import { SWRConfig } from "swr";
 import ChatDrawer from "@/components/ChatDrawer";
 import CommandPalette from "@/components/CommandPalette";
 import EnginePicker from "@/components/EnginePicker";
 import NoteModal from "@/components/NoteModal";
+import SwrCacheProvider from "@/components/SwrCacheProvider";
 import TopBar from "@/components/TopBar";
 import { ToastProvider } from "@/components/Toast";
 import UpdateBanner from "@/components/UpdateBanner";
 import { ChatProvider } from "@/lib/chat";
 import { JobsProvider } from "@/lib/jobs";
 import { ModeProvider } from "@/lib/mode";
-import { swrProvider } from "@/lib/swrCache";
 import { UiProvider } from "@/lib/ui";
-
-/** Module-level so the config object keeps one identity for the life of the
- *  app; SWRConfig reads `provider` once, on mount. */
-const SWR_CONFIG = { provider: swrProvider };
 
 export default function DashboardLayout({
   children,
@@ -27,7 +20,7 @@ export default function DashboardLayout({
     // great deal per note, per course and per deck, so nothing was ever
     // released -- see web/lib/swrCache.ts. JobsProvider polls through SWR, so
     // it has to sit inside this.
-    <SWRConfig value={SWR_CONFIG}>
+    <SwrCacheProvider>
       <ChatProvider>
         <ToastProvider>
           {/* ModeProvider needs useToast (mode-change toasts), so it nests inside
@@ -58,6 +51,6 @@ export default function DashboardLayout({
           </JobsProvider>
         </ToastProvider>
       </ChatProvider>
-    </SWRConfig>
+    </SwrCacheProvider>
   );
 }
