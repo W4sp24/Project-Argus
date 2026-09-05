@@ -178,10 +178,11 @@ def _tool_frame(event: ToolStarted | ToolFinished) -> dict:
     }
 
 
-# Upper bound on rows pulled out of a thread to build history. The agent
-# budgets far more tightly than this (backend/agent/history.py); this only
-# stops a very long thread from loading its entire transcript into memory
-# just to have most of it discarded a moment later.
+# Upper bound on rows pulled out of a thread to build history -- the *newest*
+# that many (see `_open_turn`). The agent budgets far more tightly than this
+# (backend/agent/history.py); this only stops a very long thread from loading
+# its entire transcript into memory just to have most of it discarded a moment
+# later.
 HISTORY_FETCH_LIMIT = 100
 
 
@@ -208,7 +209,21 @@ def _open_turn(
             thread = found
         history = [
             Message(row["role"], row["text"])
-            for row in store.list_messages(conn, thread["id"], limit=HISTORY_FETCH_LIMIT)
+            for row in store.list_messages(
+                conn,
+                thread["id"],
+                limit=HISTORY_FETCH_LIMIT,
+                # The most recent turns, not the first ones ever sent. Without
+                # this a long thread handed the agent its opening exchange and
+                # `budget_history` trimmed that to messages 81-100, so the model
+                # answered follow-ups having never seen what it was following up
+                # on. Only reachable once a thread passes HISTORY_FETCH_LIMIT,
+                # which is why it survived this long.
+                newest=True,
+                # `role` and `text` are all this builds; parsing every stored
+                # trace to throw it away cost a json.loads per row per message.
+                with_tools=False,
+            )
         ]
         store.append_message(conn, thread["id"], role="user", text=message)
         # A thread made from the sidebar's "New chat" button has the

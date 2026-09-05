@@ -525,3 +525,48 @@ def test_the_agent_is_built_once_for_the_process_not_once_per_connection(
             _turn(ws)
 
     assert builds == 1, f"built the agent {builds} times across three connections"
+
+
+def test_a_long_thread_sends_the_model_its_most_recent_turns(tmp_path: Path) -> None:
+    """`HISTORY_FETCH_LIMIT` used to take the oldest rows, not the newest.
+
+    `list_messages` orders by id, so `LIMIT 100` returned messages 1-100 of the
+    thread; `budget_history` then kept the last 20 *of those*. In a thread of
+    300 messages the model was answering from turn 81 and had never seen the
+    conversation it was being asked to follow up on -- a defect that only
+    becomes reachable once a chat grows past the limit, which is exactly when
+    people notice chat "getting worse".
+    """
+    from backend.core.db import connect, init_schema
+    from backend.features.chat import store
+    from backend.features.chat.router import HISTORY_FETCH_LIMIT
+
+    seen_history: list[list] = []
+
+    async def recording_runner(message: str, history=None, **_kwargs) -> AsyncIterator[str]:
+        seen_history.append(list(history or []))
+        yield "ok"
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    settings = Settings(_vault_path=vault)
+    client = TestClient(create_app(settings, chat_runner=recording_runner))
+
+    conn = connect(settings.db_path)
+    try:
+        init_schema(conn)
+        thread = store.create_thread(conn, title="long one")
+        thread_id = thread["id"]
+        for index in range(HISTORY_FETCH_LIMIT + 20):
+            store.append_message(conn, thread_id, role="user", text=f"turn {index}")
+    finally:
+        conn.close()
+
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "and what did I just say?", "thread_id": thread_id})
+        _turn(ws)
+
+    history = seen_history[0]
+    assert len(history) == HISTORY_FETCH_LIMIT
+    assert history[-1].text == f"turn {HISTORY_FETCH_LIMIT + 19}", "the newest turn must be last"
+    assert history[0].text == "turn 20", "the window slides, and stays oldest-first"

@@ -223,9 +223,9 @@ def resumable_session(
 # --- messages ------------------------------------------------------------
 
 
-def _message_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+def _message_row_to_dict(row: sqlite3.Row, *, with_tools: bool = True) -> dict[str, Any]:
     tools: list[dict[str, Any]] = []
-    raw = row["tools_json"]
+    raw = row["tools_json"] if with_tools else None
     if raw:
         try:
             parsed = json.loads(raw)
@@ -276,16 +276,36 @@ def append_message(
 
 
 def list_messages(
-    conn: sqlite3.Connection, thread_id: int, *, limit: int | None = None
+    conn: sqlite3.Connection,
+    thread_id: int,
+    *,
+    limit: int | None = None,
+    newest: bool = False,
+    with_tools: bool = True,
 ) -> list[dict[str, Any]]:
-    """Messages for a thread, oldest-first."""
-    query = "SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY id"
+    """Messages for a thread, oldest-first.
+
+    ``newest`` decides which end a ``limit`` cuts from, and only matters once a
+    thread outgrows it. Without it ``limit`` took the *first* N rows, so
+    building history for message 300 of a thread handed the agent messages 1-100
+    — which ``budget_history`` then trimmed to 81-100 — and the model answered a
+    follow-up having never seen the conversation it was following up on. The
+    return order is oldest-first either way; only the window moves.
+
+    ``with_tools=False`` skips the ``tools_json`` parse. History needs nothing
+    but ``role`` and ``text``, and it was deserialising every trace of every
+    turn on every message sent.
+    """
+    order = "DESC" if newest else "ASC"
+    query = f"SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY id {order}"
     params: list[Any] = [thread_id]
     if limit is not None:
         query += " LIMIT ?"
         params.append(limit)
     rows = conn.execute(query, params).fetchall()
-    return [_message_row_to_dict(row) for row in rows]
+    if newest:
+        rows = list(reversed(rows))
+    return [_message_row_to_dict(row, with_tools=with_tools) for row in rows]
 
 
 # --- titles ----------------------------------------------------------------
