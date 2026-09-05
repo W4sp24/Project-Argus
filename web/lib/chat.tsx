@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { mutate } from "swr";
+import { useSWRConfig } from "swr";
 import { apiFetch, getChatThread, wsBase } from "@/lib/api";
 import { selectedModel } from "@/lib/models";
 
@@ -239,6 +239,17 @@ export function ChatProvider({
   const [busy, setBusy] = useState(false);
   const [offline, setOffline] = useState(false);
 
+  // The *scoped* mutate, not the one importable from "swr". The dashboard
+  // layout gives SWR a bounded cache provider (web/lib/swrCache.ts), and a
+  // provider puts the cache in its own scope: the global `mutate` then talks
+  // to the default cache that nothing is reading, so the thread rail never
+  // heard that a new conversation existed. Held in a ref for the same reason
+  // `sourcesRef` is one -- `handleFrame` is captured by the socket at connect
+  // time and must not be rebuilt.
+  const { mutate } = useSWRConfig();
+  const mutateRef = useRef(mutate);
+  mutateRef.current = mutate;
+
   const socketRef = useRef<WebSocket | null>(null);
   // Read inside send() and the frame handlers, which the socket captures once
   // at connect time — refs keep them from going stale without forcing a
@@ -315,7 +326,7 @@ export function ChatProvider({
           // the first message on, but only if its SWR list is told to look
           // again. Without this a brand-new conversation is invisible until
           // something else happens to revalidate.
-          void mutate(
+          void mutateRef.current(
             (key) => typeof key === "string" && key.startsWith("/api/chat/threads"),
             undefined,
             { revalidate: true },
