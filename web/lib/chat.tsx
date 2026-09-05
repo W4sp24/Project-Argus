@@ -50,24 +50,56 @@ export interface ChatMessage {
   local?: boolean;
 }
 
-interface ChatState {
-  messages: ChatMessage[];
+/** Thread-level facts. Change once or twice a turn, not once a frame. */
+export interface ChatMeta {
   threadId: number | null;
   threadTitle: string;
   busy: boolean;
   offline: boolean;
+}
+
+/** The verbs. Every one is a stable `useCallback`, so this object never changes. */
+export interface ChatActions {
   send: (text: string) => void;
   stop: () => void;
   newThread: () => void;
   openThread: (id: number) => Promise<void>;
 }
 
-const ChatContext = createContext<ChatState | null>(null);
+/**
+ * Three contexts, not one.
+ *
+ * `ChatProvider` is the outermost provider in the dashboard layout, and the
+ * transcript changes identity on every batched delta — up to once per animation
+ * frame while an answer streams. With `messages` in the same value object as
+ * the verbs, that re-rendered *every* `useChat()` consumer at ~60Hz: the
+ * command palette (which wants nothing but `send`), the thread rail, and the
+ * /chat header. Splitting them means a consumer re-renders when the thing it
+ * actually reads changes, and the palette never re-renders mid-stream at all.
+ */
+const ChatMessagesContext = createContext<ChatMessage[] | null>(null);
+const ChatMetaContext = createContext<ChatMeta | null>(null);
+const ChatActionsContext = createContext<ChatActions | null>(null);
 
-export function useChat(): ChatState {
-  const state = useContext(ChatContext);
-  if (!state) throw new Error("useChat must be used inside <ChatProvider>");
-  return state;
+const outside = (hook: string) => new Error(`${hook} must be used inside <ChatProvider>`);
+
+/** The transcript. Only subscribe to this if you render it. */
+export function useChatMessages(): ChatMessage[] {
+  const messages = useContext(ChatMessagesContext);
+  if (!messages) throw outside("useChatMessages");
+  return messages;
+}
+
+export function useChatMeta(): ChatMeta {
+  const meta = useContext(ChatMetaContext);
+  if (!meta) throw outside("useChatMeta");
+  return meta;
+}
+
+export function useChatActions(): ChatActions {
+  const actions = useContext(ChatActionsContext);
+  if (!actions) throw outside("useChatActions");
+  return actions;
 }
 
 let keySeq = 0;
@@ -122,6 +154,57 @@ function applyToolFrame(steps: ToolStep[], frame: Record<string, unknown>): Tool
   if (at === -1) next.push({ callId, name, startedAt: Date.now(), ...finished });
   else next[at] = { ...next[at], ...finished };
   return next;
+}
+
+/**
+ * Fold a whole persisted trace in one pass.
+ *
+ * `applyToolFrame` copies the list and scans it for a matching `call_id` on
+ * every frame, which is right for the streaming case (one frame at a time, a
+ * handful of steps) and quadratic for the restore case — and `openThread` runs
+ * it for every message in the thread. Same output, keyed by a Map instead.
+ */
+function foldToolFrames(frames: unknown[]): ToolStep[] {
+  const steps: ToolStep[] = [];
+  const at = new Map<string, number>();
+  for (const raw of frames) {
+    if (!raw || typeof raw !== "object") continue;
+    const frame = raw as Record<string, unknown>;
+    const callId = String(frame.call_id ?? "");
+    const name = String(frame.name ?? "");
+    const index = at.get(callId);
+    if (frame.phase === "start") {
+      const started: ToolStep = {
+        callId,
+        name,
+        args: (frame.args as Record<string, unknown>) ?? undefined,
+        startedAt: Date.now(),
+      };
+      if (index === undefined) {
+        at.set(callId, steps.length);
+        steps.push(started);
+      } else {
+        steps[index] = { ...steps[index], ...started };
+      }
+      continue;
+    }
+    const finished = {
+      label: String(frame.label ?? name),
+      detail: String(frame.detail ?? ""),
+      paths: Array.isArray(frame.paths) ? (frame.paths as string[]) : [],
+      ok: frame.ok !== false,
+      endedAt: Date.now(),
+    };
+    // An end frame with no matching start can only come from a truncated
+    // persisted trace; keep the summary rather than dropping the step.
+    if (index === undefined) {
+      at.set(callId, steps.length);
+      steps.push({ callId, name, startedAt: Date.now(), ...finished });
+    } else {
+      steps[index] = { ...steps[index], ...finished };
+    }
+  }
+  return steps;
 }
 
 /**
@@ -461,10 +544,7 @@ export function ChatProvider({
           serverId: row.id,
           role: row.role,
           text: row.text,
-          steps: (Array.isArray(row.tools) ? row.tools : []).reduce<ToolStep[]>(
-            (steps, frame) => applyToolFrame(steps, frame),
-            [],
-          ),
+          steps: foldToolFrames(Array.isArray(row.tools) ? row.tools : []),
           status: "done" as const,
         })),
       );
@@ -472,10 +552,20 @@ export function ChatProvider({
     [stop],
   );
 
-  const value = useMemo(
-    () => ({ messages, threadId, threadTitle, busy, offline, send, stop, newThread, openThread }),
-    [messages, threadId, threadTitle, busy, offline, send, stop, newThread, openThread],
+  const meta = useMemo(
+    () => ({ threadId, threadTitle, busy, offline }),
+    [threadId, threadTitle, busy, offline],
+  );
+  const actions = useMemo(
+    () => ({ send, stop, newThread, openThread }),
+    [send, stop, newThread, openThread],
   );
 
-  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
+  return (
+    <ChatActionsContext.Provider value={actions}>
+      <ChatMetaContext.Provider value={meta}>
+        <ChatMessagesContext.Provider value={messages}>{children}</ChatMessagesContext.Provider>
+      </ChatMetaContext.Provider>
+    </ChatActionsContext.Provider>
+  );
 }

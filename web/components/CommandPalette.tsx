@@ -17,7 +17,7 @@ import {
   type AutomationRunResult,
   type SearchResult,
 } from "@/lib/api";
-import { useChat } from "@/lib/chat";
+import { useChatActions } from "@/lib/chat";
 import { obsidianUri } from "@/lib/citations";
 import AutomationForm from "@/components/automations/AutomationForm";
 import WidgetRenderer from "@/components/automations/WidgetRenderer";
@@ -433,7 +433,7 @@ function kvRows(payload: unknown): [string, string][] {
 export default function CommandPalette() {
   const router = useRouter();
   const { show } = useToast();
-  const { send } = useChat();
+  const { send } = useChatActions();
   const { paletteOpen, setPaletteOpen, setDrawerOpen, setNoteOpen, startFocus } = useUi();
   const { data: vault } = useVault();
   const [query, setQuery] = useState("");

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { EngineTrigger } from "@/components/EnginePicker";
 import ChatPanel from "@/components/chat/ChatPanel";
 import ThreadRail from "@/components/chat/ThreadRail";
-import { useChat } from "@/lib/chat";
+import { useChatMeta } from "@/lib/chat";
 import { useSelectedModel } from "@/lib/models";
 
 /**
@@ -21,7 +21,7 @@ import { useSelectedModel } from "@/lib/models";
 export default function ChatPage() {
   const router = useRouter();
   const model = useSelectedModel();
-  const { threadTitle } = useChat();
+  const { threadTitle } = useChatMeta();
 
   return (
     <div className="flex h-[calc(100dvh-8rem)] md:h-[calc(100dvh-4rem)]">
