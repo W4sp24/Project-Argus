@@ -56,6 +56,27 @@ class FakeIndex:
         return {}
 
 
+class NeverWarms(threading.Event):
+    """An event that is never set, and that reports being waited on.
+
+    The property under test is structural -- a handler either reaches the warm
+    gate or it does not -- and a stopwatch was only ever a proxy for it. The
+    proxy measures the machine: on a loaded CI runner this handler took 1.047s
+    against a 1.0s budget and failed a test about gating with a number about
+    scheduling. Recording the call answers the real question, and returning
+    immediately means a handler that *is* gated fails on the flag rather than
+    stalling the suite for WARM_TIMEOUT_SECONDS.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.waited = False
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waited = True
+        return False
+
+
 @pytest.fixture()
 def settings(tmp_path: Path) -> Settings:
     vault = tmp_path / "vault"
@@ -110,18 +131,22 @@ async def test_search_does_not_wait_when_nothing_is_warming(
     started = time.monotonic()
     await tool(tools, "search_vault").handler({"query": "dijkstra"})
 
-    assert time.monotonic() - started < 1.0
+    # Headroom, not a performance budget: the only way to fail this is to wait
+    # on an event nobody passed, and that costs WARM_TIMEOUT_SECONDS (90s). A
+    # tighter number measures how loaded the runner is -- which is how the
+    # read_note test below went red at 1.047s.
+    assert time.monotonic() - started < 30.0
 
 
 @pytest.mark.anyio
 async def test_read_note_is_not_gated(settings: Settings) -> None:
     """read_note never touches the index, so it must not wait on the warm."""
-    tools = build_vault_tools(settings, FakeIndex(), ready=threading.Event())  # never set
+    ready = NeverWarms()
+    tools = build_vault_tools(settings, FakeIndex(), ready=ready)
 
-    started = time.monotonic()
     result = await tool(tools, "read_note").handler({"path": "50-Reference/algorithms.md"})
 
-    assert time.monotonic() - started < 1.0
+    assert not ready.waited, "read_note waited on the index warm"
     assert "Dijkstra" in result["content"][0]["text"]
 
 
