@@ -12,21 +12,12 @@ import {
 } from "react";
 import { useSWRConfig } from "swr";
 import { apiFetch, getChatThread, wsBase } from "@/lib/api";
+import { applyToolFrame, foldToolFrames, type ToolStep } from "@/lib/chat/tools";
 import { selectedModel } from "@/lib/models";
 
-/** One dispatch of one tool, assembled from the `tool` start and end frames. */
-export interface ToolStep {
-  callId: string;
-  name: string;
-  args?: Record<string, unknown>;
-  /** Present once the matching `phase:"end"` frame lands. */
-  label?: string;
-  detail?: string;
-  paths?: string[];
-  ok?: boolean;
-  startedAt: number;
-  endedAt?: number;
-}
+/** Re-exported so consumers keep importing it from "@/lib/chat"; it is
+ *  defined with the folding logic in `lib/chat/tools.ts`. */
+export type { ToolStep };
 
 export type MessageStatus = "streaming" | "done" | "error" | "stopped";
 
@@ -115,96 +106,6 @@ function patchLast(
   const next = [...list];
   next[next.length - 1] = patch(next[next.length - 1]);
   return next;
-}
-
-/**
- * Fold one `tool` frame into a step list, upserting by `call_id`.
- *
- * The frames streamed over the socket and the `tools_json` rows a thread
- * restores from are the same objects — `_tool_frame()` produces both, and the
- * router appends every frame it sends — so they must fold through one
- * function or a reloaded trace would quietly differ from the one you watched
- * being built.
- */
-function applyToolFrame(steps: ToolStep[], frame: Record<string, unknown>): ToolStep[] {
-  const callId = String(frame.call_id ?? "");
-  const name = String(frame.name ?? "");
-  const next = [...steps];
-  const at = next.findIndex((step) => step.callId === callId);
-  if (frame.phase === "start") {
-    const started: ToolStep = {
-      callId,
-      name,
-      args: (frame.args as Record<string, unknown>) ?? undefined,
-      startedAt: Date.now(),
-    };
-    if (at === -1) next.push(started);
-    else next[at] = { ...next[at], ...started };
-    return next;
-  }
-  const finished = {
-    label: String(frame.label ?? name),
-    detail: String(frame.detail ?? ""),
-    paths: Array.isArray(frame.paths) ? (frame.paths as string[]) : [],
-    ok: frame.ok !== false,
-    endedAt: Date.now(),
-  };
-  // An end frame with no matching start can only come from a truncated
-  // persisted trace; keep the summary rather than dropping the step.
-  if (at === -1) next.push({ callId, name, startedAt: Date.now(), ...finished });
-  else next[at] = { ...next[at], ...finished };
-  return next;
-}
-
-/**
- * Fold a whole persisted trace in one pass.
- *
- * `applyToolFrame` copies the list and scans it for a matching `call_id` on
- * every frame, which is right for the streaming case (one frame at a time, a
- * handful of steps) and quadratic for the restore case — and `openThread` runs
- * it for every message in the thread. Same output, keyed by a Map instead.
- */
-function foldToolFrames(frames: unknown[]): ToolStep[] {
-  const steps: ToolStep[] = [];
-  const at = new Map<string, number>();
-  for (const raw of frames) {
-    if (!raw || typeof raw !== "object") continue;
-    const frame = raw as Record<string, unknown>;
-    const callId = String(frame.call_id ?? "");
-    const name = String(frame.name ?? "");
-    const index = at.get(callId);
-    if (frame.phase === "start") {
-      const started: ToolStep = {
-        callId,
-        name,
-        args: (frame.args as Record<string, unknown>) ?? undefined,
-        startedAt: Date.now(),
-      };
-      if (index === undefined) {
-        at.set(callId, steps.length);
-        steps.push(started);
-      } else {
-        steps[index] = { ...steps[index], ...started };
-      }
-      continue;
-    }
-    const finished = {
-      label: String(frame.label ?? name),
-      detail: String(frame.detail ?? ""),
-      paths: Array.isArray(frame.paths) ? (frame.paths as string[]) : [],
-      ok: frame.ok !== false,
-      endedAt: Date.now(),
-    };
-    // An end frame with no matching start can only come from a truncated
-    // persisted trace; keep the summary rather than dropping the step.
-    if (index === undefined) {
-      at.set(callId, steps.length);
-      steps.push({ callId, name, startedAt: Date.now(), ...finished });
-    } else {
-      steps[index] = { ...steps[index], ...finished };
-    }
-  }
-  return steps;
 }
 
 /**

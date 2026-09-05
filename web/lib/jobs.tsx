@@ -1,10 +1,18 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { useToast } from "@/components/Toast";
 import { type IngestJob, useAllJobs } from "@/lib/api";
-import { isRunning, reconcile } from "@/lib/jobs/reducer";
+import { isRunning, jobsSignature, reconcile } from "@/lib/jobs/reducer";
 
 /**
  * Long-running work, owned above the router.
@@ -104,18 +112,31 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     setTracked((current) => (current.includes(id) ? current : [...current, id]));
   }, []);
 
-  const running = (data?.jobs ?? []).filter(
-    (job) => tracked.includes(job.id) && isRunning(job.status),
-  );
+  // SWR reparses the response on every poll, so `data` changes identity every
+  // 900ms while anything is in flight even when the backend said the same
+  // thing. Holding the previous array whenever the signature matches is what
+  // stops that from re-rendering JobTray, GenerateDialog, CourseHub and
+  // CoursesPanel on a timer.
+  const stable = useRef<IngestJob[]>([]);
+  const running = useMemo(() => {
+    const next = (data?.jobs ?? []).filter(
+      (job) => tracked.includes(job.id) && isRunning(job.status),
+    );
+    if (jobsSignature(next) === jobsSignature(stable.current)) return stable.current;
+    stable.current = next;
+    return next;
+  }, [data, tracked]);
 
   const isBusy = useCallback(
     (predicate: (job: IngestJob) => boolean) => running.some(predicate),
-    // `running` is rebuilt each render from `data`/`tracked`; depending on its
-    // identity is correct and cheap here — the list is at most a few entries.
+    // `running` now only changes identity when its contents do, so depending on
+    // it here no longer rebuilds this callback on every poll.
     [running],
   );
 
-  return (
-    <JobsContext.Provider value={{ jobs: running, track, isBusy }}>{children}</JobsContext.Provider>
-  );
+  // Without this the value object was rebuilt on every render — including every
+  // poll tick — re-rendering every consumer whether or not the jobs moved.
+  const value = useMemo(() => ({ jobs: running, track, isBusy }), [running, track, isBusy]);
+
+  return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;
 }

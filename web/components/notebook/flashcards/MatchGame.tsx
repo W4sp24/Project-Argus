@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "@/components/Markdown";
 import ActivityChrome from "@/components/notebook/flashcards/ActivityChrome";
 import Button from "@/components/ui/Button";
@@ -65,6 +65,17 @@ export default function MatchGame({ deck }: { deck: FlashcardDeckDetail }) {
   );
 
   // One interval, and only while a round is actually running.
+  // Held in a ref and cleared on unmount, like the elapsed ticker below: a bare
+  // setTimeout kept a reference to a gone component's setState for a quarter of
+  // a second after leaving the game, and a fast player queued several.
+  const wrongTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (wrongTimer.current) window.clearTimeout(wrongTimer.current);
+    },
+    [],
+  );
+
   useEffect(() => {
     if (startedAt === null || finishedMs !== null) return;
     const id = window.setInterval(() => setElapsed(Date.now() - startedAt), 100);
@@ -107,7 +118,8 @@ export default function MatchGame({ deck }: { deck: FlashcardDeckDetail }) {
       return;
     }
     setWrong(tile.id);
-    window.setTimeout(() => setWrong(null), 250);
+    if (wrongTimer.current) window.clearTimeout(wrongTimer.current);
+    wrongTimer.current = window.setTimeout(() => setWrong(null), 250);
     setSelected(null);
   }
 
