@@ -232,7 +232,7 @@ test("the app does not scroll horizontally at 390px", async ({ page }) => {
   // ...and each is named in full at every width. The tab renders "GE" below
   // `md` and "GENERAL" above it; before `aria-label` the accessible name was
   // whichever one the breakpoint left standing, so a phone user heard "GE".
-  for (const name of ["GENERAL", "STUDY", "RESEARCH", "CODE", "SYSTEM", "AUTO"]) {
+  for (const name of ["GENERAL", "NOTEBOOK", "RESEARCH", "CODE", "SYSTEM", "AUTO"]) {
     await expect(page.getByRole("tab", { name, exact: true })).toHaveCount(1);
   }
 });
@@ -242,7 +242,7 @@ test("the course hub shows one pane at a time on a narrow screen", async ({ page
   // got about a third of the viewport with its own scrollbar nested inside
   // the page scroll. Tabs give whichever pane you are using the whole height.
   await page.setViewportSize({ width: 820, height: 900 });
-  await page.goto("/study/course/CS000");
+  await page.goto("/notebook/course/CS000");
 
   const tabs = page.getByRole("tablist", { name: "Course hub pane" });
   await expect(tabs).toBeVisible();

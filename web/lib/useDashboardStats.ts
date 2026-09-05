@@ -45,7 +45,7 @@ export function useDashboardStats(): StatItem[] {
     { href: "/tasks", label: "due today", value: dueToday },
     { href: "/tasks", label: "overdue", value: overdue },
     { href: "/insights", label: "done today", value: doneToday },
-    { href: "/study", label: "streak", value: streak, unit: "days" },
+    { href: "/notebook", label: "streak", value: streak, unit: "days" },
     { href: "/system", label: "tokens", value: tokens },
   ];
 }

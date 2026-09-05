@@ -10,6 +10,77 @@ Argus is currently pre-1.0 (0.x releases).
 
 ### Added
 
+#### The Notebook, in a window of its own
+
+- **Study is now Notebook**, and it can be popped out into a real second window
+  — the desktop shell opens an OS window, a browser opens a browser window.
+  Everything under the mode goes with it: the overview, the Course Hub,
+  flashcards and the practice exam. `/study` and `/study/*` redirect
+  permanently, so existing links keep working.
+
+#### Flashcards you can actually author
+
+- **Cards can be written, edited, reordered, starred and suspended.** They were
+  a JSON blob parsed once from a `flashcards.md` that nothing in Argus ever
+  wrote, so unless you hand-authored that file every deck attempt failed. Four
+  ways in now: type them, paste delimited rows, **import the `Q::`/`A::` pairs
+  out of any note** — which every note Argus generates already carries — or
+  generate them from the sources you have ticked.
+- **Four ways to study a deck.** Review (FSRS, with each grade button showing
+  the interval it will actually schedule), Flashcards (browse and sort),
+  Learn (adaptive multiple-choice then typing) and Match (a timed pairing
+  game). Browse and Match deliberately record nothing: cramming must not
+  rewrite spacing built over weeks.
+- **Decks export back to `flashcards.md`** and round-trip with the note
+  importer.
+- **Importing no longer means typing a vault path.** "From a note" is a
+  searchable list of your notes, and you can drop a `.md`/`.txt`/`.csv`/`.tsv`
+  straight onto the dialog — read in the browser, never uploaded, no model
+  involved. The layout is guessed and the guess is always overridable.
+- **Generation takes a difficulty, card types and your own instructions.**
+  Easy/medium/hard, any mix of Definition / Concept / Cloze / Application, and
+  a free-text prompt. Reachable from a Course Hub or the deck library. A
+  generated deck records what it was asked for.
+- **Generation asks what to read.** From the deck library you can now sweep a
+  whole course, tick the specific files you want cards from, or hand over a
+  `.pdf`/`.pptx`/`.docx`/`.md` of your own — read once for that deck and never
+  stored, with an opt-in to keep it in the course afterwards. Previously the
+  library's dialog offered a course dropdown and a line promising to read the
+  entire course, with no way to narrow it and no route in for a file that was
+  not already in the vault.
+- **Decks can be renamed.** Inline in the library (`✎`, or double-click),
+  and on the deck page along with the deck's course. Generated decks are now
+  named after what they read instead of all being "CS201 — generated".
+- **A deck records the files it was written from**, shown in the library and in
+  the Course Hub, and used to badge each file in the SOURCES rail with how many
+  decks came out of it.
+- **A course's decks have their own panel in its Course Hub**, with due counts
+  and a link straight into a review session.
+
+### Fixed
+
+- **Study generation survives leaving the tab.** A guide or exam was a request
+  held open for minutes with its progress in a component local, so navigating
+  away discarded the only record the UI had of work the backend was still
+  doing. Jobs are now owned above the router and listed in a tray, and are
+  recovered from the server after a reload, a crash, or in a second window.
+- **One generation no longer blocks the others.** A single busy flag disabled
+  every action on every course while anything ran, which is not something the
+  backend ever asked for.
+- **Practice exams finally honour difficulty and topic focus.** The endpoint
+  has accepted both since it was written and no UI ever sent them, so every
+  exam silently generated at "medium" over the whole course.
+- **A deck's Course Hub row opens that deck.** Every one pointed at
+  `/notebook/flashcards?deck=<id>`, a parameter nothing in the app reads, so it
+  landed on the library and left you to find the deck by eye.
+- **A courseless deck can be given a course.** `EXPORT` is disabled without one
+  and its tooltip said to set a course on the deck — which nothing in the app
+  could do, so a deck created without one could never be exported.
+- **Generating from sources that are not indexed is refused on the request.**
+  It answered `202` and then failed a minute later with "no indexed material for
+  CS201", which is the wrong sentence when you have ticked three files and sends
+  you off to upload material you already have.
+
 #### Note relationships
 
 - **Generated notes link into the vault.** Every note and study guide Argus

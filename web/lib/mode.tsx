@@ -16,11 +16,14 @@ import { useToast } from "@/components/Toast";
  * design gives it one: its own tab and its own accent, so a screen driven by
  * a second service you have to keep alive is never mistaken for a native one
  * at a glance. */
-export type Mode = "general" | "study" | "research" | "code" | "system" | "automations";
+export type Mode = "general" | "notebook" | "research" | "code" | "system" | "automations";
 
 export const ACCENTS: Record<Mode, { ac: string; acBg: string }> = {
   general: { ac: "#a78bfa", acBg: "#171029" },
-  study: { ac: "#22d3ee", acBg: "#0c1a20" },
+  // Study became Notebook; the cyan is unchanged on purpose -- the accent
+  // is how the mode is recognised at a glance, and renaming it is not a
+  // reason to make it look like a different place.
+  notebook: { ac: "#22d3ee", acBg: "#0c1a20" },
   research: { ac: "#e879f9", acBg: "#210f20" },
   code: { ac: "#34d399", acBg: "#0b1712" },
   system: { ac: "#fbbf24", acBg: "#201804" },
@@ -30,7 +33,7 @@ export const ACCENTS: Record<Mode, { ac: string; acBg: string }> = {
 /** Where a mode tab's click navigates to. */
 export const MODE_ROUTES: Record<Mode, string> = {
   general: "/dashboard",
-  study: "/study",
+  notebook: "/notebook",
   research: "/research",
   code: "/code",
   system: "/system",
@@ -43,7 +46,7 @@ const STORAGE_KEY = "argus-mode";
  * Pathname is the single source of truth for the active mode: it's known
  * synchronously on both server and first client render (unlike localStorage),
  * so deep links and back/forward navigation always resolve the right accent
- * with zero flash. `/study*` catches the sub-pages (flashcards, exam, hub).
+ * with zero flash. `/notebook*` catches the sub-pages (flashcards, exam, hub).
  */
 function modeFromPathname(pathname: string): Mode {
   // Explicit rather than falling through. /sources is a GENERAL surface, and
@@ -53,7 +56,7 @@ function modeFromPathname(pathname: string): Mode {
   // strip below `md` has no room for another.
   if (pathname.startsWith("/sources")) return "general";
   if (pathname.startsWith("/calendar")) return "general";
-  if (pathname.startsWith("/study")) return "study";
+  if (pathname.startsWith("/notebook")) return "notebook";
   if (pathname.startsWith("/research")) return "research";
   if (pathname.startsWith("/code")) return "code";
   if (pathname.startsWith("/system")) return "system";

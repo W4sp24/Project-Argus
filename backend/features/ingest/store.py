@@ -47,7 +47,7 @@ ACTIVE_STATUSES = ("queued", "running")
 #: Every kind of work this table records. Not a CHECK constraint -- see the
 #: `kind` column's comment in :mod:`backend.core.db`: SQLite cannot alter one,
 #: so a vocabulary expected to grow does not belong in the schema.
-JOB_KINDS = ("ingest", "reindex", "guide", "exam", "relink")
+JOB_KINDS = ("ingest", "reindex", "guide", "exam", "relink", "deck")
 
 #: Which kinds contend for one slot, and which run unconstrained.
 #:

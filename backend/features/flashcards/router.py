@@ -1,42 +1,150 @@
 """Flashcard endpoints, mounted by ``backend.main.create_app``.
 
-Mirrors ``backend/study/api.py``'s style: a router-builder taking
-``Settings``, a per-request sqlite connection, and ``StudyError``-style
-domain exceptions mapped to HTTP status codes. Deck generation and grading
-are normal validated writes (not best-effort/swallowed like usage logging).
+Mirrors ``backend/features/study/router.py``'s style: a router-builder taking
+``Settings``, a per-request sqlite connection, and domain exceptions mapped to
+HTTP status codes.
+
+One route changed meaning in this rewrite, and it is worth naming.
+``POST /decks`` used to take ``{course}`` and generate a deck by parsing that
+course's ``flashcards.md``. It now *creates* a deck and nothing else. Parsing
+``flashcards.md`` became one case of ``POST /decks/{id}/import/note`` — which
+reads any note — and generating from the corpus became
+``POST /decks/generate``, an async job. The old endpoint had exactly one input
+that nothing in Argus ever wrote, which is why flashcards were unreachable.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import threading
+from collections.abc import Callable
+from pathlib import PurePosixPath
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
+from backend.features.flashcards import generate, store, upload, vault
+from backend.features.flashcards.jobs import run_deck_job
+from backend.features.flashcards.parsing import (
+    FIELD_DELIMITERS,
+    ROW_DELIMITERS,
+    parse_delimited,
+    parse_qa_pairs,
+)
 from backend.features.flashcards.store import (
+    CardInfo,
+    DeckDetail,
     DeckSummary,
     DueCard,
     DueSummary,
     FlashcardsError,
     GradeResult,
-    delete_deck,
-    due_cards,
-    due_summary,
-    generate_deck,
-    grade_card,
-    list_decks,
-    load_deck,
 )
+from backend.features.ingest import store as jobstore
 
 
-class GenerateDeckRequest(BaseModel):
-    course: str
+class CreateDeckRequest(BaseModel):
+    title: str
+    course: str = ""
+    description: str = ""
+
+
+class UpdateDeckRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    course: str | None = None
+
+
+class NewCard(BaseModel):
+    front: str
+    back: str
+    hint: str | None = None
+
+
+class AddCardsRequest(BaseModel):
+    cards: list[NewCard]
+
+
+class UpdateCardRequest(BaseModel):
+    front: str | None = None
+    back: str | None = None
+    hint: str | None = None
+    starred: bool | None = None
+    suspended: bool | None = None
+
+
+class ReorderRequest(BaseModel):
+    order: list[str]
 
 
 class GradeRequest(BaseModel):
     grade: str
+
+
+class ImportNoteRequest(BaseModel):
+    path: str
+
+
+class ImportPasteRequest(BaseModel):
+    text: str
+    field: str = "tab"
+    row: str = "newline"
+    #: "delimited" reads `field`/`row`; "qa" reads Q::/A:: pairs and ignores
+    #: both. Defaults to delimited so every existing caller is unaffected.
+    format: str = "delimited"
+
+
+class ExportResult(BaseModel):
+    path: str
+
+
+class MatchScoreRequest(BaseModel):
+    elapsed_ms: int = Field(gt=0)
+    pairs: int = Field(gt=0)
+
+
+class MatchBest(BaseModel):
+    best_ms: int | None
+
+
+class GenerateDeckRequest(BaseModel):
+    course: str
+    #: The SOURCES-rail selection. `None` means the whole course, which is what
+    #: a caller with no rail (the Notebook overview) sends.
+    sources: list[str] | None = None
+    model: str | None = None
+    n: int = 20
+    title: str | None = None
+    difficulty: str = generate.DEFAULT_DIFFICULTY
+    #: Which card shapes to write. Empty means the historical default
+    #: (definitions plus conceptual questions).
+    styles: list[str] = Field(default_factory=list)
+    #: The user's own instruction, appended to the prompt.
+    instructions: str = ""
+
+
+class GenerateOptions(BaseModel):
+    """What `POST /decks/generate` will accept, so the UI cannot offer more."""
+
+    difficulties: list[str]
+    styles: list[str]
+    default_difficulty: str
+    default_styles: list[str]
+    max_cards: int
+    max_instructions: int
+    #: What `POST /decks/generate/upload` will read, served rather than mirrored
+    #: in the UI for the same reason `GET /api/ingest/limits` is: a constant
+    #: copied into the frontend is a rule that goes stale on one side.
+    upload_suffixes: list[str]
+    max_upload_bytes: int
+
+
+class CardsAdded(BaseModel):
+    added: int
 
 
 class DeckDeleteSummary(BaseModel):
@@ -44,40 +152,295 @@ class DeckDeleteSummary(BaseModel):
     reviews_removed: int
 
 
-def build_flashcards_router(settings: Settings) -> APIRouter:
-    """All /api/flashcards routes."""
+class CardDeleteSummary(BaseModel):
+    card_ref: str
+    reviews_removed: int
+
+
+def _default_job_runner(run: Callable[[], None]) -> None:
+    """Run a job on a daemon thread. Replaced in tests by a deterministic one."""
+    threading.Thread(target=run, daemon=True).start()
+
+
+def build_flashcards_router(
+    settings: Settings,
+    generator: Any = None,
+    corpus_for: Callable[[str, list[str] | None], list[dict[str, Any]]] | None = None,
+    job_runner: Callable[[Callable[[], None]], None] | None = None,
+) -> APIRouter:
+    """All /api/flashcards routes.
+
+    ``generator`` and ``corpus_for`` are only needed by ``POST /decks/generate``;
+    everything else is pure storage. They are optional so a test that only
+    exercises authoring does not have to build a model.
+
+    ``job_runner`` is the same injection the study and ingest routers take, and
+    for the same reason: a test that spawned the real daemon thread would be
+    testing ``threading``.
+    """
     router = APIRouter(prefix="/api/flashcards")
+    run_job = job_runner or _default_job_runner
 
     def db() -> sqlite3.Connection:
         conn = connect(settings.db_path)
         init_schema(conn)
         return conn
 
+    def _fail(exc: FlashcardsError, status: int) -> HTTPException:
+        return HTTPException(status_code=status, detail=str(exc))
+
+    def _corpus_or_422(course: str, sources: list[str] | None) -> list[dict[str, Any]]:
+        """The chunks a generation should read, or the reason there are none.
+
+        The same guard `study/router.py::_corpus_for` puts in front of the same
+        call, and it was missing here. `main.py` injects the bare
+        `course_corpus` lambda, so a selection with nothing indexed behind it
+        produced an empty corpus, a 202, and a job that failed a minute later
+        with "no indexed material for CS201" -- a sentence that is simply wrong
+        when the user ticked three files, and which sends them off to upload
+        material they already have.
+
+        Only a *selection* can be wrong this way. `sources is None` means the
+        whole course, and an empty course is the generators' own error to
+        raise, phrased for that case.
+        """
+        assert corpus_for is not None  # guarded by the caller's 503
+        corpus = corpus_for(course, sources)
+        if corpus or sources is None:
+            return corpus
+        if not sources:
+            raise HTTPException(
+                status_code=422,
+                detail="no sources are selected — tick at least one file to generate from",
+            )
+        raise HTTPException(
+            status_code=422,
+            detail=f"none of the {len(sources)} selected source(s) are indexed for {course} "
+            "— pick different ones, or reindex from System",
+        )
+
+    def _bind_model(model: str | None) -> Any:
+        """Bind the injected generator to a chosen model, if it accepts one.
+
+        Same shape as ``study/router.py::_generator_for``: model-aware
+        generators get the model, single-argument ones (every test fake) keep
+        working untouched.
+        """
+        if not model:
+            return generator
+
+        async def run(prompt: str) -> str:
+            try:
+                call = generator(prompt, model=model)
+            except TypeError:
+                call = generator(prompt)
+            return await call
+
+        return run
+
+    # --- decks -------------------------------------------------------------
+
     @router.post("/decks", response_model=DeckSummary)
-    def create_deck(request: GenerateDeckRequest) -> DeckSummary:
+    def create_deck(request: CreateDeckRequest) -> DeckSummary:
         conn = db()
         try:
-            deck_id = generate_deck(
-                settings.vault_path, conn, request.course, taxonomy=settings.taxonomy
+            deck_id = store.create_deck(
+                conn,
+                title=request.title,
+                course=request.course,
+                description=request.description,
             )
-            deck = load_deck(conn, deck_id)
+            return store.load_deck(conn, deck_id)
         except FlashcardsError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise _fail(exc, 422) from exc
         finally:
             conn.close()
-        return DeckSummary(
-            id=deck["id"],
-            course=deck["course"],
-            title=deck["title"],
-            created_at=deck["created_at"],
-            cards=len(deck["cards"]),
+
+    @router.post("/decks/generate")
+    def generate_deck(request: GenerateDeckRequest) -> Any:
+        """Write a deck from the course corpus, in the background.
+
+        The deck row is created here, before the 202, so the response can name
+        the deck the cards will land in and the UI can open it immediately. A
+        generation that fails therefore leaves an empty deck rather than
+        nothing, which is the honest outcome -- and the job row says why.
+
+        The corpus is read here too, not in the job, for the same reason the
+        study router reads it in the handler: "none of the selected sources are
+        indexed" is a 422 about *this request*, and answering it with a 202 and
+        a job that fails a minute later is strictly worse.
+        """
+        if generator is None or corpus_for is None:
+            raise HTTPException(
+                status_code=503, detail="deck generation is not configured on this server"
+            )
+        styles = request.styles or list(generate.DEFAULT_STYLES)
+        try:
+            # Here, not in the job: an unknown difficulty is a fact about *this
+            # request*, and answering it with a 202 and a job that fails a
+            # minute later is strictly worse.
+            generate.validate_options(request.difficulty, styles)
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+        corpus = _corpus_or_422(request.course, request.sources)
+        # Read off the corpus, not off `request.sources`: `None` there means the
+        # whole course and names no files at all, and a path the caller ticked
+        # may have no indexed chunks. The corpus is what will actually be read,
+        # so it is the honest answer to "where did this deck come from".
+        source_paths = sorted(
+            {str(chunk["meta"]["path"]) for chunk in corpus if chunk["meta"].get("path")}
         )
+
+        conn = db()
+        try:
+            deck_id = store.create_deck(
+                conn,
+                title=request.title or f"{request.course} — generated",
+                course=request.course,
+                source="generated",
+                source_paths=source_paths,
+            )
+            job_id = jobstore.create_job(
+                conn,
+                target=settings.taxonomy.course_study(request.course),
+                filenames=[f"{request.course} flashcards"],
+                kind="deck",
+                params={
+                    "course": request.course,
+                    "deck_id": deck_id,
+                    "model": request.model,
+                    "difficulty": request.difficulty,
+                    "styles": styles,
+                },
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+        finally:
+            conn.close()
+
+        run_job(
+            lambda: run_deck_job(
+                job_id,
+                settings=settings,
+                generator=_bind_model(request.model),
+                corpus=corpus,
+                course=request.course,
+                deck_id=deck_id,
+                n=request.n,
+                difficulty=request.difficulty,
+                styles=styles,
+                instructions=request.instructions,
+            )
+        )
+        return JSONResponse(status_code=202, content={"job_id": job_id, "deck_id": deck_id})
+
+    @router.post("/decks/generate/upload")
+    def generate_deck_from_upload(
+        # Sync, not async, and deliberately so. `UploadFile.file` is a blocking
+        # file object, and `run_deck_job` calls `asyncio.run` -- both of which
+        # need a thread without a running event loop. FastAPI gives a `def`
+        # route exactly that, which is also why the sibling JSON route is one.
+        file: UploadFile,
+        course: Annotated[str, Form()] = "",
+        title: Annotated[str, Form()] = "",
+        model: Annotated[str, Form()] = "",
+        n: Annotated[int, Form()] = 20,
+        difficulty: Annotated[str, Form()] = generate.DEFAULT_DIFFICULTY,
+        styles: Annotated[list[str] | None, Form()] = None,
+        instructions: Annotated[str, Form()] = "",
+    ) -> Any:
+        """Write a deck from a file the user hands over once, and never keeps.
+
+        The twin of `POST /decks/generate`, for material that is not in the
+        vault -- or is, but is not indexed yet. Multipart rather than JSON
+        because it carries a file; everything else is the same dials, and the
+        job it queues is the same `kind="deck"` row polled at the same place.
+
+        `course` is optional here, and that is the point: a deck can be about a
+        PDF rather than about a course. When it is blank the deck belongs to no
+        course (`course=""`, which the store has always allowed), the job's
+        `target` is the file's own name rather than
+        `Taxonomy.course_study("")` -- which would render as
+        `15-Courses//study` -- and the prompt's subject is the filename, since
+        "for course " with nothing after it tells the model less than nothing.
+
+        Nothing reaches the vault. The bytes go to a temp directory, the text
+        comes out, the directory goes away; saving the file for later is a
+        separate, deliberate act through the ingest flow.
+        """
+        if generator is None:
+            raise HTTPException(
+                status_code=503, detail="deck generation is not configured on this server"
+            )
+        chosen = [style for style in (styles or []) if style] or list(generate.DEFAULT_STYLES)
+        try:
+            generate.validate_options(difficulty, chosen)
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+
+        # PurePosixPath, not Path: a browser may send a POSIX-shaped name on a
+        # Windows server, and `Path("a/b.pdf").name` there is the whole string.
+        name = PurePosixPath((file.filename or "").replace("\\", "/")).name
+        try:
+            corpus = upload.corpus_from_upload(name, file.file)
+        except upload.UploadTooLargeError as exc:
+            raise _fail(exc, 413) from exc
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+
+        subject = course or PurePosixPath(name).stem
+        conn = db()
+        try:
+            deck_id = store.create_deck(
+                conn,
+                title=title.strip() or PurePosixPath(name).stem,
+                course=course,
+                source="generated",
+                # The file has no vault path, so its own name is the honest
+                # answer to "what was this written from". It cannot collide with
+                # a real source path, which is what the SOURCES rail badges on.
+                source_paths=[name],
+            )
+            job_id = jobstore.create_job(
+                conn,
+                target=settings.taxonomy.course_study(course) if course else name,
+                filenames=[name],
+                kind="deck",
+                params={
+                    "course": course,
+                    "deck_id": deck_id,
+                    "model": model or None,
+                    "difficulty": difficulty,
+                    "styles": chosen,
+                    "upload": name,
+                },
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+        finally:
+            conn.close()
+
+        run_job(
+            lambda: run_deck_job(
+                job_id,
+                settings=settings,
+                generator=_bind_model(model or None),
+                corpus=corpus,
+                course=subject,
+                deck_id=deck_id,
+                n=n,
+                difficulty=difficulty,
+                styles=chosen,
+                instructions=instructions,
+            )
+        )
+        return JSONResponse(status_code=202, content={"job_id": job_id, "deck_id": deck_id})
 
     @router.get("/decks", response_model=list[DeckSummary])
     def decks(course: str | None = None) -> list[DeckSummary]:
         conn = db()
         try:
-            return list_decks(conn, course)
+            return store.list_decks(conn, course)
         finally:
             conn.close()
 
@@ -85,7 +448,34 @@ def build_flashcards_router(settings: Settings) -> APIRouter:
     def due_summary_route() -> DueSummary:
         conn = db()
         try:
-            return due_summary(conn)
+            return store.due_summary(conn)
+        finally:
+            conn.close()
+
+    @router.get("/decks/{deck_id}", response_model=DeckDetail)
+    def deck_detail(deck_id: int) -> DeckDetail:
+        conn = db()
+        try:
+            return store.load_deck(conn, deck_id)
+        except FlashcardsError as exc:
+            raise _fail(exc, 404) from exc
+        finally:
+            conn.close()
+
+    @router.patch("/decks/{deck_id}", response_model=DeckSummary)
+    def update_deck(deck_id: int, request: UpdateDeckRequest) -> DeckSummary:
+        conn = db()
+        try:
+            return store.update_deck(
+                conn,
+                deck_id,
+                title=request.title,
+                description=request.description,
+                course=request.course,
+            )
+        except FlashcardsError as exc:
+            # "no such deck" is a 404; "a deck needs a title" is a 422.
+            raise _fail(exc, 404 if "no flashcard deck" in str(exc) else 422) from exc
         finally:
             conn.close()
 
@@ -93,30 +483,204 @@ def build_flashcards_router(settings: Settings) -> APIRouter:
     def remove_deck(deck_id: int) -> DeckDeleteSummary:
         conn = db()
         try:
-            reviews_removed = delete_deck(conn, deck_id)
+            reviews_removed = store.delete_deck(conn, deck_id)
         except FlashcardsError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise _fail(exc, 404) from exc
         finally:
             conn.close()
         return DeckDeleteSummary(deck_id=deck_id, reviews_removed=reviews_removed)
+
+    # --- cards -------------------------------------------------------------
+
+    @router.post("/decks/{deck_id}/cards", response_model=CardsAdded)
+    def add_cards(deck_id: int, request: AddCardsRequest) -> CardsAdded:
+        conn = db()
+        try:
+            added = store.add_cards(
+                conn, deck_id, [card.model_dump() for card in request.cards]
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 404) from exc
+        finally:
+            conn.close()
+        return CardsAdded(added=added)
+
+    @router.patch("/decks/{deck_id}/cards/{card_ref}", response_model=CardInfo)
+    def update_card(deck_id: int, card_ref: str, request: UpdateCardRequest) -> CardInfo:
+        conn = db()
+        try:
+            return store.update_card(
+                conn,
+                deck_id,
+                card_ref,
+                front=request.front,
+                back=request.back,
+                hint=request.hint,
+                starred=request.starred,
+                suspended=request.suspended,
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 404 if "no card" in str(exc) else 422) from exc
+        finally:
+            conn.close()
+
+    @router.delete("/decks/{deck_id}/cards/{card_ref}", response_model=CardDeleteSummary)
+    def remove_card(deck_id: int, card_ref: str) -> CardDeleteSummary:
+        conn = db()
+        try:
+            reviews_removed = store.delete_card(conn, deck_id, card_ref)
+        except FlashcardsError as exc:
+            raise _fail(exc, 404) from exc
+        finally:
+            conn.close()
+        return CardDeleteSummary(card_ref=card_ref, reviews_removed=reviews_removed)
+
+    @router.post("/decks/{deck_id}/cards/reorder", response_model=DeckDetail)
+    def reorder(deck_id: int, request: ReorderRequest) -> DeckDetail:
+        conn = db()
+        try:
+            store.reorder_cards(conn, deck_id, request.order)
+            return store.load_deck(conn, deck_id)
+        except FlashcardsError as exc:
+            raise _fail(exc, 404 if "no flashcard deck" in str(exc) else 422) from exc
+        finally:
+            conn.close()
+
+    # --- import / export ---------------------------------------------------
+
+    @router.get("/generate/options", response_model=GenerateOptions)
+    def generate_options() -> GenerateOptions:
+        """What generation accepts, so the dialog never offers a rejected value.
+
+        Same idea as `/import/delimiters` below, and for the same reason: the
+        vocabulary lives in one Python module, and the UI reads it rather than
+        keeping a second copy that drifts.
+        """
+        return GenerateOptions(
+            difficulties=list(generate.DIFFICULTIES),
+            styles=list(generate.CARD_STYLES),
+            default_difficulty=generate.DEFAULT_DIFFICULTY,
+            default_styles=list(generate.DEFAULT_STYLES),
+            max_cards=generate.MAX_CARDS,
+            max_instructions=generate.MAX_INSTRUCTIONS,
+            upload_suffixes=list(upload.UPLOAD_SUFFIXES),
+            max_upload_bytes=upload.MAX_UPLOAD_BYTES,
+        )
+
+    @router.get("/import/delimiters")
+    def delimiters() -> dict[str, list[str]]:
+        """What the paste importer accepts, so the UI never invents an option."""
+        return {"field": sorted(FIELD_DELIMITERS), "row": sorted(ROW_DELIMITERS)}
+
+    @router.post("/decks/{deck_id}/import/note", response_model=CardsAdded)
+    def import_note(deck_id: int, request: ImportNoteRequest) -> CardsAdded:
+        conn = db()
+        try:
+            added = vault.import_from_note(
+                settings.vault_path,
+                conn,
+                deck_id,
+                request.path,
+                taxonomy=settings.taxonomy,
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 422) from exc
+        finally:
+            conn.close()
+        return CardsAdded(added=added)
+
+    @router.post("/decks/{deck_id}/import/paste", response_model=CardsAdded)
+    def import_paste(deck_id: int, request: ImportPasteRequest) -> CardsAdded:
+        if request.format not in ("delimited", "qa"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown format {request.format!r} — expected 'delimited' or 'qa'",
+            )
+        try:
+            # One parser per shape, shared with every other route: `qa` is the
+            # same function that reads a vault note, so a dropped .md and an
+            # imported note cannot diverge.
+            pairs = (
+                parse_qa_pairs(request.text)
+                if request.format == "qa"
+                else parse_delimited(request.text, field=request.field, row=request.row)
+            )
+        except KeyError as exc:
+            # The delimiter names arrive from a request body, so an unknown one
+            # is a client error rather than a crash.
+            raise HTTPException(
+                status_code=422, detail=f"unknown delimiter {exc.args[0]!r}"
+            ) from exc
+        if not pairs:
+            raise HTTPException(
+                status_code=422,
+                detail="nothing to import — no row had both a front and a back",
+            )
+        conn = db()
+        try:
+            added = store.add_cards(
+                conn, deck_id, [{"front": front, "back": back} for front, back in pairs]
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 404) from exc
+        finally:
+            conn.close()
+        return CardsAdded(added=added)
+
+    @router.post("/decks/{deck_id}/export", response_model=ExportResult)
+    def export(deck_id: int) -> ExportResult:
+        conn = db()
+        try:
+            path = vault.export_deck(
+                settings.vault_path, conn, deck_id, taxonomy=settings.taxonomy
+            )
+        except FlashcardsError as exc:
+            raise _fail(exc, 404 if "no flashcard deck" in str(exc) else 422) from exc
+        finally:
+            conn.close()
+        return ExportResult(path=path)
+
+    # --- study -------------------------------------------------------------
 
     @router.get("/decks/{deck_id}/due", response_model=list[DueCard])
     def due(deck_id: int) -> list[DueCard]:
         conn = db()
         try:
-            return due_cards(conn, deck_id)
+            return store.due_cards(conn, deck_id)
         except FlashcardsError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise _fail(exc, 404) from exc
         finally:
             conn.close()
 
-    @router.post("/decks/{deck_id}/cards/{card_id}/grade", response_model=GradeResult)
-    def grade(deck_id: int, card_id: str, request: GradeRequest) -> GradeResult:
+    @router.post("/decks/{deck_id}/cards/{card_ref}/grade", response_model=GradeResult)
+    def grade(deck_id: int, card_ref: str, request: GradeRequest) -> GradeResult:
         conn = db()
         try:
-            return grade_card(conn, deck_id, card_id, request.grade)
+            return store.grade_card(conn, deck_id, card_ref, request.grade)
         except FlashcardsError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise _fail(exc, 404 if "no card" in str(exc) else 422) from exc
+        finally:
+            conn.close()
+
+    @router.post("/decks/{deck_id}/match-score", response_model=MatchBest)
+    def match_score(deck_id: int, request: MatchScoreRequest) -> MatchBest:
+        conn = db()
+        try:
+            best = store.record_match_score(conn, deck_id, request.elapsed_ms, request.pairs)
+        except FlashcardsError as exc:
+            raise _fail(exc, 404 if "no flashcard deck" in str(exc) else 422) from exc
+        finally:
+            conn.close()
+        return MatchBest(best_ms=best)
+
+    @router.get("/decks/{deck_id}/match-best", response_model=MatchBest)
+    def match_best(deck_id: int) -> MatchBest:
+        conn = db()
+        try:
+            store.load_deck(conn, deck_id)
+            return MatchBest(best_ms=store.best_match_score(conn, deck_id))
+        except FlashcardsError as exc:
+            raise _fail(exc, 404) from exc
         finally:
             conn.close()
 

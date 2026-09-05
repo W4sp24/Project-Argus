@@ -57,7 +57,7 @@ type Row =
     };
 
 const KIND_WORDS: [RegExp, string][] = [
-  [/study|read|review|exam|flashcard/i, "STUDY"],
+  [/notebook|read|review|exam|flashcard/i, "STUDY"],
   [/code|debug|build|ship|deploy|pr\b/i, "CODE"],
   [/break|lunch|rest|walk|nap/i, "REST"],
 ];

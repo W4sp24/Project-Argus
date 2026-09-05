@@ -48,16 +48,21 @@ in the UI, so whether your notes leave the machine is always visible.
   AI-initiated changes still go through the suggest-then-approve **Review** queue —
   direct edit/delete is for changes *you* make yourself.
 - **Today's flow** — quick capture to `00-Inbox/` (click, or drag a file straight
-  onto a course card on **Study**), and the morning **briefing** (07:00 job or
+  onto a course card on **Notebook**), and the morning **briefing** (07:00 job or
   on-demand): schedule, due/overdue, yesterday's leftovers, exam countdowns, weak
   topics.
 - **Planner** — type `/plan tomorrow` in chat; the agent proposes schedule blocks,
   task edits, and note edits into a **Review** queue. Approve applies them through
   a single audited writer (with a git snapshot of the vault first); dismissing with
   a reason teaches the planner your preferences.
-- **Study** — upload or drag-and-drop lecture PDFs/slides, generate study guides and
+- **Notebook** — upload or drag-and-drop lecture PDFs/slides, generate study guides and
   practice exams where every question cites a real page, take them in quiz mode, and
   let missed topics feed your review queue (and your briefing, and your planner).
+  Flashcard decks you write, paste, import from any note's `Q::`/`A::` pairs or
+  generate from your sources, with four ways to study them — spaced repetition,
+  browsing, adaptive practice and a timed matching game. Opens in a window of
+  its own so a deck can sit beside whatever else you are doing. See
+  [docs/notebook.md](docs/notebook.md).
 - **Tasks** — Obsidian Tasks syntax parsed vault-wide into overdue/today/week/someday.
 - **Insights** — task completion trend, overdue chart, calendar load vs focus time,
   study streak, practice-exam scores per course, the productivity heatmap (full-width),

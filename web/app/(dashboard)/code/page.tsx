@@ -42,7 +42,7 @@ export default function CodePage() {
             { href: "/code", label: "commits", value: 23 },
             { href: "/code", label: "prs open", value: 2 },
             { href: "/system", label: "tokens", value: tokens.toLocaleString() },
-            { href: "/study", label: "streak", value: streak, unit: typeof streak === "number" ? "days" : undefined },
+            { href: "/notebook", label: "streak", value: streak, unit: typeof streak === "number" ? "days" : undefined },
           ]}
         />
 

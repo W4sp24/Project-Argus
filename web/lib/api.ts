@@ -307,7 +307,13 @@ export interface CourseSource {
  * zone; exams/decks have their own endpoints below).
  */
 export function useCourseSources(code: string) {
-  return useSWR<CourseSource[]>(`/api/study/courses/${encodeURIComponent(code)}/sources`, fetcher);
+  // A blank code is "no course chosen yet", not a course named "". Without the
+  // null key that renders as `/api/study/courses//sources` — a request that can
+  // only 404, fired on every keystroke of a course picker.
+  return useSWR<CourseSource[]>(
+    code ? `/api/study/courses/${encodeURIComponent(code)}/sources` : null,
+    fetcher,
+  );
 }
 
 export interface ExamSummary {
@@ -857,19 +863,49 @@ export interface FlashcardDeck {
   id: number;
   course: string;
   title: string;
+  description: string;
+  /** How the deck came to exist: "manual" | "imported" | "generated". */
+  source: string;
+  /** The vault files this deck was generated from, so a deck can say where it
+   * came from and the SOURCES rail can badge the file it came out of. Empty
+   * for a deck nobody generated. Note the `s`: `source` above is a different
+   * field entirely. */
+  source_paths: string[];
   created_at: string;
+  updated_at: string;
   cards: number;
 }
+
+export interface FlashcardCard {
+  ref: string;
+  front: string;
+  back: string;
+  hint: string | null;
+  position: number;
+  starred: boolean;
+  suspended: boolean;
+  /** The vault note an imported card came from; null if typed in. */
+  source_path: string | null;
+}
+
+export interface FlashcardDeckDetail extends FlashcardDeck {
+  card_list: FlashcardCard[];
+}
+
+export type FlashcardGrade = "again" | "hard" | "good" | "easy";
 
 export interface DueCard {
   id: string;
   front: string;
   back: string;
+  hint: string | null;
   due_at: string;
   state: string;
+  /** What each grade would schedule, as a human interval ("4d"). Computed by
+   * the backend from one FSRS state, so the label on a grade button is the
+   * label the commit reports back. */
+  preview: Record<FlashcardGrade, string>;
 }
-
-export type FlashcardGrade = "again" | "hard" | "good" | "easy";
 
 export interface FlashcardGradeResult {
   card_id: string;
@@ -878,6 +914,8 @@ export interface FlashcardGradeResult {
   difficulty: number;
   due_at: string;
   state: string;
+  /** The same interval `DueCard.preview` promised for this grade. */
+  due_label: string;
 }
 
 /** Generated flashcard decks, optionally scoped to one course. */
@@ -894,9 +932,203 @@ export function useDueCards(deckId: number | null) {
   );
 }
 
-/** Parse `Q:: A::` pairs from the course's `flashcards.md` into a new deck. */
-export function generateFlashcardDeck(course: string) {
-  return mutateJSON<FlashcardDeck>("/api/flashcards/decks", { course });
+/** One deck with all of its cards, in author order. */
+export function useDeck(deckId: number | null) {
+  return useSWR<FlashcardDeckDetail>(
+    deckId !== null ? `/api/flashcards/decks/${deckId}` : null,
+    fetcher,
+  );
+}
+
+/**
+ * Create an empty deck.
+ *
+ * This endpoint used to take `{course}` and generate cards by parsing that
+ * course's `flashcards.md` -- the one input nothing in Argus ever wrote, which
+ * is why decks were unreachable. Filling a deck is now a separate, deliberate
+ * act with four routes: typed in, pasted, imported from a note, or generated.
+ */
+export function createDeck(body: { title: string; course?: string; description?: string }) {
+  return mutateJSON<FlashcardDeck>("/api/flashcards/decks", body);
+}
+
+export function updateDeck(
+  deckId: number,
+  body: { title?: string; description?: string; course?: string },
+) {
+  return mutateJSON<FlashcardDeck>(`/api/flashcards/decks/${deckId}`, body, "PATCH");
+}
+
+export function deleteDeck(deckId: number) {
+  return mutateJSON<{ deck_id: number; reviews_removed: number }>(
+    `/api/flashcards/decks/${deckId}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+export function addCards(
+  deckId: number,
+  cards: { front: string; back: string; hint?: string | null }[],
+) {
+  return mutateJSON<{ added: number }>(`/api/flashcards/decks/${deckId}/cards`, { cards });
+}
+
+export function updateCard(
+  deckId: number,
+  ref: string,
+  body: {
+    front?: string;
+    back?: string;
+    hint?: string | null;
+    starred?: boolean;
+    suspended?: boolean;
+  },
+) {
+  return mutateJSON<FlashcardCard>(
+    `/api/flashcards/decks/${deckId}/cards/${encodeURIComponent(ref)}`,
+    body,
+    "PATCH",
+  );
+}
+
+export function deleteCard(deckId: number, ref: string) {
+  return mutateJSON<{ card_ref: string; reviews_removed: number }>(
+    `/api/flashcards/decks/${deckId}/cards/${encodeURIComponent(ref)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+/** Rewrite card order. Must name every card in the deck exactly once. */
+export function reorderCards(deckId: number, order: string[]) {
+  return mutateJSON<FlashcardDeckDetail>(`/api/flashcards/decks/${deckId}/cards/reorder`, {
+    order,
+  });
+}
+
+/** Pull `Q::`/`A::` pairs out of any vault note -- not only `flashcards.md`. */
+export function importFromNote(deckId: number, path: string) {
+  return mutateJSON<{ added: number }>(`/api/flashcards/decks/${deckId}/import/note`, { path });
+}
+
+export function importPaste(
+  deckId: number,
+  body: { text: string; field: string; row: string; format?: "delimited" | "qa" },
+) {
+  return mutateJSON<{ added: number }>(`/api/flashcards/decks/${deckId}/import/paste`, body);
+}
+
+export interface GenerateOptions {
+  difficulties: string[];
+  styles: string[];
+  default_difficulty: string;
+  default_styles: string[];
+  max_cards: number;
+  max_instructions: number;
+  /** File types the one-shot upload route can read, e.g. [".pdf", ".pptx"].
+   * Served rather than mirrored here: a constant copied into the UI is a rule
+   * that goes stale on one side. */
+  upload_suffixes: string[];
+  max_upload_bytes: number;
+}
+
+/**
+ * What deck generation will accept.
+ *
+ * Read from the server rather than duplicated here, for the same reason
+ * `/import/delimiters` is: the vocabulary lives in one Python module, and a
+ * second copy in the UI is a copy that drifts and starts offering values the
+ * server rejects.
+ */
+export function useGenerateOptions() {
+  return useSWR<GenerateOptions>("/api/flashcards/generate/options", fetcher);
+}
+
+export interface GenerateDeckBody {
+  course: string;
+  sources?: string[] | null;
+  model?: string | null;
+  n?: number;
+  title?: string | null;
+  difficulty?: string;
+  styles?: string[];
+  instructions?: string;
+}
+
+export function generateDeck(body: GenerateDeckBody) {
+  return mutateJSON<{ job_id: string; deck_id: number }>(
+    "/api/flashcards/decks/generate",
+    body,
+  );
+}
+
+export interface UploadDeckBody extends Omit<GenerateDeckBody, "course" | "sources"> {
+  file: File;
+  /** Optional here, unlike the corpus route: a deck can be about a PDF rather
+   * than about a course. Blank files it under no course. */
+  course?: string;
+}
+
+/**
+ * Generate from a file the vault never sees.
+ *
+ * `multipart/form-data`, so this cannot go through `mutateJSON` — but it still
+ * goes through `apiFetch`, because a bare `fetch("/api/...")` works in dev and
+ * 404s only once the app is packaged. The error shape is `mutateJSON`'s on
+ * purpose, so every caller's `catch` reads the same.
+ *
+ * Note the deliberate omission of a `Content-Type` header: the browser has to
+ * set it itself to attach the multipart boundary.
+ */
+export async function generateDeckFromUpload(
+  body: UploadDeckBody,
+): Promise<{ job_id: string; deck_id: number }> {
+  const form = new FormData();
+  form.append("file", body.file, body.file.name);
+  if (body.course) form.append("course", body.course);
+  if (body.title) form.append("title", body.title);
+  if (body.model) form.append("model", body.model);
+  if (body.n !== undefined) form.append("n", String(body.n));
+  if (body.difficulty) form.append("difficulty", body.difficulty);
+  if (body.instructions) form.append("instructions", body.instructions);
+  // Repeated, not comma-joined: the server reads `styles` as a list, and a
+  // style containing a comma would otherwise split into two invalid ones.
+  for (const style of body.styles ?? []) form.append("styles", style);
+
+  const response = await apiFetch("/api/flashcards/decks/generate/upload", {
+    method: "POST",
+    body: form,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = (payload as { detail?: unknown }).detail;
+    throw new ApiError(
+      response.status,
+      payload,
+      typeof detail === "string" ? detail : `Request failed: ${response.status}`,
+    );
+  }
+  return payload as { job_id: string; deck_id: number };
+}
+
+/** Write the deck to its course's `flashcards.md`, through the normal writer. */
+export function exportDeck(deckId: number) {
+  return mutateJSON<{ path: string }>(`/api/flashcards/decks/${deckId}/export`, undefined);
+}
+
+export function postMatchScore(deckId: number, elapsedMs: number, pairs: number) {
+  return mutateJSON<{ best_ms: number | null }>(
+    `/api/flashcards/decks/${deckId}/match-score`,
+    { elapsed_ms: elapsedMs, pairs },
+  );
+}
+
+export function useMatchBest(deckId: number | null) {
+  return useSWR<{ best_ms: number | null }>(
+    deckId !== null ? `/api/flashcards/decks/${deckId}/match-best` : null,
+    fetcher,
+  );
 }
 
 /** Grade one card — updates its FSRS state and schedules the next `due_at`. */
@@ -1120,6 +1352,14 @@ export interface IngestJob {
   created_at: string;
   finished_at: string | null;
   status: IngestJobStatus;
+  /** Which feature queued this: ingest | reindex | relink | guide | exam | deck.
+   * The backend has returned it since the job store was generalised
+   * (`ingest/store.py::_job_row`); this interface simply never named it, so
+   * every consumer had to re-derive a job's kind from its target. */
+  kind: string;
+  /** The request's inputs, plus results with no column of their own — a
+   * guide's `path`, an exam's `exam_id`, a deck's `deck_id`. */
+  params: Record<string, unknown> | null;
   target: string;
   summary_prompt: string;
   /** Which `NoteStyle.key` shaped the notes, or "" for "no note". */
@@ -1152,6 +1392,21 @@ export function useIngestJob(jobId: string | null) {
 /** Recent ingest jobs, newest first, without their items. */
 export function useIngestJobs() {
   return useSWR<{ jobs: IngestJob[] }>("/api/ingest/jobs", fetcher);
+}
+
+/**
+ * Every job of every kind, newest first.
+ *
+ * `useIngestJobs()` above is the ingest history panel's narrower view — the
+ * endpoint defaults to `kind=ingest`, which is what keeps folding reindexes
+ * and study generations into one table from changing what that panel shows.
+ * The global registry needs the opposite: it must see guides, exams and decks
+ * too, so it asks for `kind=all`.
+ */
+export function useAllJobs(refreshMs: number) {
+  return useSWR<{ jobs: IngestJob[] }>("/api/ingest/jobs?kind=all", fetcher, {
+    refreshInterval: refreshMs,
+  });
 }
 
 export interface SourceDeleteSummary {
