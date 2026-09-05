@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.db import connect, init_schema
+from backend.core.db import connect, init_schema, reset_schema_cache
 from backend.features.ingest import store
 
 
@@ -198,9 +198,17 @@ def test_note_style_defaults_to_none_chosen(conn):
 
 
 def test_a_database_predating_note_style_is_migrated(tmp_path):
-    """`init_schema` runs on every connection, so an existing 0.2 database has
-    to grow the column rather than fail every ingest query with
-    `no such column`. Simulated by dropping the column back off."""
+    """An existing 0.2 database has to grow the column rather than fail every
+    ingest query with `no such column`. Simulated by dropping the column back
+    off.
+
+    `init_schema` runs once per database per *process* now, not once per
+    connection, so `reset_schema_cache()` stands in for the thing this test is
+    actually about: a database written by an older Argus, opened by a newer one
+    that has never seen it. Without it the second call would legitimately skip
+    a schema this process had already built — and the column would only be
+    missing because the test itself dropped it, which no real upgrade does.
+    """
     db_path = tmp_path / "argus.db"
     first = connect(db_path)
     init_schema(first)
@@ -208,6 +216,7 @@ def test_a_database_predating_note_style_is_migrated(tmp_path):
     first.commit()
     first.close()
 
+    reset_schema_cache()
     second = connect(db_path)
     init_schema(second)
     try:

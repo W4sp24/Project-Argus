@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 
 logger = logging.getLogger("argus.db")
@@ -509,8 +510,68 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+#: Database files this process has already brought up to schema. Every caller
+#: opens its own short-lived connection (there is no pool), so without this the
+#: whole DDL script below ran on every one of them.
+_initialised: set[str] = set()
+_init_lock = threading.Lock()
+
+
+def reset_schema_cache(db_file: str | None = None) -> None:
+    """Forget that a database was initialised. Tests only.
+
+    ``tests/conftest.py`` calls this around every test, the same way
+    ``_reset_active_taxonomy`` resets the other piece of module-level state in
+    this codebase: pytest reuses one process, so a ``tmp_path`` database from
+    an earlier test must never make a later one skip its DDL.
+    """
+    with _init_lock:
+        if db_file is None:
+            _initialised.clear()
+        else:
+            _initialised.discard(db_file)
+
+
+def _database_file(conn: sqlite3.Connection) -> str:
+    """The path backing ``conn``'s main database, or ``""`` for in-memory.
+
+    One PRAGMA against the already-open handle, which is several orders of
+    magnitude cheaper than the script it guards. In-memory databases report an
+    empty file and are never cached: two ``:memory:`` connections are two
+    unrelated databases that would otherwise share one cache key.
+    """
+    try:
+        for row in conn.execute("PRAGMA database_list"):
+            if row["name"] == "main":
+                return str(row["file"] or "")
+    except sqlite3.Error:  # pragma: no cover - a handle this broken fails below anyway
+        return ""
+    return ""
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Create all tables if they do not exist yet. Safe to call repeatedly."""
+    """Create all tables if they do not exist yet. Safe to call repeatedly.
+
+    Repeatable, but no longer *repeated*: the first call for a given database
+    file in this process does the work and every later one returns immediately.
+
+    What that skips is not small. The script below is 42 statements, followed
+    by ~15 ``PRAGMA table_info`` round-trips, the guarded ALTERs, four rebuild
+    migrations and an unconditional UPDATE -- and ``_migrate_flashcard_cards``
+    reads every deck row. There is no connection pool, so every request in the
+    app opened a connection and paid all of it; one chat turn paid it five or
+    more times, between the turn's own two connections and the ones the tool
+    handlers and telemetry writers open.
+
+    Correctness is unchanged. The migrations are additive and idempotent, so
+    running them once per process per database is strictly a subset of running
+    them once per connection, and a *new* process (an upgrade, the CLI, the
+    packaged backend) still runs them from scratch -- which is the only moment
+    the schema can actually have changed underneath us.
+    """
+    db_file = _database_file(conn)
+    if db_file and db_file in _initialised:
+        return
     conn.executescript(SCHEMA)
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(suggestions)")}
     if "dismiss_reason" not in columns:  # lightweight migration for pre-P3 databases
@@ -633,6 +694,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_workflow_key(conn)
 
     conn.commit()
+
+    # Recorded only after the commit: a run that raises part-way must not mark
+    # the database done, or every later connection in this process would skip
+    # the DDL that never finished.
+    if db_file:
+        with _init_lock:
+            _initialised.add(db_file)
 
 
 def _migrate_flashcard_cards(conn: sqlite3.Connection) -> None:
