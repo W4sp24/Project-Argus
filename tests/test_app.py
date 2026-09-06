@@ -85,3 +85,45 @@ def test_scheduler_factory_present_spawns_a_thread_but_survives_no_vault() -> No
         # Give the background thread a moment to hit ConfigError and return —
         # it must not linger or crash the process either way.
         time.sleep(0.2)
+
+
+def test_the_default_index_factory_is_shared_across_threads(vault: Path, monkeypatch) -> None:
+    """Concurrent first callers must get one factory, not one each.
+
+    The boot indexer thread asks for the index at startup while the first HTTP
+    requests are already in flight, so this memoisation is genuinely contended
+    on every launch. Without the lock both callers see ``None`` and each builds
+    its own factory -- and two factories are two ``VaultIndex`` instances over
+    one chroma directory, which chromadb resolves by releasing the system the
+    first one is still using.
+    """
+    built: list[int] = []
+
+    def fake_make_index_factory(_db_dir, *, taxonomy=None):
+        built.append(1)
+        sentinel = object()
+        return lambda: sentinel
+
+    monkeypatch.setattr("backend.rag.index.make_index_factory", fake_make_index_factory)
+
+    app = create_app(Settings(_vault_path=vault))
+    factory = app.state.index_factory
+
+    start = threading.Barrier(8)
+    seen: list[object] = []
+    lock = threading.Lock()
+
+    def call() -> None:
+        start.wait(timeout=10)
+        index = factory()
+        with lock:
+            seen.append(index)
+
+    threads = [threading.Thread(target=call) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert built == [1], f"built {len(built)} index factories, expected exactly one"
+    assert len({id(index) for index in seen}) == 1, "callers received different indexes"

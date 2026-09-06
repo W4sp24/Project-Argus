@@ -163,3 +163,48 @@ def test_a_real_vault_passes_the_link_check(healthy_vault: Path) -> None:
     checks = {check.name: check for check in run_checks(Settings(_vault_path=healthy_vault))}
 
     assert checks["obsidian-links"].status == "OK"
+
+
+def test_chroma_reads_the_app_s_shared_index_not_a_second_client(
+    healthy_vault: Path, monkeypatch
+) -> None:
+    """Doctor must never open a second chromadb client over the live directory.
+
+    ``chromadb.PersistentClient`` is not additive: constructing a second one
+    for a path makes ``SharedSystemClient`` *release* the system the first
+    holder is still using, so doctor building its own ``VaultIndex`` does not
+    merely risk failing itself -- it tears the index out from under whoever is
+    mid-flight. On a cold runner that is the boot-time index thread, and both
+    of this check's attempts then land inside the window it opened, which is
+    how a perfectly healthy vault reported ``chroma: FAIL`` in CI while
+    passing on every warm dev machine.
+
+    The app already builds exactly one index behind ``make_index_factory``.
+    Doctor is the last consumer that ignored it.
+    """
+    built: list[int] = []
+
+    class SecondClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            built.append(1)
+
+    monkeypatch.setattr("backend.rag.index.VaultIndex", SecondClient)
+
+    class SharedCollection:
+        def count(self) -> int:
+            return 12
+
+    class SharedIndex:
+        @property
+        def collection(self) -> SharedCollection:
+            return SharedCollection()
+
+    shared = SharedIndex()
+    checks = {
+        check.name: check
+        for check in run_checks(Settings(_vault_path=healthy_vault), index_factory=lambda: shared)
+    }
+
+    assert built == [], "doctor opened a second chroma client over the shared directory"
+    assert checks["chroma"].status == "OK"
+    assert "12" in checks["chroma"].detail

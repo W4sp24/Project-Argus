@@ -184,6 +184,7 @@ def create_app(
         return HealthResponse()
 
     _shared_index: Callable[[], object] | None = None
+    _shared_index_lock = threading.Lock()
 
     def _default_index_factory() -> object:
         """One VaultIndex for this app, not one per call.
@@ -191,14 +192,25 @@ def create_app(
         The construction and the reasoning both live in
         :func:`backend.rag.index.make_index_factory`; this wrapper only defers
         the import, so an install without the ``[rag]`` extras still boots.
+
+        Double-checked under a lock for the same reason ``make_index_factory``
+        is: the boot indexer thread calls this at startup while the first HTTP
+        requests are already arriving, and an unsynchronised check-then-set
+        hands those two callers a *factory each*. Two factories are two
+        ``VaultIndex`` instances over one chroma directory, which is not merely
+        wasteful -- the second ``PersistentClient`` releases the system the
+        first is using -- so the memoisation that makes this correct has to
+        hold across threads, not just across calls.
         """
         from backend.rag.index import make_index_factory
 
         nonlocal _shared_index
         if _shared_index is None:
-            _shared_index = make_index_factory(
-                resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy
-            )
+            with _shared_index_lock:
+                if _shared_index is None:
+                    _shared_index = make_index_factory(
+                        resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy
+                    )
         return _shared_index()
 
     def _default_generator(feature: str) -> Callable:
@@ -231,6 +243,10 @@ def create_app(
         return make_agent_composer(resolved)
 
     index = index_factory or _default_index_factory
+    # Every router below receives this; exposing it too lets the boot thread's
+    # "one index per process" invariant be asserted directly rather than
+    # inferred from a router's behaviour.
+    app.state.index_factory = index
 
     app.include_router(build_notes_router(resolved, index))
     app.include_router(build_journal_router(resolved))
@@ -250,7 +266,7 @@ def create_app(
             job_runner=ingest_job_runner,
         )
     )
-    app.include_router(build_system_router(resolved, model_prober, model_puller))
+    app.include_router(build_system_router(resolved, model_prober, model_puller, index))
     app.include_router(build_tasks_router(resolved))
     app.include_router(
         build_flashcards_router(

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -121,7 +123,7 @@ def _vault_has_indexable_files(settings: Settings) -> bool:
     return False
 
 
-def _check_chroma(settings: Settings) -> Check:
+def _check_chroma(settings: Settings, index_factory: Callable[[], Any] | None = None) -> Check:
     """Is the vector index actually populated, not just present?
 
     Previously this only checked that the ``.argus/chroma`` *directory*
@@ -130,6 +132,20 @@ def _check_chroma(settings: Settings) -> Check:
     vault". Opening the collection and checking ``count()`` catches that; a
     real error opening it (corrupt directory, chromadb genuinely broken) is a
     FAIL, not a WARN, because no amount of clicking "reindex" fixes it.
+
+    ``index_factory`` is the app's shared index (``make_index_factory``), and
+    passing it is what keeps this check *read-only*. Building a ``VaultIndex``
+    here instead used to look harmless -- it only reads ``count()`` -- but
+    ``chromadb.PersistentClient`` is not additive: constructing a second one
+    for a path makes ``SharedSystemClient`` release the system the first
+    holder is still using. So this check did not merely race the boot indexer,
+    it *caused* the race, tearing chroma out from under a thread that was
+    part-way through ``reindex_all``. Warm dev machines finish indexing before
+    anyone opens /system and never see it; a cold CI runner is still indexing,
+    both attempts below land inside the window this function opened, and a
+    healthy vault reports FAIL. Standalone callers (``argus doctor``, the
+    desktop smoke test) own their process and pass nothing, so the fallback
+    stays.
     """
     try:
         import chromadb  # noqa: F401
@@ -139,21 +155,23 @@ def _check_chroma(settings: Settings) -> Check:
             status="WARN",
             detail="chromadb not installed — `pip install -e .[rag]` enables chat/RAG",
         )
-    # Retried once, deliberately. On a first launch the boot indexer is opening
-    # this same chroma directory on its own thread, and two clients racing to
-    # create it makes the loser raise -- reproducibly, on the very first
-    # /api/doctor of a fresh vault and never again. That is a transient
-    # collision, not a broken install, and reporting FAIL for it would tell a
-    # brand-new user their index is corrupt while it is quietly building.
-    # A second failure half a second later is real.
+    # Retried once, deliberately. Sharing the app's index removes the collision
+    # this check used to create, but not every one it can meet: a standalone
+    # `argus doctor` run against a vault the desktop app has open is still two
+    # processes on one directory, and SQLite can briefly lose that race. A
+    # second failure half a second later is real.
     from backend.rag.index import VaultIndex
+
+    def _open() -> Any:
+        if index_factory is not None:
+            return index_factory()
+        return VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
 
     count = None
     last_error: Exception | None = None
     for attempt in range(2):
         try:
-            index = VaultIndex(settings.db_path.parent / "chroma", taxonomy=settings.taxonomy)
-            count = index.collection.count()
+            count = _open().collection.count()
             break
         except Exception as exc:  # noqa: BLE001 - chromadb raises many types
             last_error = exc
@@ -318,8 +336,15 @@ def _check_connector(name: str) -> Check:
         return Check(name=name, status="WARN", detail=str(exc))
 
 
-def run_checks(settings: Settings) -> list[Check]:
-    """All health checks, in display order. Never creates files for a broken vault."""
+def run_checks(
+    settings: Settings, *, index_factory: Callable[[], Any] | None = None
+) -> list[Check]:
+    """All health checks, in display order. Never creates files for a broken vault.
+
+    ``index_factory`` is the running app's shared index. Callers that have one
+    must pass it: see :func:`_check_chroma` for why opening a second chroma
+    client is a write, not a read.
+    """
     vault_checks = _check_vault(settings)
     vault_ok = vault_checks[0].status == "OK"
     return [
@@ -327,7 +352,7 @@ def run_checks(settings: Settings) -> list[Check]:
         _check_database(settings)
         if vault_ok
         else Check(name="database", status="FAIL", detail="skipped — vault missing"),
-        _check_chroma(settings)
+        _check_chroma(settings, index_factory)
         if vault_ok
         else Check(name="chroma", status="WARN", detail="skipped — vault missing"),
         _check_config_files(settings)

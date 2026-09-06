@@ -17,6 +17,8 @@ report (:mod:`backend.features.system.agent_usage`).
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
+from typing import Any
 
 from fastapi import APIRouter
 
@@ -35,8 +37,14 @@ def build_system_router(
     settings: Settings,
     prober: Prober | None = None,
     puller: Puller | None = None,
+    index_factory: Callable[[], Any] | None = None,
 ) -> APIRouter:
-    """All /api system routes, including the mounted model-registry router."""
+    """All /api system routes, including the mounted model-registry router.
+
+    ``index_factory`` is the app's one shared index, handed to doctor so its
+    chroma check reads the live collection instead of opening a second client
+    over the same directory (:func:`backend.features.system.doctor._check_chroma`).
+    """
     router = APIRouter(prefix="/api")
 
     def db() -> sqlite3.Connection:
@@ -47,7 +55,7 @@ def build_system_router(
     @router.post("/doctor", response_model=list[Check])
     def doctor() -> list[Check]:
         """Run the existing health checks (read-only against the vault)."""
-        return run_checks(settings)
+        return run_checks(settings, index_factory=index_factory)
 
     @router.get("/usage", response_model=UsageReport)
     def usage(range: Range = "session") -> UsageReport:  # noqa: A002 - API param name
