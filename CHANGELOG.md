@@ -8,6 +8,14 @@ Argus is currently pre-1.0 (0.x releases).
 
 ## [Unreleased]
 
+## [0.4.0]
+
+The Notebook becomes a mode of its own with a window to match, flashcards
+become something you can actually author, and note relationships are
+surfaced rather than implied. The release also closes the CD break that
+held it up: `main` could not go green, and this repo does not tag a red
+`main`.
+
 ### Added
 
 #### The Notebook, in a window of its own
@@ -112,6 +120,16 @@ Argus is currently pre-1.0 (0.x releases).
   `[[lecture-03]]`, with the extension stripped, so for a PDF source Obsidian
   drew a hollow node and link expansion had nothing to follow. It now names
   the file.
+- **`doctor` reported `chroma: FAIL` on a healthy vault, and broke the index
+  while doing it.** The check built its own `VaultIndex` for what is documented
+  as a read-only probe, but a second `chromadb.PersistentClient` over one
+  directory *releases* the system the first holder is using — so the check did
+  not lose a race with the boot-time indexer, it started one, and then ran both
+  of its retries inside the window it had opened. Only cold machines were slow
+  enough to show it, which is why it surfaced in CI and never on a dev box. It
+  now reads the app's shared index. `_default_index_factory` could hand two
+  concurrent first callers a factory each by the same route, and is now
+  double-checked under a lock.
 
 ## [0.3.1]
 
