@@ -43,6 +43,7 @@ from backend.features.flashcards.store import (
     DueSummary,
     FlashcardsError,
     GradeResult,
+    MasteredDay,
 )
 from backend.features.ingest import store as jobstore
 
@@ -449,6 +450,21 @@ def build_flashcards_router(
         conn = db()
         try:
             return store.due_summary(conn)
+        finally:
+            conn.close()
+
+    @router.get("/history", response_model=list[MasteredDay])
+    def mastered_history_route(days: int = 7) -> list[MasteredDay]:
+        """Cards mastered per day, for the Notebook overview's bar chart.
+
+        Declared above ``/decks/{deck_id}`` only for readability -- it shares no
+        prefix with it, so the ordering is not load-bearing here.
+        """
+        if not 1 <= days <= 90:
+            raise HTTPException(status_code=422, detail="days must be between 1 and 90")
+        conn = db()
+        try:
+            return store.mastered_history(conn, days)
         finally:
             conn.close()
 

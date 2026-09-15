@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -60,6 +60,12 @@ __all__ = [
 ]
 
 
+#: The interval at which a card counts as mastered. Anki calls this "mature"
+#: and picks the same three weeks. Changing it changes every progress ring in
+#: the Notebook at once, which is the point of it being one number.
+MASTERED_INTERVAL_DAYS = 21
+
+
 class FlashcardsError(RuntimeError):
     """Raised when a deck/card cannot be found, parsed, or graded."""
 
@@ -79,6 +85,9 @@ class DeckSummary(BaseModel):
     created_at: str
     updated_at: str
     cards: int
+    #: Cards whose current interval has reached ``MASTERED_INTERVAL_DAYS``.
+    #: Derived from ``flashcard_reviews``, never stored -- see ``_is_mastered``.
+    mastered: int = 0
 
 
 class CardInfo(BaseModel):
@@ -92,6 +101,12 @@ class CardInfo(BaseModel):
     starred: bool
     suspended: bool
     source_path: str | None
+    #: When this card next comes up, and which FSRS state it is in. Both are
+    #: ``None`` for a card with no review yet, which is new and due immediately.
+    #: ``due_cards`` answers the same question for the *due* subset only; the
+    #: editor needs it for every card, including ones scheduled weeks out.
+    due_at: str | None = None
+    state: str | None = None
 
 
 class DeckDetail(DeckSummary):
@@ -131,6 +146,13 @@ class DueSummary(BaseModel):
 
     total: int
     decks: list[DeckDueSummary]
+
+
+class MasteredDay(BaseModel):
+    """One day of the Notebook overview's "mastered per day" chart."""
+
+    date: str
+    mastered: int
 
 
 def _now() -> str:
@@ -213,7 +235,7 @@ def _deck_row(conn: sqlite3.Connection, deck_id: int) -> sqlite3.Row:
     return row
 
 
-def _summary(row: sqlite3.Row, cards: int) -> DeckSummary:
+def _summary(row: sqlite3.Row, cards: int, mastered: int = 0) -> DeckSummary:
     return DeckSummary(
         id=row["id"],
         course=row["course"],
@@ -224,10 +246,11 @@ def _summary(row: sqlite3.Row, cards: int) -> DeckSummary:
         created_at=row["created_at"],
         updated_at=row["updated_at"] or row["created_at"],
         cards=cards,
+        mastered=mastered,
     )
 
 
-def _card_info(row: sqlite3.Row) -> CardInfo:
+def _card_info(row: sqlite3.Row, review_row: sqlite3.Row | None = None) -> CardInfo:
     return CardInfo(
         ref=row["card_ref"],
         front=row["front"],
@@ -237,19 +260,23 @@ def _card_info(row: sqlite3.Row) -> CardInfo:
         starred=bool(row["starred"]),
         suspended=bool(row["suspended"]),
         source_path=row["source_path"],
+        due_at=review_row["due_at"] if review_row is not None else None,
+        state=scheduler.State(review_row["state"]).name if review_row is not None else None,
     )
 
 
 def load_deck(conn: sqlite3.Connection, deck_id: int) -> DeckDetail:
     """A deck and all of its cards, in author order."""
     row = _deck_row(conn, deck_id)
+    latest = _latest_reviews(conn, deck_id)
     cards = [
-        _card_info(card)
+        _card_info(card, latest.get(card["card_ref"]))
         for card in conn.execute(
             "SELECT * FROM flashcard_cards WHERE deck_id = ? ORDER BY position, id", (deck_id,)
         )
     ]
-    return DeckDetail(**_summary(row, len(cards)).model_dump(), card_list=cards)
+    mastered = sum(1 for card in cards if _is_mastered(latest.get(card.ref)))
+    return DeckDetail(**_summary(row, len(cards), mastered).model_dump(), card_list=cards)
 
 
 def list_decks(conn: sqlite3.Connection, course: str | None = None) -> list[DeckSummary]:
@@ -261,7 +288,10 @@ def list_decks(conn: sqlite3.Connection, course: str | None = None) -> list[Deck
         + " ORDER BY d.id DESC",
         (course,) if course else (),
     ).fetchall()
-    return [_summary(row, row["n"]) for row in rows]
+    # One pass for every deck rather than a query each: the library lists the
+    # whole vault, and `due_summary` already costs a query per deck.
+    mastered = _mastered_counts(conn)
+    return [_summary(row, row["n"], mastered.get(row["id"], 0)) for row in rows]
 
 
 def update_deck(
@@ -299,7 +329,7 @@ def update_deck(
     count = conn.execute(
         "SELECT COUNT(*) AS n FROM flashcard_cards WHERE deck_id = ?", (deck_id,)
     ).fetchone()["n"]
-    return _summary(row, count)
+    return _summary(row, count, _mastered_counts(conn, deck_id).get(deck_id, 0))
 
 
 def delete_deck(conn: sqlite3.Connection, deck_id: int) -> int:
@@ -428,7 +458,7 @@ def update_card(
         )
         conn.execute("UPDATE flashcard_decks SET updated_at = ? WHERE id = ?", (_now(), deck_id))
         conn.commit()
-    return _card_info(_card_row(conn, deck_id, ref))
+    return _card_info(_card_row(conn, deck_id, ref), _latest_reviews(conn, deck_id).get(ref))
 
 
 def delete_card(conn: sqlite3.Connection, deck_id: int, ref: str) -> int:
@@ -495,6 +525,85 @@ def _latest_reviews(conn: sqlite3.Connection, deck_id: int) -> dict[str, sqlite3
         (deck_id, deck_id),
     ).fetchall()
     return {row["card_id"]: row for row in rows}
+
+
+def _is_mastered(review_row: sqlite3.Row | None) -> bool:
+    """Has this card's interval reached three weeks?
+
+    ``MASTERED_INTERVAL_DAYS`` is Anki's "mature" threshold and means the same
+    thing here: a card you will not be asked again for three weeks is one you
+    know, as distinct from one you are still learning. It is derived from the
+    latest review rather than stored, so it costs no column and no migration,
+    and it re-derives correctly if the scheduler's parameters ever change.
+
+    A card with no review is new, and new is not mastered.
+    """
+    if review_row is None or not review_row["last_review_at"]:
+        return False
+    try:
+        interval = scheduler.parse_dt(review_row["due_at"]) - scheduler.parse_dt(
+            review_row["last_review_at"]
+        )
+    except (TypeError, ValueError):
+        # A hand-edited row is not worth failing a deck listing over.
+        return False
+    return interval >= timedelta(days=MASTERED_INTERVAL_DAYS)
+
+
+def _mastered_counts(conn: sqlite3.Connection, deck_id: int | None = None) -> dict[int, int]:
+    """Mastered-card counts keyed by deck id, in one query for every deck.
+
+    Reviews are deleted with their card (``delete_card``) and with their deck
+    (``delete_deck``), so counting latest-review rows cannot count a card that
+    no longer exists.
+    """
+    rows = conn.execute(
+        """
+        SELECT r.* FROM flashcard_reviews r
+        JOIN (
+            SELECT deck_id, card_id, MAX(id) AS max_id
+            FROM flashcard_reviews
+            GROUP BY deck_id, card_id
+        ) latest ON r.id = latest.max_id
+        """
+        + (" WHERE r.deck_id = ?" if deck_id is not None else ""),
+        (deck_id,) if deck_id is not None else (),
+    ).fetchall()
+    counts: dict[int, int] = {}
+    for row in rows:
+        if _is_mastered(row):
+            counts[row["deck_id"]] = counts.get(row["deck_id"], 0) + 1
+    return counts
+
+
+def mastered_history(
+    conn: sqlite3.Connection, days: int = 7, now: datetime | None = None
+) -> list[MasteredDay]:
+    """How many cards crossed into mastery on each of the last ``days`` days.
+
+    Every day in the window is present, including the empty ones — a bar chart
+    with days missing reads as a shorter history rather than a quieter one.
+
+    This counts *reviews that landed at or past the threshold*, so a card graded
+    up twice in a week is counted on both days. That is the honest reading of
+    "mastered per day": the question is how much work the day did, not how many
+    distinct cards are currently mature (which is ``DeckSummary.mastered``).
+    """
+    at = now or datetime.now(UTC)
+    window = [
+        (at - timedelta(days=offset)).date().isoformat() for offset in range(days - 1, -1, -1)
+    ]
+    counts = dict.fromkeys(window, 0)
+    floor = window[0]
+    for row in conn.execute(
+        "SELECT * FROM flashcard_reviews WHERE date(created_at) >= ? ORDER BY id", (floor,)
+    ):
+        if not _is_mastered(row):
+            continue
+        day = str(row["created_at"])[:10]
+        if day in counts:
+            counts[day] += 1
+    return [MasteredDay(date=day, mastered=counts[day]) for day in window]
 
 
 def _state_of(row: sqlite3.Row | None) -> dict[str, Any] | None:
