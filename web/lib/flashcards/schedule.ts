@@ -7,6 +7,19 @@
  * a screenshot.
  */
 
+/**
+ * Seconds a card takes to review. A flat constant, not a measurement: nothing
+ * times a session, and the artboard's "at your pace" would be a claim we cannot
+ * support. 15s is the figure the design's own arithmetic uses (42 cards ≈ 11
+ * minutes).
+ */
+const SECONDS_PER_CARD = 15;
+
+/** Never rounds to zero: "about 0 minutes of reviewing" reads as a bug. */
+export function estimateMinutes(cards: number): number {
+  return Math.max(1, Math.round((cards * SECONDS_PER_CARD) / 60));
+}
+
 export type NextReviewTone = "due" | "scheduled" | "muted";
 
 export interface NextReview {

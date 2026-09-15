@@ -57,14 +57,14 @@ test("a review session flips, grades, and says what each grade will cost", async
 
   // Every grade button carries its real next interval, computed by FSRS
   // without committing. Four unlabelled verbs asked the user to guess.
-  const good = page.getByRole("button", { name: /3 · good/ });
+  const good = page.getByRole("button", { name: /3 · Good/ });
   await expect(good).toContainText(/\d+[mhdy]|mo/);
 
   await good.click();
   // The toast reports the same interval the button promised — they come out of
   // one function, so a drift between them is a bug rather than a rounding.
-  await expect(page.getByText(/good :: back in /)).toBeVisible();
-  await expect(page.getByText("session complete")).toBeVisible();
+  await expect(page.getByText(/Good — back in /)).toBeVisible();
+  await expect(page.getByText("Session complete")).toBeVisible();
 });
 
 test("space flips and a number grades, without reaching for the mouse", async ({
@@ -102,7 +102,7 @@ test("space flips and a number grades, without reaching for the mouse", async ({
   await page.keyboard.press("3");
   await expect(inner).toHaveClass(/is-flipped/);
   await page.keyboard.press("3");
-  await expect(page.getByText("session complete")).toBeVisible();
+  await expect(page.getByText("Session complete")).toBeVisible();
 });
 
 test("a flashcard carrying notation is typeset on both faces", async ({ page }) => {

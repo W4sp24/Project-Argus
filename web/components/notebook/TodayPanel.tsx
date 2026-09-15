@@ -4,17 +4,7 @@ import Link from "next/link";
 import { useDueSummary, useFlashcardDecks, useMasteredHistory } from "@/lib/api";
 import NotebookPanel from "@/components/notebook/NotebookPanel";
 import ProgressRing from "@/components/notebook/ProgressRing";
-
-/**
- * Seconds a card takes to review. A flat constant, not a measurement: nothing
- * times a session, and "at your pace" would be a claim we cannot support. 15s
- * is the figure the design's own arithmetic uses (42 cards ≈ 11 minutes).
- */
-const SECONDS_PER_CARD = 15;
-
-export function estimateMinutes(cards: number): number {
-  return Math.max(1, Math.round((cards * SECONDS_PER_CARD) / 60));
-}
+import { estimateMinutes } from "@/lib/flashcards/schedule";
 
 /** Last seven days, mastered per day. Bars are decoration; the caption and the
  * per-bar title carry the numbers. */

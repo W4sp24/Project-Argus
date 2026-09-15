@@ -6,8 +6,9 @@ import NotebookIngestCard from "@/components/notebook/NotebookIngestCard";
 import NotebookPanel from "@/components/notebook/NotebookPanel";
 import NotebookStatusLine from "@/components/notebook/NotebookStatusLine";
 import NotebookTabs from "@/components/notebook/NotebookTabs";
-import TodayPanel, { estimateMinutes } from "@/components/notebook/TodayPanel";
+import TodayPanel from "@/components/notebook/TodayPanel";
 import { useDueSummary, useStudyCourses } from "@/lib/api";
+import { estimateMinutes } from "@/lib/flashcards/schedule";
 import { useWeakTopics } from "@/lib/useStudySignals";
 
 export default function NotebookOverviewPage() {

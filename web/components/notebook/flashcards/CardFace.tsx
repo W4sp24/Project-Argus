@@ -26,6 +26,18 @@ import Markdown from "@/components/Markdown";
  * `data-testid` still carries the structural flip-state signal for e2e, since
  * `backface-visibility` is not something a visibility assertion can see.
  */
+/**
+ * `inert=""`, not `inert={true}`.
+ *
+ * React 18 does not know `inert` is a boolean attribute, so it refuses to write
+ * `true` to a non-boolean attribute and drops it entirely — with a console
+ * warning on every render, and, worse, silently: the hidden face stayed
+ * focusable and stayed in the tab order for as long as this component has
+ * existed, which is exactly what the comment above says it fixed. An empty
+ * string is the attribute's present form and React writes it through.
+ */
+const INERT = { inert: "" } as unknown as { inert?: boolean };
+
 export default function CardFace({
   front,
   back,
@@ -47,27 +59,23 @@ export default function CardFace({
         <div
           data-testid="flashcard-front"
           aria-hidden={flipped}
-          {...(flipped ? { inert: true } : {})}
+          {...(flipped ? INERT : {})}
           onClick={onFlip}
-          className="flip-card-face flip-card-front flex w-full cursor-pointer items-center justify-center overflow-auto border border-line bg-sunken p-6 text-center text-lead text-ink-bright"
+          className="flip-card-face flip-card-front flex w-full cursor-pointer flex-col items-center justify-center overflow-auto rounded-card border border-nb-line bg-nb-panel p-10 text-center text-nb-ink"
         >
-          <Markdown text={front} className="text-lead" />
+          <Markdown text={front} className="text-title font-medium" />
+          {hint ? <p className="mt-5 text-ctl text-nb-faint">Hint: {hint}</p> : null}
         </div>
         <div
           data-testid="flashcard-back"
           aria-hidden={!flipped}
-          {...(flipped ? {} : { inert: true })}
+          {...(flipped ? {} : INERT)}
           onClick={onFlip}
-          className="flip-card-face flip-card-back flex w-full cursor-pointer items-center justify-center overflow-auto border border-[var(--ac)] bg-[var(--ac-bg)] p-6 text-center text-lead text-ink-bright"
+          className="flip-card-face flip-card-back flex w-full cursor-pointer items-center justify-center overflow-auto rounded-card border border-[var(--ac)] bg-nb-panel p-10 text-center text-nb-ink"
         >
-          <Markdown text={back} className="text-lead" />
+          <Markdown text={back} className="text-title font-medium" />
         </div>
       </div>
-      {hint ? (
-        <p className="mt-1 font-mono text-meta text-ink-faint">
-          <span className="text-[var(--ac)]">hint</span> :: {hint}
-        </p>
-      ) : null}
     </div>
   );
 }
