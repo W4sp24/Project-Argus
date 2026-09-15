@@ -8,6 +8,7 @@ import { CourseChat, CourseStudio } from "@/components/notebook/CourseHub";
 import CourseSourcesPanel from "@/components/notebook/CourseSourcesPanel";
 import { useStudyCourses } from "@/lib/api";
 import { CourseSelectionProvider } from "@/lib/courseSelection";
+import { useNextExamByCourse } from "@/lib/useStudySignals";
 
 /**
  * Course Hub (§4 Course Hub) — NotebookLM-style 3-pane workspace opened via a
@@ -37,23 +38,31 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
   const code = decodeURIComponent(params.code);
   const { data: courses } = useStudyCourses();
   const course = courses?.find((c) => c.code === code);
+  const examIn = useNextExamByCourse([code])[code];
 
   return (
     <div className="flex h-[calc(100dvh-8rem)] flex-col md:h-[calc(100dvh-4rem)]">
-      <header className="mb-4 flex flex-wrap items-center gap-3 animate-rise">
+      <header className="mb-5 flex animate-rise flex-wrap items-center gap-3.5">
         <button
           type="button"
           onClick={() => router.back()}
-          className="font-mono text-label uppercase tracking-[0.14em] text-ink-faint transition-colors hover:text-ink-bright"
+          className="text-ctl text-nb-faint transition-colors hover:text-nb-ink"
         >
-          ← BACK
+          ← Back
         </button>
         <div className="min-w-0">
-          <p className="eyebrow">{`▍COURSE.HUB · ${code}`}</p>
-          <p className="truncate text-lead font-medium text-ink-bright">
-            {course?.title ?? "Unknown course"}
+          <p className="font-mono text-meta font-semibold tracking-[0.06em] text-[var(--ac)]">
+            {code}
           </p>
+          <h1 className="truncate font-body text-title font-semibold text-nb-ink">
+            {course?.title ?? "Unknown course"}
+          </h1>
         </div>
+        {examIn !== undefined && (
+          <span className="rounded-full bg-nb-dangerBg px-3 py-1 text-label font-semibold text-danger">
+            {examIn === 0 ? "Exam today" : `Exam in ${examIn} day${examIn === 1 ? "" : "s"}`}
+          </span>
+        )}
         {/* Was a disabled button with `claude-sonnet-5` baked into it, which
             misreported the model the moment anything else was selected. */}
         <div className="ml-auto">
@@ -76,10 +85,10 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
               role="tab"
               aria-selected={active === pane}
               onClick={() => setActive(pane)}
-              className={`flex-1 border px-2 py-1.5 font-mono text-meta uppercase tracking-[0.14em] transition-colors ${
+              className={`flex-1 rounded-ctl border px-3 py-2 text-ctl transition-colors ${
                 active === pane
-                  ? "border-[var(--ac)] text-ink-bright"
-                  : "border-line text-ink-muted hover:border-lineHi hover:text-ink"
+                  ? "border-[var(--ac)] bg-nb-acBg text-[var(--ac)]"
+                  : "border-nb-line text-nb-body hover:border-nb-lineHi hover:text-nb-ink"
               }`}
             >
               {pane}
@@ -87,7 +96,7 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
           ))}
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[300px_minmax(0,1fr)_270px]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-[1.125rem] lg:grid-cols-[300px_minmax(0,1fr)_280px]">
           <div
             className={`min-h-0 overflow-y-auto ${active === "sources" ? "" : "hidden"} lg:block`}
           >
@@ -102,7 +111,7 @@ export default function CourseHubPage({ params }: { params: { code: string } }) 
           <div
             className={`min-h-0 overflow-y-auto ${active === "studio" ? "" : "hidden"} lg:block`}
           >
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-[1.125rem]">
               <CourseStudio code={code} />
               {/* Under STUDIO, not above it: you come here to make something,
                   and what you have already made is what you scroll to. */}

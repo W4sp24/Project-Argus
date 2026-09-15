@@ -130,13 +130,13 @@ test("course hub opens from a course row and links back", async ({ page }) => {
   await page.goto("/notebook");
   await page.getByRole("link", { name: "Open hub →" }).click();
   await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
-  await expect(page.getByText("COURSE.HUB · CS000")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sample Course" })).toBeVisible();
   // "Sample Course" is ambiguous here by design: course.md (the hub note
   // itself, title "Sample Course") lives inside 15-Courses/CS000/ and so
   // also shows up as a SOURCES row — scope to the header to pick the title.
   await expect(page.locator("header").getByText("Sample Course")).toBeVisible();
 
-  await page.getByRole("button", { name: "← BACK" }).click();
+  await page.getByRole("button", { name: "← Back" }).click();
   await expect(page).toHaveURL(/\/notebook$/);
 });
 
@@ -221,10 +221,10 @@ test("the course hub ingests into materials/ and reports every stage in place", 
 }) => {
   await page.goto("/notebook/course/CS000");
 
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
   await expect(sources).toBeVisible();
 
-  await sources.getByRole("button", { name: "+ INGEST" }).click();
+  await sources.getByRole("button", { name: "Add", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Ingest files" });
   await expect(dialog).toBeVisible();
   // The destination is pinned to the course, so there is no picker to set.
@@ -255,7 +255,7 @@ test("the course hub ingests into materials/ and reports every stage in place", 
 test("unticking a source sticks across a reload and is counted everywhere", async ({ page }) => {
   await page.goto("/notebook/course/CS000");
 
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
   // course.md is seeded by start-backend.mjs, so the rail is never empty.
   const box = sources.getByRole("checkbox").first();
   await expect(box).toHaveAttribute("aria-checked", "true");
@@ -282,22 +282,22 @@ test("unticking a source sticks across a reload and is counted everywhere", asyn
 test("selecting nothing disables the generators rather than widening them", async ({ page }) => {
   await page.goto("/notebook/course/CS000");
 
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
   await sources.getByRole("button", { name: "NONE" }).click();
 
   await expect(sources.getByText("Nothing selected")).toBeVisible();
-  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
-  await expect(studio.getByRole("button", { name: /^study guide/ })).toBeDisabled();
-  await expect(studio.getByRole("button", { name: /^practice exam/ })).toBeDisabled();
+  const studio = page.locator("section").filter({ hasText: "Make something" });
+  await expect(studio.getByRole("button", { name: "Study guide" })).toBeDisabled();
+  await expect(studio.getByRole("button", { name: "Practice exam" })).toBeDisabled();
   // Decks are generated from the same corpus now, so the deck button obeys
   // the selection like its siblings rather than carrying an apology for
   // ignoring it.
-  await expect(studio.getByRole("button", { name: /^flashcard deck/ })).toBeDisabled();
+  await expect(studio.getByRole("button", { name: "Flashcard deck" })).toBeDisabled();
   await expect(studio.getByText("reads flashcards.md · ignores the selection")).toHaveCount(0);
 
   await sources.getByRole("button", { name: "ALL" }).click();
-  await expect(studio.getByRole("button", { name: /^study guide/ })).toBeEnabled();
-  await expect(studio.getByRole("button", { name: /^flashcard deck/ })).toBeEnabled();
+  await expect(studio.getByRole("button", { name: "Study guide" })).toBeEnabled();
+  await expect(studio.getByRole("button", { name: "Flashcard deck" })).toBeEnabled();
 });
 
 /**
@@ -310,7 +310,7 @@ test("selecting nothing disables the generators rather than widening them", asyn
  * what an earlier one happened to ingest. Note style stays empty: e2e runs the
  * real backend, so asking for a note would be a live model call. */
 async function ingestProbe(page: import("@playwright/test").Page, name: string) {
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
   // Wait for the course itself to load before opening the dialog. The hub
   // pins the destination from `GET /api/study/courses`, and a dialog opened
   // before that resolves has no `lockedTarget` — it falls back to the default
@@ -318,7 +318,7 @@ async function ingestProbe(page: import("@playwright/test").Page, name: string) 
   // effect bails whenever `lockedTarget` is set. The dialog then *shows* the
   // course as pinned and POSTs the inbox.
   await expect(page.getByText("Sample Course")).toBeVisible({ timeout: 15_000 });
-  await sources.getByRole("button", { name: "+ INGEST" }).click();
+  await sources.getByRole("button", { name: "Add", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Ingest files" });
   await dialog.getByLabel("Write a note from each file").selectOption("");
   await dialog.locator('input[type="file"]').setInputFiles({
@@ -367,12 +367,12 @@ test("a course opened for the first time has everything selected, not nothing", 
   // the reconcile's lazy updater had already populated `known`. A hard reload
   // never reproduces it — the fetch is still in flight on mount, so the reset
   // runs harmlessly before there is any data to reconcile.
-  await page.getByRole("button", { name: "← BACK" }).click();
+  await page.getByRole("button", { name: "← Back" }).click();
   await expect(page).toHaveURL(/\/notebook$/);
   await page.getByRole("link", { name: "Open hub →" }).click();
   await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
 
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
   const boxes = sources.getByRole("checkbox");
   await expect(boxes.first()).toBeVisible({ timeout: 15_000 });
 
@@ -391,7 +391,7 @@ test("ALL under a filter selects what is on screen, not what the filter hides", 
   await page.goto("/notebook/course/CS000");
   await ingestProbe(page, "e2e-filter-probe");
 
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
   const total = await sources.getByRole("checkbox").count();
   expect(total).toBeGreaterThan(1);
 
@@ -431,7 +431,7 @@ test("ALL under a filter selects what is on screen, not what the filter hides", 
 test("a source row's toggle target is the whole row, not a 14px box", async ({ page }) => {
   await page.goto("/notebook/course/CS000");
 
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
   const box = sources.getByRole("checkbox").first();
   await expect(box).toBeVisible({ timeout: 15_000 });
 
@@ -471,8 +471,8 @@ test("shift-click ticks a run, and only the rows on screen", async ({ page }) =>
   // three: the store deliberately allows a single ingest at a time, so
   // firing them back to back makes the second and third 409.
   await expect(page.getByText("Sample Course")).toBeVisible({ timeout: 15_000 });
-  await page.locator("section").filter({ hasText: "▍SOURCES" })
-    .getByRole("button", { name: "+ INGEST" })
+  await page.locator("section").filter({ hasText: "Sources" })
+    .getByRole("button", { name: "Add", exact: true })
     .click();
   const batch = page.getByRole("dialog", { name: "Ingest files" });
   await batch.getByLabel("Write a note from each file").selectOption("");
@@ -486,7 +486,7 @@ test("shift-click ticks a run, and only the rows on screen", async ({ page }) =>
   await batch.getByRole("button", { name: /^Ingest/ }).click();
   await expect(batch).toBeHidden();
 
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
   const boxes = sources.getByRole("checkbox");
   await expect(boxes.first()).toBeVisible({ timeout: 15_000 });
   const total = await boxes.count();
@@ -560,8 +560,8 @@ test("a generation started in the course hub survives leaving the tab", async ({
   });
 
   await page.goto("/notebook/course/CS000");
-  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
-  await studio.getByRole("button", { name: /^study guide/ }).click();
+  const studio = page.locator("section").filter({ hasText: "Make something" });
+  await studio.getByRole("button", { name: "Study guide" }).click();
 
   expect(sentBody).toMatchObject({ course: "CS000", background: true });
 
@@ -986,8 +986,8 @@ test("generation options reach the request, and the deck records them", async ({
   });
 
   await page.goto("/notebook/course/CS000");
-  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
-  await studio.getByRole("button", { name: /^flashcard deck/ }).click();
+  const studio = page.locator("section").filter({ hasText: "Make something" });
+  await studio.getByRole("button", { name: "Flashcard deck" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
   await dialog.getByRole("button", { name: "HARD" }).click();
@@ -1015,8 +1015,8 @@ test("generation options reach the request, and the deck records them", async ({
 
 test("a deck needs at least one card type before it can be generated", async ({ page }) => {
   await page.goto("/notebook/course/CS000");
-  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
-  await studio.getByRole("button", { name: /^flashcard deck/ }).click();
+  const studio = page.locator("section").filter({ hasText: "Make something" });
+  await studio.getByRole("button", { name: "Flashcard deck" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
   for (const style of ["Definition", "Concept", "Cloze", "Application"]) {
@@ -1044,8 +1044,8 @@ test("exams finally send the difficulty and focus the backend has always accepte
   });
 
   await page.goto("/notebook/course/CS000");
-  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
-  await studio.getByRole("button", { name: /^practice exam/ }).click();
+  const studio = page.locator("section").filter({ hasText: "Make something" });
+  await studio.getByRole("button", { name: "Practice exam" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Generate a practice exam" });
   // No card types on an exam — those are a flashcard idea.
@@ -1250,7 +1250,7 @@ test("a course's decks are one click away from the course", async ({ page, reque
   });
 
   await page.goto("/notebook/course/CS000");
-  const panel = page.locator("section").filter({ hasText: "▍DECKS · CS000" });
+  const panel = page.locator("section").filter({ hasText: "Decks" });
   // Scoped to its own row, not to the panel: by now CS000 has several decks and
   // every one carries a `review N ->` link, so a panel-wide match finds them all.
   const item = panel.getByRole("listitem").filter({ hasText: "e2e hub deck" });

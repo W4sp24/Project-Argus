@@ -1,18 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Panel from "@/components/Panel";
+import NotebookPanel from "@/components/notebook/NotebookPanel";
 import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress from "@/components/sources/IngestJobProgress";
-import Button from "@/components/ui/Button";
-import { FIELD_CONTROL } from "@/components/ui/Field";
 import { useFlashcardDecks, useIngestJob, type CourseSource } from "@/lib/api";
 import { useCourseSelection } from "@/lib/courseSelection";
 import { formatRelativeTime } from "@/lib/relativeTime";
 
+/** ALL / NONE. Uppercase on purpose: they are the two terse controls in a rail
+ *  of sentences, and the e2e suite addresses them by exactly these names. */
+const RAIL_ACTION =
+  "min-h-8 shrink-0 rounded-ctl border border-nb-line px-2.5 py-1.5 text-label text-nb-ink transition-colors hover:border-nb-lineHi";
+
 const ZONES: { key: CourseSource["zone"]; label: string }[] = [
-  { key: "materials", label: "materials" },
-  { key: "notes", label: "notes" },
+  { key: "materials", label: "Materials" },
+  { key: "notes", label: "Notes" },
 ];
 
 /**
@@ -124,16 +127,31 @@ export default function CourseSourcesPanel({
 
   return (
     <>
-      <Panel
-        label={`SOURCES · ${selectedCount}/${available.length} selected`}
+      <NotebookPanel
+        heading="Sources"
+        scale="body"
+        pad="md"
         headerRight={
-          <Button variant="primary" size="sm" onClick={() => setDialogOpen(true)}>
-            + INGEST
-          </Button>
+          <button
+            type="button"
+            onClick={() => setDialogOpen(true)}
+            className="rounded-ctl border border-[var(--ac)] bg-nb-acBg px-2.5 py-1.5 text-label font-semibold text-[var(--ac)] transition-opacity hover:opacity-80"
+          >
+            ＋ Add
+          </button>
         }
       >
+        {/* The count is a status line, not part of the heading: it changes on
+            every tick, and a heading that renames itself is one a test cannot
+            hold on to. */}
+        {available.length > 0 && (
+          <p className="mb-3 rounded-ctl bg-nb-acBg px-3 py-2 text-label text-[var(--ac)]">
+            Reading {selectedCount} of {available.length} files
+          </p>
+        )}
+
         {job && (
-          <div className="mb-3 border border-line px-3 py-2">
+          <div className="mb-3 rounded-tile border border-nb-line px-3 py-2">
             <IngestJobProgress job={job} onDismiss={() => setJobId(null)} />
           </div>
         )}
@@ -146,14 +164,14 @@ export default function CourseSourcesPanel({
               onChange={(event) => setFilter(event.target.value)}
               placeholder="filter"
               aria-label="Filter sources"
-              className={`${FIELD_CONTROL} h-7 flex-1 py-0 text-meta`}
+              className="min-h-8 min-w-0 flex-1 rounded-ctl border border-nb-line bg-nb-void px-3 py-1.5 text-label text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
             />
-            <Button size="sm" onClick={selectAll}>
+            <button type="button" onClick={selectAll} className={RAIL_ACTION}>
               {isFiltered ? `ALL (${visible.length})` : "ALL"}
-            </Button>
-            <Button size="sm" onClick={selectNone}>
+            </button>
+            <button type="button" onClick={selectNone} className={RAIL_ACTION}>
               {isFiltered ? `NONE (${visible.length})` : "NONE"}
-            </Button>
+            </button>
           </div>
         )}
 
@@ -161,21 +179,21 @@ export default function CourseSourcesPanel({
             whole-course action has to be reachable and named, rather than
             being what the unqualified button silently used to do. */}
         {isFiltered && (
-          <p className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-meta text-ink-muted">
+          <p className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-nb-body">
             <span>
               showing {visible.length} of {available.length}
             </span>
             <button
               type="button"
               onClick={selectAllInCourse}
-              className="underline underline-offset-2 transition-colors hover:text-ink"
+              className="underline underline-offset-2 transition-colors hover:text-nb-ink"
             >
               Select all {available.length} in this course
             </button>
             <button
               type="button"
               onClick={selectNoneInCourse}
-              className="underline underline-offset-2 transition-colors hover:text-ink"
+              className="underline underline-offset-2 transition-colors hover:text-nb-ink"
             >
               Clear the whole course
             </button>
@@ -183,33 +201,31 @@ export default function CourseSourcesPanel({
         )}
 
         {available.length > 1 && (
-          <p className="mb-2 font-mono text-micro text-ink-muted">
-            shift-click to select a run
-          </p>
+          <p className="mb-2 text-label text-nb-faint">Shift-click to select a run.</p>
         )}
 
         {selectedCount === 0 && available.length > 0 && (
-          <p className="mb-2 font-mono text-meta text-warn">
-            Nothing selected — chat and STUDIO have nothing to read.
+          <p className="mb-2 text-label text-warn">
+            Nothing selected — chat and the generators have nothing to read.
           </p>
         )}
 
         {isLoading ? (
-          <p className="text-label text-ink-faint">Reading this course…</p>
+          <p className="text-label text-nb-faint">Reading this course…</p>
         ) : available.length === 0 ? (
-          <p className="text-label text-ink-faint">
+          <p className="text-label text-nb-faint">
             No files for this course yet. Ingest a lecture and Argus will store it, index it, and
             write you a note from it.
           </p>
         ) : visible.length === 0 ? (
-          <p className="text-label text-ink-faint">Nothing matches “{filter}”.</p>
+          <p className="text-label text-nb-faint">Nothing matches “{filter}”.</p>
         ) : (
           ZONES.map(({ key, label }) => {
             const rows = visible.filter((source) => source.zone === key);
             if (rows.length === 0) return null;
             return (
               <div key={key} className="mb-3 last:mb-0">
-                <p className="mb-1.5 font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">
+                <p className="mb-2 text-label text-nb-faint">
                   {label} · {rows.length}
                 </p>
                 <ul className="space-y-1.5">
@@ -218,7 +234,9 @@ export default function CourseSourcesPanel({
                     return (
                     <li
                       key={source.path}
-                      className="border border-line transition-colors hover:border-lineHi"
+                      className={`rounded-tile transition-colors ${
+                        selected.has(source.path) ? "bg-nb-raised" : "hover:bg-nb-raised"
+                      }`}
                     >
                       {/* The whole row is the control, not just the 14px box.
                           The `<li>` already advertised itself as interactive
@@ -243,34 +261,35 @@ export default function CourseSourcesPanel({
                         aria-checked={selected.has(source.path)}
                         aria-label={`Use ${source.title} as a source`}
                         onClick={(event) => pick(source.path, event)}
-                        className="flex w-full items-start gap-2 px-2.5 py-2 text-left"
+                        className="flex w-full items-start gap-2.5 px-3 py-2.5 text-left"
                       >
                         <span
                           aria-hidden
-                          className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center border transition-colors ${
+                          className={`mt-0.5 flex h-[0.9375rem] w-[0.9375rem] shrink-0 items-center justify-center rounded-[0.25rem] text-[0.625rem] transition-colors ${
                             selected.has(source.path)
-                              ? "border-[var(--ac)] bg-[var(--ac)] text-void"
-                              : "border-line"
+                              ? "bg-[var(--ac)] text-nb-onAc"
+                              : "border border-nb-lineHi"
                           }`}
                         >
                           {selected.has(source.path) && "✓"}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-label text-ink">{source.title}</span>
-                          <span className="mt-0.5 block font-mono text-meta text-ink-faint">
+                          <span className="block truncate text-ctl text-nb-ink">{source.title}</span>
+                          {/* One line, not three badges. The kind is already in
+                              the filename, and "2 decks came from this" says
+                              what a bare "2 decks" chip only hinted at. */}
+                          <span
+                            className={`mt-0.5 block text-meta ${
+                              source.chunks === null ? "text-warn" : "text-nb-faint"
+                            }`}
+                          >
                             {formatRelativeTime(source.modified)}
                             {source.chunks !== null &&
                               ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
-                            {source.chunks === null && " · not indexed"}
+                            {source.chunks === null && " · not indexed yet"}
+                            {fromHere > 0 &&
+                              ` · ${fromHere} deck${fromHere === 1 ? "" : "s"} came from this`}
                           </span>
-                        </span>
-                        {fromHere > 0 && (
-                          <span className="shrink-0 border border-[var(--ac)] px-1 py-px font-mono text-micro text-[var(--ac)]">
-                            {fromHere} deck{fromHere === 1 ? "" : "s"}
-                          </span>
-                        )}
-                        <span className="shrink-0 border border-line px-1 py-px font-mono text-micro text-ink-faint">
-                          {source.kind}
                         </span>
                       </button>
                     </li>
@@ -288,23 +307,21 @@ export default function CourseSourcesPanel({
             a third zone existed, so a user who had just generated a study
             guide looked for it here and found nothing. */}
         {excluded.length > 0 && (
-          <div className="mt-3 border-t border-line pt-3">
-            <p className="mb-1.5 font-mono text-micro uppercase tracking-[0.16em] text-ink-faint">
-              study · {excluded.length}
-            </p>
-            <ul className="space-y-1">
+          <div className="mt-3.5 border-t border-nb-line pt-3.5">
+            <p className="mb-2 text-label text-nb-faint">study · {excluded.length}</p>
+            <ul className="flex flex-col gap-1">
               {excluded.map((source) => (
-                <li key={source.path} className="truncate text-meta text-ink-muted">
+                <li key={source.path} className="truncate text-label text-nb-body">
                   {source.title}
                 </li>
               ))}
             </ul>
-            <p className="mt-1.5 font-mono text-micro text-ink-muted">
+            <p className="mt-2 text-label text-nb-faint">
               Argus&apos;s own output — not used as a source.
             </p>
           </div>
         )}
-      </Panel>
+      </NotebookPanel>
 
       {dialogOpen && (
         <IngestDialog
