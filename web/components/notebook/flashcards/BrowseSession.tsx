@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ActivityChrome from "@/components/notebook/flashcards/ActivityChrome";
 import CardFace from "@/components/notebook/flashcards/CardFace";
-import SegmentedControl from "@/components/ui/SegmentedControl";
+import NotebookSegmented from "@/components/notebook/NotebookSegmented";
 import { updateCard, type FlashcardCard, type FlashcardDeckDetail } from "@/lib/api";
 
 const FILTERS = ["all", "starred"] as const;
@@ -164,7 +164,7 @@ export default function BrowseSession({
       keys="space flip · ← → move"
     >
       <div className="mb-3.5 flex flex-wrap items-center gap-3">
-        <SegmentedControl
+        <NotebookSegmented
           options={FILTERS}
           labels={FILTER_LABELS}
           value={filter}

@@ -671,7 +671,7 @@ test("a deck is created, filled by hand, and filled by paste", async ({ page }) 
   const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
   await dialog.getByLabel("Paste rows").fill("ser\tto be\nestar\tto be, temporarily");
   await expect(dialog.getByText("2 cards will be added")).toBeVisible();
-  await dialog.getByRole("button", { name: "IMPORT 2" }).click();
+  await dialog.getByRole("button", { name: /^Add 2 card/ }).click();
 
   await expect(page.getByText(/^3 cards · /)).toBeVisible();
   // Split on the first delimiter only, so a definition keeps its commas.
@@ -699,7 +699,7 @@ test("importing a note's Q::/A:: tail fills a deck", async ({ page, request }) =
 
   await page.getByRole("button", { name: "Import", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
-  await dialog.getByRole("tab", { name: "FROM A NOTE" }).click();
+  await dialog.getByRole("tab", { name: "From a note" }).click();
   // Picked from a list, never typed. Typing a path meant already knowing it,
   // spelled exactly, with no listing and no completion.
   await dialog.getByLabel("Search your notes").fill("e2e-selftest");
@@ -906,7 +906,7 @@ test("a dropped file becomes cards without touching the vault", async ({ page, r
   await page.getByRole("button", { name: "Import", exact: true }).click();
 
   const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
-  await dialog.getByRole("tab", { name: "A FILE" }).click();
+  await dialog.getByRole("tab", { name: "Drop a file" }).click();
   await dialog.locator('input[type="file"]').setInputFiles({
     name: "verbs.tsv",
     mimeType: "text/tab-separated-values",
@@ -915,7 +915,7 @@ test("a dropped file becomes cards without touching the vault", async ({ page, r
 
   // The format was guessed, and the count previewed is the count that lands.
   await expect(dialog.getByText("2 cards will be added")).toBeVisible();
-  await dialog.getByRole("button", { name: "IMPORT 2" }).click();
+  await dialog.getByRole("button", { name: /^Add 2 card/ }).click();
 
   await expect(page.getByText(/^2 cards · /)).toBeVisible();
   // Split on the first delimiter only, so a definition keeps its commas.
@@ -935,7 +935,7 @@ test("a dropped markdown file is recognised as Q::/A:: rather than delimited", a
   await page.getByRole("button", { name: "Import", exact: true }).click();
 
   const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
-  await dialog.getByRole("tab", { name: "A FILE" }).click();
+  await dialog.getByRole("tab", { name: "Drop a file" }).click();
   await dialog.locator('input[type="file"]').setInputFiles({
     name: "lecture.md",
     mimeType: "text/markdown",
@@ -946,7 +946,7 @@ test("a dropped markdown file is recognised as Q::/A:: rather than delimited", a
 
   await expect(dialog.getByLabel("Q:: / A:: pairs")).toBeChecked();
   await expect(dialog.getByText("1 card will be added")).toBeVisible();
-  await dialog.getByRole("button", { name: "IMPORT 1" }).click();
+  await dialog.getByRole("button", { name: /^Add 1 card/ }).click();
 
   await expect(page.getByLabel("Front of card 1")).toHaveValue("what is P");
 });
@@ -961,7 +961,7 @@ test("a file that is not text is refused before anything is read", async ({ page
   await page.getByRole("button", { name: "Import", exact: true }).click();
 
   const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
-  await dialog.getByRole("tab", { name: "A FILE" }).click();
+  await dialog.getByRole("tab", { name: "Drop a file" }).click();
   await dialog.locator('input[type="file"]').setInputFiles({
     name: "slides.pptx",
     mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -990,7 +990,7 @@ test("generation options reach the request, and the deck records them", async ({
   await studio.getByRole("button", { name: "Flashcard deck" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
-  await dialog.getByRole("button", { name: "HARD" }).click();
+  await dialog.getByRole("button", { name: "Hard" }).click();
 
   // Start from a known state rather than whatever localStorage remembered.
   for (const style of ["Definition", "Concept", "Cloze", "Application"]) {
@@ -999,7 +999,7 @@ test("generation options reach the request, and the deck records them", async ({
   }
   await dialog.getByRole("checkbox", { name: /Cloze/ }).check();
   await dialog.getByLabel("Your instructions (optional)").fill("Keep answers under ten words.");
-  await dialog.getByRole("button", { name: "GENERATE" }).click();
+  await dialog.getByRole("button", { name: /^Generate \d/ }).click();
 
   expect(sent).toMatchObject({
     course: "CS000",
@@ -1024,7 +1024,7 @@ test("a deck needs at least one card type before it can be generated", async ({ 
     if (await box.isChecked()) await box.uncheck();
   }
   await expect(dialog.getByText("Pick at least one card type.")).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /^Generate \d/ })).toBeDisabled();
 });
 
 test("exams finally send the difficulty and focus the backend has always accepted", async ({
@@ -1051,9 +1051,9 @@ test("exams finally send the difficulty and focus the backend has always accepte
   // No card types on an exam — those are a flashcard idea.
   await expect(dialog.getByRole("checkbox", { name: /Cloze/ })).toHaveCount(0);
 
-  await dialog.getByRole("button", { name: "EASY" }).click();
+  await dialog.getByRole("button", { name: "Easy" }).click();
   await dialog.getByLabel("Focus on (optional)").fill("dynamic programming");
-  await dialog.getByRole("button", { name: "GENERATE" }).click();
+  await dialog.getByRole("button", { name: /^Generate \d/ }).click();
 
   expect(sent).toMatchObject({
     course: "CS000",
@@ -1090,18 +1090,18 @@ test("the deck library generates from the sources you pick, not the whole course
 
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
   // Out here there is no SOURCES rail, so a course has to be named.
-  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /^Generate \d/ })).toBeDisabled();
   await dialog.getByLabel("Course").selectOption("CS000");
 
-  await dialog.getByRole("button", { name: "PICK SOURCES" }).click();
+  await dialog.getByRole("button", { name: "Pick files" }).click();
   const row = dialog.getByRole("checkbox", { name: "Use e2e-deck-source as a source" });
   await expect(row).toBeVisible({ timeout: 15_000 });
   // Still refused with a course chosen and nothing ticked — "pick sources" has
   // to mean it, or it is the old dialog with extra steps.
-  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /^Generate \d/ })).toBeDisabled();
 
   await row.click();
-  await dialog.getByRole("button", { name: "GENERATE" }).click();
+  await dialog.getByRole("button", { name: /^Generate \d/ }).click();
 
   expect(sent).toMatchObject({
     course: "CS000",
@@ -1125,7 +1125,7 @@ test("the whole course is still one click away", async ({ page }) => {
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
   await dialog.getByLabel("Course").selectOption("CS000");
   await expect(dialog.getByText("reads everything indexed under the course")).toBeVisible();
-  await dialog.getByRole("button", { name: "GENERATE" }).click();
+  await dialog.getByRole("button", { name: /^Generate \d/ }).click();
 
   expect(sent).toMatchObject({ course: "CS000", sources: null });
 });
@@ -1145,10 +1145,10 @@ test("a deck can be generated from a file the vault never sees", async ({ page }
   await page.getByRole("button", { name: /GENERATE/ }).click();
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
 
-  await dialog.getByRole("button", { name: "MY OWN FILE" }).click();
+  await dialog.getByRole("button", { name: "A file of my own" }).click();
   // No course needed on this route: a deck can be about a PDF rather than
   // about a course.
-  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /^Generate \d/ })).toBeDisabled();
 
   // `setInputFiles` drives the same handler a drop would, which is the whole
   // reason the zone is a label around a real input rather than a bare div.
@@ -1160,9 +1160,9 @@ test("a deck can be generated from a file the vault never sees", async ({ page }
 Capacities bound the flow on an edge.
 `),
   });
-  await expect(dialog.getByText("▍e2e-upload-lecture.md")).toBeVisible();
+  await expect(dialog.getByText("e2e-upload-lecture.md")).toBeVisible();
 
-  await dialog.getByRole("button", { name: "GENERATE" }).click();
+  await dialog.getByRole("button", { name: /^Generate \d/ }).click();
   await expect(page.getByText(/flashcard deck queued/)).toBeVisible();
   expect(body).toContain("e2e-upload-lecture.md");
 });
@@ -1171,7 +1171,7 @@ test("a file Argus cannot read is refused before it is uploaded", async ({ page 
   await page.goto("/notebook/flashcards");
   await page.getByRole("button", { name: /GENERATE/ }).click();
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
-  await dialog.getByRole("button", { name: "MY OWN FILE" }).click();
+  await dialog.getByRole("button", { name: "A file of my own" }).click();
 
   await dialog.locator('input[type="file"]').setInputFiles({
     name: "cards.csv",
@@ -1182,7 +1182,7 @@ test("a file Argus cannot read is refused before it is uploaded", async ({ page 
 
   // A round trip to be told "that is not a PDF" is a worse way to learn it.
   await expect(page.getByText(/isn't a kind Argus can read/)).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "GENERATE" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /^Generate \d/ })).toBeDisabled();
 });
 
 test("a deck can be renamed from the library, and the rename sticks", async ({

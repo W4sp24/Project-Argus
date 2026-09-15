@@ -127,6 +127,25 @@ export function ModeProvider({ children }: { children: ReactNode }) {
   }, [mode]);
   const value = useMemo(() => ({ mode, setMode }), [mode, setMode]);
 
+  /**
+   * The same two properties, mirrored onto `:root`.
+   *
+   * Every overlay in this app renders through `createPortal(…, document.body)`
+   * — Dialog, ConfirmDialog, the command palette, the toasts — which puts it
+   * *outside* the wrapper below, so `var(--ac)` fell back to `:root`'s default
+   * violet. A flashcard dialog opened from the cyan Notebook drew violet
+   * checkboxes and a violet primary button, in every mode but General.
+   *
+   * The wrapper stays: it is what makes the first server-rendered paint carry
+   * the right accent, before this effect has run.
+   */
+  useEffect(() => {
+    const root = document.documentElement;
+    const accent = ACCENTS[mode];
+    root.style.setProperty("--ac", accent.ac);
+    root.style.setProperty("--ac-bg", accent.acBg);
+  }, [mode]);
+
   return (
     <ModeContext.Provider value={value}>
       <div style={style}>{children}</div>

@@ -2,19 +2,18 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useToast } from "@/components/Toast";
-import Button from "@/components/ui/Button";
 import Dialog from "@/components/ui/Dialog";
-import SegmentedControl from "@/components/ui/SegmentedControl";
+import NotebookSegmented from "@/components/notebook/NotebookSegmented";
 import { importFromNote, importPaste, useNotes } from "@/lib/api";
 import { detectFormat, parseDelimited, parseQaPairs } from "@/lib/flashcards/parsing";
 
 // Names, not characters: these are the wire values the server's parser knows,
 // and GET /api/flashcards/import/delimiters is their source of truth.
 const FIELDS = ["tab", "comma", "dash"] as const;
-const FIELD_LABELS = { tab: "TAB", comma: "COMMA", dash: "DASH" } as const;
+const FIELD_LABELS = { tab: "a tab", comma: "a comma", dash: "a dash" } as const;
 
 const ROWS = ["newline", "semicolon"] as const;
-const ROW_LABELS = { newline: "NEW LINE", semicolon: "SEMICOLON" } as const;
+const ROW_LABELS = { newline: "a new line", semicolon: "a semicolon" } as const;
 
 type Field = (typeof FIELDS)[number];
 type Row = (typeof ROWS)[number];
@@ -25,6 +24,14 @@ const ACCEPTED = [".md", ".txt", ".csv", ".tsv"];
 
 /** Refuse a file that is clearly not a card list before reading it into memory. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+/** The dialog's two button shapes, declared once so the four call sites
+ *  cannot drift. Plain buttons rather than `ui/Button`: that component is
+ *  shared with every other mode and still wears the violet chrome. */
+const QUIET =
+  "rounded-ctl border border-nb-line px-4 py-2.5 text-ctl text-nb-body transition-colors hover:border-nb-lineHi hover:text-nb-ink";
+const PRIMARY =
+  "rounded-ctl bg-[var(--ac)] px-5 py-2.5 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90 disabled:opacity-50";
 
 /** How many notes the picker shows before asking you to narrow the filter. */
 const NOTE_CAP = 40;
@@ -155,7 +162,7 @@ export default function ImportDialog({
   const previewBlock = (
     <>
       <div className="mt-3 flex flex-wrap items-end gap-4">
-        <label className="flex items-center gap-2 font-mono text-label uppercase tracking-[0.12em] text-ink-muted">
+        <label className="flex items-center gap-2.5 text-ctl text-nb-body">
           <input
             type="checkbox"
             checked={asQa}
@@ -167,10 +174,8 @@ export default function ImportDialog({
         {!asQa && (
           <>
             <div>
-              <p className="mb-1 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-                Between front and back
-              </p>
-              <SegmentedControl
+              <p className="mb-1.5 text-ctl text-nb-body">Front and back are split by</p>
+              <NotebookSegmented
                 options={FIELDS}
                 labels={FIELD_LABELS}
                 value={field}
@@ -178,37 +183,47 @@ export default function ImportDialog({
               />
             </div>
             <div>
-              <p className="mb-1 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-                Between cards
-              </p>
-              <SegmentedControl options={ROWS} labels={ROW_LABELS} value={row} onChange={setRow} />
+              <p className="mb-1.5 text-ctl text-nb-body">Cards are split by</p>
+              <NotebookSegmented options={ROWS} labels={ROW_LABELS} value={row} onChange={setRow} />
             </div>
           </>
         )}
       </div>
 
-      <p className="mt-3 font-mono text-label text-ink-muted" role="status">
-        {preview.length === 0
-          ? "nothing to import yet"
-          : `${preview.length} card${preview.length === 1 ? "" : "s"} will be added`}
-      </p>
-      {preview.length > 0 && (
-        <ul className="mt-2 max-h-32 space-y-1 overflow-auto border border-line p-2">
-          {preview.slice(0, 5).map((card, index) => (
-            <li key={index} className="truncate font-mono text-meta text-ink-faint">
-              {card.front} <span className="text-[var(--ac)]">→</span> {card.back}
-            </li>
-          ))}
-        </ul>
+      {preview.length === 0 ? (
+        <p className="mt-4 text-body text-nb-faint" role="status">
+          Nothing to import yet.
+        </p>
+      ) : (
+        <div
+          className="mt-4 rounded-tile border border-nb-okLine bg-nb-okBg p-3.5"
+          role="status"
+        >
+          <p className="mb-2.5 text-ctl font-semibold text-ok">
+            {preview.length} card{preview.length === 1 ? "" : "s"} will be added
+          </p>
+          <ul className="flex max-h-32 flex-col gap-1.5 overflow-auto">
+            {preview.slice(0, 5).map((card, index) => (
+              <li key={index} className="truncate text-ctl text-nb-body">
+                {card.front} <span className="text-ok">→</span> {card.back}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
-      <div className="mt-4 flex justify-end gap-2">
-        <Button variant="quiet" onClick={onClose}>
-          CANCEL
-        </Button>
-        <Button disabled={preview.length === 0 || busy} onClick={() => void importText()}>
-          IMPORT {preview.length}
-        </Button>
+      <div className="mt-4 flex justify-end gap-2.5">
+        <button type="button" onClick={onClose} className={QUIET}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={preview.length === 0 || busy}
+          onClick={() => void importText()}
+          className={PRIMARY}
+        >
+          Add {preview.length} card{preview.length === 1 ? "" : "s"}
+        </button>
       </div>
     </>
   );
@@ -218,7 +233,7 @@ export default function ImportDialog({
       label={deckTitle ? `Add cards to ${deckTitle}` : "Import cards"}
       onClose={onClose}
       align="center"
-      className="w-[min(44rem,92vw)] p-5"
+      className="w-[min(44rem,92vw)] rounded-[0.875rem] !border-nb-lineHi !bg-nb-panel p-6"
     >
       {/* The whole dialog is a drop target, not just the FILE zone. Dropping
           onto whichever tab happens to be showing is what people actually do,
@@ -236,12 +251,17 @@ export default function ImportDialog({
         }}
         className={dragOver ? "outline outline-1 outline-[var(--ac)]" : ""}
       >
-        <div role="tablist" aria-label="Import source" className="mb-4 flex border border-line">
+        <p className="mb-5 text-body text-nb-body">
+          Nothing here calls a model, and nothing is uploaded — a file is read right in this
+          window.
+        </p>
+
+        <div role="tablist" aria-label="Import source" className="mb-4 flex gap-2">
           {(
             [
-              ["paste", "PASTE ROWS"],
-              ["file", "A FILE"],
-              ["note", "FROM A NOTE"],
+              ["paste", "Paste rows"],
+              ["file", "Drop a file"],
+              ["note", "From a note"],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -250,10 +270,10 @@ export default function ImportDialog({
               role="tab"
               aria-selected={tab === value}
               onClick={() => setTab(value)}
-              className={`border-r border-line px-3 py-2 font-mono text-label uppercase tracking-[0.12em] transition-colors last:border-r-0 ${
+              className={`flex-1 rounded-ctl border px-3 py-2.5 text-center text-ctl transition-colors ${
                 tab === value
-                  ? "bg-[var(--ac-bg)] text-[var(--ac)] shadow-[inset_0_-2px_0_var(--ac)]"
-                  : "text-ink-faint hover:text-ink-muted"
+                  ? "border-[var(--ac)] bg-nb-acBg font-semibold text-[var(--ac)]"
+                  : "border-nb-line bg-nb-raised text-nb-ink hover:border-nb-lineHi"
               }`}
             >
               {label}
@@ -264,15 +284,14 @@ export default function ImportDialog({
         {tab === "paste" && (
           <>
             <label className="block">
-              <span className="mb-1 block font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-                Paste rows
-              </span>
+              <span className="sr-only">Paste rows</span>
               <textarea
                 value={text}
                 onChange={(event) => setText(event.target.value)}
                 rows={8}
+                aria-label="Paste rows"
                 placeholder={"term\tdefinition\nanother\tone"}
-                className="w-full border border-line bg-sunken px-2 py-1.5 font-mono text-label text-ink focus:border-lineHi"
+                className="w-full rounded-tile border border-nb-line bg-nb-void p-3.5 font-mono text-ctl leading-relaxed text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
               />
             </label>
             {previewBlock}
@@ -284,8 +303,8 @@ export default function ImportDialog({
             {/* A label wrapping a hidden input: clickable, focusable, and
                 announced — everything a bare div listening for `drop` is not. */}
             <label
-              className={`flex min-h-32 cursor-pointer flex-col items-center justify-center gap-1 border border-dashed p-6 text-center transition-colors ${
-                dragOver ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
+              className={`flex min-h-32 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-tile border border-dashed p-7 text-center transition-colors ${
+                dragOver ? "border-[var(--ac)] bg-nb-acBg" : "border-nb-line hover:border-nb-lineHi"
               }`}
             >
               <input
@@ -298,10 +317,10 @@ export default function ImportDialog({
                   event.target.value = "";
                 }}
               />
-              <span className="font-mono text-label uppercase tracking-[0.12em] text-ink">
-                {fileName ? `▍${fileName}` : "drop a file, or click to browse"}
+              <span className="text-body font-medium text-nb-ink">
+                {fileName ?? "Drop a file, or click to browse"}
               </span>
-              <span className="font-mono text-meta text-ink-faint">
+              <span className="text-label text-nb-faint">
                 {ACCEPTED.join(" · ")} — read here, never uploaded
               </span>
             </label>
@@ -309,9 +328,9 @@ export default function ImportDialog({
               previewBlock
             ) : (
               <div className="mt-4 flex justify-end">
-                <Button variant="quiet" onClick={onClose}>
-                  CANCEL
-                </Button>
+                <button type="button" onClick={onClose} className={QUIET}>
+                  Cancel
+                </button>
               </div>
             )}
           </>
@@ -320,38 +339,36 @@ export default function ImportDialog({
         {tab === "note" && (
           <>
             <label className="block">
-              <span className="mb-1 block font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-                Search your notes
-              </span>
+              <span className="mb-1.5 block text-ctl text-nb-body">Search your notes</span>
               <input
                 type="search"
                 value={noteFilter}
                 onChange={(event) => setNoteFilter(event.target.value)}
                 placeholder="title or path"
-                className="min-h-9 w-full border border-line bg-sunken px-2 py-1.5 font-mono text-label text-ink focus:border-lineHi"
+                className="min-h-10 w-full rounded-ctl border border-nb-line bg-nb-void px-3.5 py-2.5 text-body text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
               />
             </label>
 
             {!notes ? (
-              <p className="mt-3 text-label text-ink-faint">Loading notes…</p>
+              <p className="mt-3 text-label text-nb-faint">Loading notes…</p>
             ) : matches.length === 0 ? (
-              <p className="mt-3 text-label text-ink-faint">
+              <p className="mt-3 text-label text-nb-faint">
                 {notes.length === 0
                   ? "No notes in the vault yet."
                   : `Nothing matches “${noteFilter}”.`}
               </p>
             ) : (
-              <ul className="mt-3 max-h-64 space-y-1 overflow-auto border border-line p-2">
+              <ul className="mt-3 flex max-h-64 flex-col gap-1 overflow-auto rounded-tile border border-nb-line p-2">
                 {matches.slice(0, NOTE_CAP).map((note) => (
                   <li key={note.path}>
                     <button
                       type="button"
                       disabled={busy}
                       onClick={() => void run(() => importFromNote(deckId, note.path))}
-                      className="flex w-full flex-col items-start border border-transparent px-2 py-1.5 text-left transition-colors hover:border-lineHi disabled:opacity-70"
+                      className="flex w-full flex-col items-start rounded-ctl px-3 py-2 text-left transition-colors hover:bg-nb-raised disabled:opacity-70"
                     >
-                      <span className="w-full truncate text-body text-ink">{note.title}</span>
-                      <span className="w-full truncate font-mono text-meta text-ink-faint">
+                      <span className="w-full truncate text-body text-nb-ink">{note.title}</span>
+                      <span className="w-full truncate text-label text-nb-faint">
                         {note.path}
                       </span>
                     </button>
@@ -360,20 +377,20 @@ export default function ImportDialog({
               </ul>
             )}
             {matches.length > NOTE_CAP && (
-              <p className="mt-1 font-mono text-micro text-ink-faint">
+              <p className="mt-1 text-label text-nb-faint">
                 {NOTE_CAP} of {matches.length} — narrow the search to see the rest
               </p>
             )}
 
-            <p className="mt-2 text-label text-ink-faint">
+            <p className="mt-2 text-label text-nb-faint">
               Reads every <code className="font-mono">Q::</code> /{" "}
               <code className="font-mono">A::</code> pair in the note. Notes Argus generates carry
               them in their self-test section, so a lecture note usually works as-is.
             </p>
             <div className="mt-4 flex justify-end">
-              <Button variant="quiet" onClick={onClose}>
-                CANCEL
-              </Button>
+              <button type="button" onClick={onClose} className={QUIET}>
+                Cancel
+              </button>
             </div>
           </>
         )}

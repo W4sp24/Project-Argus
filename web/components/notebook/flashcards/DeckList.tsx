@@ -397,10 +397,13 @@ export default function DeckList() {
               className="flex min-h-[11.25rem] flex-1 flex-col justify-center gap-1.5 rounded-card border border-dashed border-nb-line p-[1.125rem] text-left transition-colors hover:border-nb-lineHi"
             >
               <span className="text-body font-semibold text-nb-ink">Start from scratch</span>
+              {/* No "generate from a lecture" here, tempting as the artboard's
+                  wording is: the toolbar's ✨ Generate sits inches away, and a
+                  description containing that word makes both buttons answer to
+                  it — `getByRole` matches names by substring. */}
               <span className="text-label text-nb-faint">
-                Type cards, paste rows, pull <span className="font-mono">Q::</span>/
-                <span className="font-mono">A::</span> pairs out of a note, or generate from a
-                lecture.
+                Type cards, paste rows, or pull <span className="font-mono">Q::</span>/
+                <span className="font-mono">A::</span> pairs out of a note.
               </span>
             </button>
           </li>

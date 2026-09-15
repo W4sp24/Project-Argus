@@ -3,9 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "@/components/Toast";
 import IngestDialog from "@/components/sources/IngestDialog";
-import Button from "@/components/ui/Button";
 import Dialog from "@/components/ui/Dialog";
-import SegmentedControl from "@/components/ui/SegmentedControl";
+import NotebookSegmented from "@/components/notebook/NotebookSegmented";
 import {
   generateDeck,
   generateDeckFromUpload,
@@ -39,14 +38,24 @@ const STYLE_BLURB: Record<string, string> = {
   application: "a short scenario you have to apply the material to",
 };
 
+/** The dialog's button and field shapes, declared once so the call sites cannot
+ *  drift. Plain elements rather than `ui/Button`/`ui/Field`: both are shared
+ *  with every other mode and still wear the violet chrome. */
+const QUIET =
+  "rounded-ctl border border-nb-line px-4 py-2.5 text-ctl text-nb-body transition-colors hover:border-nb-lineHi hover:text-nb-ink";
+const PRIMARY =
+  "rounded-ctl bg-[var(--ac)] px-5 py-2.5 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90 disabled:opacity-50";
+const FIELD =
+  "min-h-10 w-full rounded-ctl border border-nb-line bg-nb-void px-3.5 py-2.5 text-body text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi";
+
 /** Where a deck's material comes from, when there is no SOURCES rail to read. */
 type SourceMode = "course" | "pick" | "upload";
 
 const MODES = ["course", "pick", "upload"] as const;
 const MODE_LABELS: Record<SourceMode, string> = {
-  course: "WHOLE COURSE",
-  pick: "PICK SOURCES",
-  upload: "MY OWN FILE",
+  course: "The whole course",
+  pick: "Pick files",
+  upload: "A file of my own",
 };
 
 /** Fallback only — the real list is served by `/generate/options`. */
@@ -356,7 +365,7 @@ export default function GenerateDialog({
       label={kind === "deck" ? "Generate a flashcard deck" : "Generate a practice exam"}
       onClose={onClose}
       align="center"
-      className="w-[min(40rem,92vw)] p-5"
+      className="w-[min(41.25rem,92vw)] rounded-[0.875rem] !border-nb-lineHi !bg-nb-panel p-6"
     >
       {/* The whole dialog is a drop target, not just the zone — dropping onto
           whichever part happens to be under the cursor is what people do, and
@@ -382,12 +391,15 @@ export default function GenerateDialog({
         }
         className={dragOver ? "outline outline-1 outline-[var(--ac)]" : ""}
       >
+        <p className="mb-5 text-body text-nb-body">
+          Argus writes {kind === "deck" ? "the cards" : "the questions"} in the background — you
+          can leave this tab.
+        </p>
+
         {picking && (
-          <div className="mb-4">
-            <p className="mb-1 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-              Source
-            </p>
-            <SegmentedControl
+          <div className="mb-[1.125rem]">
+            <p className="mb-2 text-ctl text-nb-body">What should it read?</p>
+            <NotebookSegmented
               options={MODES}
               labels={MODE_LABELS}
               value={mode}
@@ -398,16 +410,16 @@ export default function GenerateDialog({
 
         {!fixedCourse && (
           <label className="mb-4 block">
-            <span className="mb-1 block font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
+            <span className="mb-1.5 block text-ctl text-nb-body">
               Course{picking && mode === "upload" ? " (optional)" : ""}
             </span>
             <select
               value={course}
               onChange={(event) => setCourse(event.target.value)}
               aria-label="Course"
-              className="min-h-9 w-full border border-line bg-sunken px-2 py-1.5 font-mono text-label text-ink focus:border-lineHi"
+              className={FIELD}
             >
-              <option value="">select a course…</option>
+              <option value="">Select a course…</option>
               {(courses ?? []).map((entry) => (
                 <option key={entry.code} value={entry.code}>
                   {entry.code}
@@ -417,9 +429,9 @@ export default function GenerateDialog({
             {picking && mode === "upload" && (
               // Optional, but not pointless: it is what files the deck under a
               // course, which is what puts it in that course's DECKS panel.
-              <span className="mt-1 block font-mono text-micro text-ink-faint">
-                a deck can be about a file rather than a course — naming one
-                just files it there
+              <span className="mt-1.5 block text-label text-nb-faint">
+                A deck can be about a file rather than a course — naming one just files it
+                there.
               </span>
             )}
           </label>
@@ -428,17 +440,17 @@ export default function GenerateDialog({
         {picking && mode === "pick" && (
           <div className="mb-4">
             {!course ? (
-              <p className="text-label text-ink-faint">Choose a course to see its files.</p>
+              <p className="text-label text-nb-faint">Choose a course to see its files.</p>
             ) : !courseSources ? (
-              <p className="text-label text-ink-faint">Reading this course…</p>
+              <p className="text-label text-nb-faint">Reading this course…</p>
             ) : selectable.length === 0 ? (
-              <p className="text-label text-ink-faint">
+              <p className="text-label text-nb-faint">
                 Nothing in {course} yet. Ingest a lecture from Sources, or hand one over with
                 MY OWN FILE.
               </p>
             ) : (
               <>
-                <ul className="max-h-56 space-y-1 overflow-auto border border-line p-2">
+                <ul className="flex max-h-56 flex-col gap-1 overflow-auto rounded-tile border border-nb-line bg-nb-void p-2.5">
                   {selectable.map((source) => (
                     <li key={source.path}>
                       {/* The whole row is the control, and `aria-label` fixes the
@@ -449,38 +461,42 @@ export default function GenerateDialog({
                         aria-checked={picked.includes(source.path)}
                         aria-label={`Use ${source.title} as a source`}
                         onClick={() => togglePicked(source.path)}
-                        className="flex w-full items-start gap-2 border border-transparent px-2 py-1.5 text-left transition-colors hover:border-lineHi"
+                        className={`flex w-full items-start gap-2.5 rounded-ctl px-3 py-2.5 text-left transition-colors ${
+                          picked.includes(source.path) ? "bg-nb-raised" : "hover:bg-nb-raised"
+                        }`}
                       >
                         <span
                           aria-hidden
-                          className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center border transition-colors ${
+                          className={`mt-0.5 flex h-[0.9375rem] w-[0.9375rem] shrink-0 items-center justify-center rounded-[0.25rem] text-[0.625rem] transition-colors ${
                             picked.includes(source.path)
-                              ? "border-[var(--ac)] bg-[var(--ac)] text-void"
-                              : "border-line"
+                              ? "bg-[var(--ac)] text-nb-onAc"
+                              : "border border-nb-lineHi"
                           }`}
                         >
                           {picked.includes(source.path) && "✓"}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-label text-ink">
+                          <span className="block truncate text-ctl text-nb-ink">
                             {source.title}
                           </span>
-                          <span className="mt-0.5 block font-mono text-meta text-ink-faint">
-                            {source.kind}
+                          <span
+                            className={`mt-0.5 block text-meta ${
+                              source.chunks === null ? "text-warn" : "text-nb-faint"
+                            }`}
+                          >
                             {source.chunks === null
-                              ? " · not indexed"
-                              : ` · ${source.chunks} chunk${source.chunks === 1 ? "" : "s"}`}
+                              ? "not indexed — nothing to read yet"
+                              : `${source.chunks} chunk${source.chunks === 1 ? "" : "s"} indexed`}
                           </span>
                         </span>
                       </button>
                     </li>
                   ))}
                 </ul>
-                <p className="mt-1 font-mono text-micro text-ink-faint">
+                <p className="mt-2 text-label text-nb-faint">
                   {picked.length === 0
                     ? "Tick at least one file."
-                    : `reads ${picked.length} of ${selectable.length}`}
-                  {" · a file that is not indexed has nothing to read yet"}
+                    : `Reading ${picked.length} of ${selectable.length} files.`}
                 </p>
               </>
             )}
@@ -493,8 +509,8 @@ export default function GenerateDialog({
                 announced — everything a bare div listening for `drop` is not,
                 and what lets one code path serve the pointer and the keyboard. */}
             <label
-              className={`flex min-h-28 cursor-pointer flex-col items-center justify-center gap-1 border border-dashed p-5 text-center transition-colors ${
-                dragOver ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
+              className={`flex min-h-28 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-tile border border-dashed p-6 text-center transition-colors ${
+                dragOver ? "border-[var(--ac)] bg-nb-acBg" : "border-nb-line hover:border-nb-lineHi"
               }`}
             >
               <input
@@ -506,10 +522,10 @@ export default function GenerateDialog({
                   event.target.value = "";
                 }}
               />
-              <span className="font-mono text-label uppercase tracking-[0.12em] text-ink">
-                {file ? `▍${file.name}` : "drop a file, or click to browse"}
+              <span className="text-body font-medium text-nb-ink">
+                {file ? file.name : "Drop a file, or click to browse"}
               </span>
-              <span className="font-mono text-meta text-ink-faint">
+              <span className="text-label text-nb-faint">
                 {accepted.join(" · ")} — read once for this deck, never stored
               </span>
             </label>
@@ -521,8 +537,8 @@ export default function GenerateDialog({
                 className="mt-1 h-3.5 w-3.5 shrink-0 accent-[var(--ac)]"
               />
               <span className="min-w-0">
-                <span className="block text-label text-ink">Also keep this file</span>
-                <span className="block font-mono text-micro text-ink-faint">
+                <span className="block text-ctl text-nb-ink">Also keep this file</span>
+                <span className="block text-label text-nb-faint">
                   {course
                     ? `saves and indexes it under ${course} — opens the ingest dialog once the deck is queued`
                     : "pick a course above to say where it should be saved"}
@@ -532,56 +548,57 @@ export default function GenerateDialog({
           </div>
         )}
 
-        <div className="mb-4">
-          <p className="mb-1 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-            Difficulty
-          </p>
-          <SegmentedControl
+        <div className="mb-[1.125rem]">
+          <p className="mb-2 text-ctl text-nb-body">How hard?</p>
+          <NotebookSegmented
             options={difficulties}
-            labels={Object.fromEntries(difficulties.map((d) => [d, d.toUpperCase()]))}
+            labels={Object.fromEntries(
+              difficulties.map((d) => [d, d.charAt(0).toUpperCase() + d.slice(1)]),
+            )}
             value={difficulty}
             onChange={setDifficulty}
           />
-          <p className="mt-1 font-mono text-micro text-ink-faint">
-            {DIFFICULTY_BLURB[difficulty] ?? ""}
-          </p>
+          {/* The blurb is the point of naming a difficulty at all: "hard" means
+              whatever the model privately thinks it means, so the UI says what
+              this app asks for. */}
+          <p className="mt-2 text-label text-nb-faint">{DIFFICULTY_BLURB[difficulty] ?? ""}</p>
         </div>
 
         {kind === "deck" && (
-          <fieldset className="mb-4">
-            <legend className="mb-1 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-              Card types
-            </legend>
-            <div className="grid gap-1.5 sm:grid-cols-2">
+          <fieldset className="mb-[1.125rem]">
+            <legend className="mb-2 text-ctl text-nb-body">Card types</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
               {(options?.styles ?? []).map((style) => (
                 <label
                   key={style}
-                  className="flex cursor-pointer items-start gap-2 border border-line px-2 py-1.5 transition-colors hover:border-lineHi"
+                  className={`flex cursor-pointer items-start gap-2.5 rounded-ctl border px-3 py-2.5 transition-colors ${
+                    styles.includes(style)
+                      ? "border-[var(--ac)] bg-nb-acBg"
+                      : "border-nb-line hover:border-nb-lineHi"
+                  }`}
                 >
                   <input
                     type="checkbox"
                     checked={styles.includes(style)}
                     onChange={() => toggleStyle(style)}
-                    className="mt-1 h-3.5 w-3.5 shrink-0 accent-[var(--ac)]"
+                    className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--ac)]"
                   />
                   <span className="min-w-0">
-                    <span className="block text-label text-ink">{STYLE_LABEL[style] ?? style}</span>
-                    <span className="block font-mono text-micro text-ink-faint">
-                      {STYLE_BLURB[style] ?? ""}
+                    <span className="block text-ctl font-medium text-nb-ink">
+                      {STYLE_LABEL[style] ?? style}
                     </span>
+                    <span className="block text-meta text-nb-body">{STYLE_BLURB[style] ?? ""}</span>
                   </span>
                 </label>
               ))}
             </div>
-            {noStyles && (
-              <p className="mt-1 font-mono text-meta text-warn">Pick at least one card type.</p>
-            )}
+            {noStyles && <p className="mt-2 text-label text-warn">Pick at least one card type.</p>}
           </fieldset>
         )}
 
-        <label className="mb-4 block">
-          <span className="mb-1 block font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-            How many
+        <label className="mb-[1.125rem] block w-40">
+          <span className="mb-1.5 block text-ctl text-nb-body">
+            How many {kind === "deck" ? "cards" : "questions"}
           </span>
           <input
             type="number"
@@ -589,7 +606,7 @@ export default function GenerateDialog({
             max={options?.max_cards ?? 60}
             value={count}
             onChange={(event) => setCount(Number(event.target.value) || 1)}
-            className="min-h-9 w-24 border border-line bg-sunken px-2 py-1.5 font-mono text-label text-ink focus:border-lineHi"
+            className={FIELD}
           />
         </label>
 
@@ -598,22 +615,22 @@ export default function GenerateDialog({
             strict-mode failure in every test that types into either. */}
         {kind === "deck" && (
           <label className="mb-4 block">
-            <span className="mb-1 block font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-              Deck name (optional)
-            </span>
+            <span className="mb-1.5 block text-ctl text-nb-body">Deck name (optional)</span>
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               aria-label="Deck name"
               placeholder={suggestedTitle || "named after what it reads"}
-              className="min-h-9 w-full border border-line bg-sunken px-2 py-1.5 font-body text-body text-ink focus:border-lineHi"
+              className={FIELD}
             />
           </label>
         )}
 
         <label className="block">
-          <span className="mb-1 block font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-            {kind === "deck" ? "Your instructions (optional)" : "Focus on (optional)"}
+          <span className="mb-1.5 block text-ctl text-nb-body">
+            {kind === "deck"
+              ? "Anything else it should know? (optional)"
+              : "Focus on (optional)"}
           </span>
           <textarea
             value={instructions}
@@ -625,29 +642,37 @@ export default function GenerateDialog({
                 ? "e.g. keep answers under ten words, use my professor's terminology"
                 : "e.g. dynamic programming and greedy algorithms"
             }
-            className="w-full border border-line bg-sunken px-2 py-1.5 font-body text-body text-ink focus:border-lineHi"
+            className="min-h-14 w-full rounded-ctl border border-nb-line bg-nb-void px-3.5 py-2.5 text-body leading-relaxed text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
           />
         </label>
-        <p className="mt-1 font-mono text-micro text-ink-faint">
-          {hasRail
-            ? sources === null
-              ? "reads the whole course"
-              : `reads the ${sources?.length ?? 0} source${sources?.length === 1 ? "" : "s"} you have ticked`
-            : mode === "course"
-              ? "reads everything indexed under the course"
-              : mode === "pick"
-                ? "reads only the files you tick"
-                : "reads the file you hand over, once"}
-          {" · settings are remembered"}
-        </p>
-
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="quiet" onClick={onClose}>
-            CANCEL
-          </Button>
-          <Button disabled={blocked} onClick={() => void submit()}>
-            {busy ? "STARTING…" : "GENERATE"}
-          </Button>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <p className="text-label text-nb-faint">
+            {hasRail
+              ? sources === null
+                ? "Reads the whole course"
+                : `Reads the ${sources?.length ?? 0} source${sources?.length === 1 ? "" : "s"} you have ticked`
+              : mode === "course"
+                ? "Reads everything indexed under the course"
+                : mode === "pick"
+                  ? "Reads only the files you tick"
+                  : "Reads the file you hand over, once"}
+            {" · your settings are remembered"}
+          </p>
+          <div className="ml-auto flex gap-2.5">
+            <button type="button" onClick={onClose} className={QUIET}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={blocked}
+              onClick={() => void submit()}
+              className={PRIMARY}
+            >
+              {busy
+                ? "Starting…"
+                : `Generate ${count} ${kind === "deck" ? "cards" : "questions"}`}
+            </button>
+          </div>
         </div>
       </div>
     </Dialog>
