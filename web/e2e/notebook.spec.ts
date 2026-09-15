@@ -17,8 +17,8 @@ test("study sub-nav deep-links between overview, flashcards, and exam", async ({
 
   await page.getByRole("tab", { name: "Practice exam" }).click();
   await expect(page).toHaveURL(/\/notebook\/exam$/);
-  await expect(page.getByText("PRACTICE.EXAM")).toBeVisible();
-  await expect(page.getByText("SCORES.HISTORY")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your exams" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your scores" })).toBeVisible();
 
   // Deep link directly to a sub-page and back to overview.
   await page.goto("/notebook/flashcards");

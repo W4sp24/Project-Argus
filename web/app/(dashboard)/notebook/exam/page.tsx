@@ -10,7 +10,10 @@ export default function PracticeExamPage() {
     <>
       <NotebookStatusLine title="Practice exam" />
       <NotebookTabs />
-      <div className="grid gap-4 lg:grid-cols-shell">
+      {/* A narrower rail than `.shell`'s: the exam's own column carries long
+          question text and lettered options, and the artboard gives it the
+          extra width. 20rem = the artboard's 320px. */}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0">
           <ExamWorkspace />
         </div>
