@@ -4,8 +4,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import Markdown from "@/components/Markdown";
 import ActivityChrome from "@/components/notebook/flashcards/ActivityChrome";
-import Button from "@/components/ui/Button";
 import { gradeFlashcard, type FlashcardCard, type FlashcardDeckDetail, type FlashcardGrade } from "@/lib/api";
+import { diffWords } from "@/lib/flashcards/diff";
 import { canAskMultipleChoice, pickDistractors, shuffle } from "@/lib/flashcards/distractors";
 import { judge } from "@/lib/flashcards/matching";
 
@@ -111,6 +111,12 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
 
   const remaining = pool.filter((card) => !mastered.includes(card.ref)).length;
 
+  // Recomputed only when the answer settles, not on every keystroke.
+  const diff = useMemo(
+    () => diffWords(typed, current?.back ?? ""),
+    [typed, current?.back],
+  );
+
   if (pool.length === 0) {
     return (
       <ActivityChrome deckId={deck.id} deckTitle={deck.title} activity="learn">
@@ -119,23 +125,43 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
     );
   }
 
+  // Cards you have answered right once but not yet twice — the middle state the
+  // bar would otherwise hide inside "remaining".
+  const inProgress = pool.filter(
+    (card) => !mastered.includes(card.ref) && (correctCount[card.ref] ?? 0) > 0,
+  ).length;
+
+  const segments = [
+    { value: mastered.length, tone: "ok" as const },
+    { value: inProgress, tone: "warn" as const },
+    { value: remaining - inProgress, tone: "track" as const },
+  ];
+
   if (!current) {
     return (
-      <ActivityChrome deckId={deck.id} deckTitle={deck.title} activity="learn">
-        <div className="border border-line p-5">
-          <p className="font-mono text-label uppercase tracking-[0.16em] text-[var(--ac)]">
-            {remaining === 0 ? "deck mastered" : `round ${round} complete`}
+      <ActivityChrome deckId={deck.id} deckTitle={deck.title} activity="learn" segments={segments}>
+        <div className="rounded-card border border-nb-line bg-nb-panel p-6">
+          <p className="text-label font-semibold tracking-[0.06em] text-ok">
+            {remaining === 0 ? "Deck mastered" : `Round ${round} complete`}
           </p>
-          <p className="mt-2 text-lead text-ink-bright">
+          <p className="mt-1 text-title font-semibold text-nb-ink">
             {mastered.length} of {pool.length} mastered
           </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {remaining > 0 && <Button onClick={nextRound}>NEXT ROUND</Button>}
+          <div className="mt-5 flex flex-wrap gap-2.5">
+            {remaining > 0 && (
+              <button
+                type="button"
+                onClick={nextRound}
+                className="rounded-ctl bg-[var(--ac)] px-4 py-3 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90"
+              >
+                Next round
+              </button>
+            )}
             <Link
               href={`/notebook/flashcards/${deck.id}`}
-              className="border border-line px-3 py-2 font-mono text-label uppercase tracking-[0.12em] text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+              className="rounded-ctl border border-nb-line px-4 py-3 text-body text-nb-ink transition-colors hover:border-nb-lineHi"
             >
-              back to the deck
+              Back to the deck
             </Link>
           </div>
         </div>
@@ -147,44 +173,47 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
     <ActivityChrome
       deckId={deck.id}
       deckTitle={deck.title}
-      activity={`learn · round ${round}`}
-      progress={`${mastered.length} / ${pool.length} mastered`}
+      activity="learn"
+      badge={<span className="text-label text-nb-faint">Round {round}</span>}
+      progress={
+        <>
+          {mastered.length}
+          <span className="text-nb-faint"> / {pool.length} mastered</span>
+        </>
+      }
+      segments={segments}
     >
-      <div className="border border-line bg-sunken p-5">
-        <p className="mb-1 font-mono text-meta uppercase tracking-[0.14em] text-ink-faint">
-          {stage === "choice" ? "choose the answer" : "type the answer"}
+      <div className="rounded-card border border-nb-line bg-nb-panel p-6">
+        <p className="mb-2 text-label text-nb-faint">
+          {stage === "choice" ? "Choose the answer" : "Type the answer"}
         </p>
-        <div className="text-lead text-ink-bright">
-          <Markdown text={current.front} className="text-lead" />
+        <div className="text-nb-ink">
+          <Markdown text={current.front} className="text-lead font-medium" />
         </div>
 
         {current.hint && !usedHint && verdict === null && (
           <button
             type="button"
             onClick={() => setUsedHint(true)}
-            className="mt-3 font-mono text-meta uppercase tracking-[0.12em] text-ink-faint underline underline-offset-2 transition-colors hover:text-ink"
+            className="mt-3.5 text-label text-nb-faint underline underline-offset-2 transition-colors hover:text-nb-ink"
           >
-            get a hint
+            Get a hint · a hint caps this card at a near miss
           </button>
         )}
         {usedHint && current.hint && (
-          <p className="mt-3 font-mono text-meta text-ink-muted">
-            <span className="text-[var(--ac)]">hint</span> :: {current.hint}
-          </p>
+          <p className="mt-3.5 text-ctl text-nb-body">Hint: {current.hint}</p>
         )}
       </div>
 
       {verdict === null ? (
         stage === "choice" ? (
-          <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+          <ul className="mt-3 grid gap-2.5 sm:grid-cols-2">
             {options.map((option) => (
               <li key={option.ref}>
                 <button
                   type="button"
-                  onClick={() =>
-                    void settle(option.ref === current.ref ? "correct" : "wrong")
-                  }
-                  className="w-full border border-line px-3 py-3 text-left text-body text-ink transition-colors hover:border-[var(--ac)]"
+                  onClick={() => void settle(option.ref === current.ref ? "correct" : "wrong")}
+                  className="w-full rounded-tile border border-nb-line bg-nb-panel px-4 py-3.5 text-left text-nb-ink transition-colors hover:border-[var(--ac)]"
                 >
                   <Markdown text={option.back} className="text-body" />
                 </button>
@@ -193,7 +222,7 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
           </ul>
         ) : (
           <form
-            className="mt-3 flex flex-wrap gap-2"
+            className="mt-3 flex flex-wrap gap-2.5"
             onSubmit={(event) => {
               event.preventDefault();
               void settle(judge(current.back, typed));
@@ -205,43 +234,99 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
               onChange={(event) => setTyped(event.target.value)}
               aria-label="Your answer"
               placeholder="type what you remember"
-              className="min-h-9 min-w-0 flex-1 border border-line bg-sunken px-2 py-1.5 font-body text-body text-ink focus:border-lineHi"
+              className="min-h-12 min-w-0 flex-1 rounded-ctl border border-nb-lineHi bg-nb-panel px-3.5 py-3 text-read text-nb-ink placeholder:text-nb-faint focus:border-[var(--ac)]"
             />
-            <Button type="submit">ANSWER</Button>
+            <button
+              type="submit"
+              className="rounded-ctl bg-[var(--ac)] px-5 py-3 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90"
+            >
+              Answer
+            </button>
           </form>
         )
       ) : (
-        <div className="mt-3 border border-line p-4">
-          <p
-            className={`font-mono text-label uppercase tracking-[0.14em] ${
-              verdict === "wrong" ? "text-danger" : verdict === "close" ? "text-warn" : "text-ok"
+        <div
+          className={`mt-3 rounded-card border bg-nb-panel p-6 ${
+            verdict === "wrong"
+              ? "border-nb-dangerLine"
+              : verdict === "close"
+                ? "border-nb-warnLine"
+                : "border-nb-okLine"
+          }`}
+        >
+          <span
+            className={`inline-flex rounded-[0.375rem] px-2.5 py-1 text-meta font-semibold ${
+              verdict === "wrong"
+                ? "bg-nb-dangerBg text-danger"
+                : verdict === "close"
+                  ? "bg-nb-warnBg text-warn"
+                  : "bg-nb-okBg text-ok"
             }`}
           >
-            {verdict === "correct" ? "correct" : verdict === "close" ? "close enough" : "not quite"}
-          </p>
-          <div className="mt-2 text-body text-ink-bright">
-            <Markdown text={current.back} className="text-body" />
-          </div>
+            {verdict === "correct" ? "✓ Correct" : verdict === "close" ? "≈ Close enough" : "✗ Not this time"}
+          </span>
 
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button onClick={next}>CONTINUE</Button>
+          {/* The diff only earns its place when you typed something and it was
+              not exactly right. On a multiple-choice miss there is nothing to
+              compare, and on an exact match there is nothing to show. */}
+          {stage === "typed" && typed.trim() && verdict !== "correct" ? (
+            <>
+              <p className="mb-1.5 mt-4 text-label text-nb-faint">You typed</p>
+              <p className="text-read text-nb-body">
+                {diff.typed.map((span, index) => (
+                  <span
+                    key={index}
+                    className={span.changed ? "bg-nb-warnBg px-0.5 text-warn" : undefined}
+                  >
+                    {span.text}
+                  </span>
+                ))}
+              </p>
+              <p className="mb-1.5 mt-4 text-label text-nb-faint">The card says</p>
+              <p className="text-read text-nb-ink">
+                {diff.expected.map((span, index) => (
+                  <span
+                    key={index}
+                    className={span.changed ? "bg-nb-okBg px-0.5 text-ok" : undefined}
+                  >
+                    {span.text}
+                  </span>
+                ))}
+              </p>
+            </>
+          ) : (
+            <div className="mt-4 text-nb-ink">
+              <Markdown text={current.back} className="text-read" />
+            </div>
+          )}
+
+          {(verdict === "close" || usedHint || overrode) && (
+            <p className="mt-4 text-body text-nb-body">
+              Counted as a near miss — a card you had to argue for is not a card you knew.
+            </p>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-2.5">
+            <button
+              type="button"
+              onClick={next}
+              className="flex-1 rounded-ctl bg-[var(--ac)] px-4 py-3 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90"
+            >
+              Continue
+            </button>
             {verdict === "wrong" && !overrode && (
               // Promotes to `hard`, never to `good`: a card you had to argue
               // for is not a card you knew.
-              <Button
-                variant="quiet"
+              <button
+                type="button"
                 onClick={() => {
                   setOverrode(true);
                   void gradeFlashcard(deck.id, current.ref, "hard").catch(() => {});
                 }}
+                className="rounded-ctl border border-nb-line px-4 py-3 text-ctl text-nb-body transition-colors hover:border-nb-lineHi hover:text-nb-ink"
               >
-                I WAS RIGHT
-              </Button>
-            )}
-            {overrode && (
-              <span className="self-center font-mono text-meta text-ink-faint">
-                counted as a near miss
-              </span>
+                Mark as correct
+              </button>
             )}
           </div>
         </div>

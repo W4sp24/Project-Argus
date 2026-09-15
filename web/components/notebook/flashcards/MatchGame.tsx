@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "@/components/Markdown";
 import ActivityChrome from "@/components/notebook/flashcards/ActivityChrome";
-import Button from "@/components/ui/Button";
 import { postMatchScore, useMatchBest, type FlashcardDeckDetail } from "@/lib/api";
 import { shuffle } from "@/lib/flashcards/distractors";
 
@@ -136,52 +135,70 @@ export default function MatchGame({ deck }: { deck: FlashcardDeckDetail }) {
   if (cards.length < MIN_PAIRS) {
     return (
       <ActivityChrome deckId={deck.id} deckTitle={deck.title} activity="match">
-        <p className="text-body text-ink-faint">
+        <p className="text-body text-nb-faint">
           Match needs at least {MIN_PAIRS} cards to be a game. This deck has {cards.length}.
         </p>
       </ActivityChrome>
     );
   }
 
+  const bestMs = best?.best_ms ?? null;
+  const running = finishedMs ?? elapsed;
+
   return (
     <ActivityChrome
       deckId={deck.id}
       deckTitle={deck.title}
       activity="match"
-      progress={formatMs(finishedMs ?? elapsed)}
-      keys="click a term, then its definition · this changes nothing about your schedule"
+      badge={
+        bestMs !== null ? (
+          <span className="rounded-full border border-nb-line px-3 py-1 text-meta font-semibold text-nb-body">
+            Best {formatMs(bestMs)}
+          </span>
+        ) : undefined
+      }
+      progress={
+        <span className="font-mono text-display font-semibold tabular-nums text-[var(--ac)]">
+          {formatMs(running)}
+        </span>
+      }
+      segments={[
+        { value: cleared.length, tone: "ok" },
+        { value: cards.length - cleared.length, tone: "track" },
+      ]}
+      caption={[
+        `${cleared.length} of ${cards.length} paired`,
+        // Only worth saying while it is still true.
+        bestMs !== null && finishedMs === null && running < bestMs
+          ? `beating your best by ${formatMs(bestMs - running)}`
+          : null,
+        "nothing here touches your schedule",
+      ]
+        .filter(Boolean)
+        .join(" · ")}
     >
       {finishedMs !== null ? (
-        <div className="border border-line p-5">
-          <p className="font-mono text-label uppercase tracking-[0.16em] text-[var(--ac)]">
-            {best?.best_ms !== null && best?.best_ms !== undefined && finishedMs <= best.best_ms
-              ? "new best"
-              : "finished"}
+        <div className="rounded-card border border-nb-line bg-nb-panel p-6">
+          <p className="text-label font-semibold tracking-[0.06em] text-ok">
+            {bestMs !== null && finishedMs <= bestMs ? "New best" : "Finished"}
           </p>
-          <p className="mt-2 text-lead text-ink-bright">
+          <p className="mt-1 text-title font-semibold text-nb-ink">
             {cards.length} pairs in {formatMs(finishedMs)}
           </p>
-          {best?.best_ms !== null && best?.best_ms !== undefined && (
-            <p className="mt-1 font-mono text-label text-ink-muted">
-              best :: {formatMs(best.best_ms)}
-            </p>
+          {bestMs !== null && (
+            <p className="mt-1 text-body text-nb-body">Best {formatMs(bestMs)}</p>
           )}
-          <Button className="mt-4" onClick={replay}>
-            PLAY AGAIN
-          </Button>
+          <button
+            type="button"
+            onClick={replay}
+            className="mt-5 rounded-ctl bg-[var(--ac)] px-4 py-3 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90"
+          >
+            Play again
+          </button>
         </div>
       ) : (
         <>
-          <div className="mb-3 flex items-center gap-3 font-mono text-meta text-ink-faint">
-            <span>
-              {cleared.length} / {cards.length} paired
-            </span>
-            {best?.best_ms !== null && best?.best_ms !== undefined && (
-              <span>best :: {formatMs(best.best_ms)}</span>
-            )}
-          </div>
-
-          <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {tiles.map((tile) => {
               const done = cleared.includes(tile.ref);
               const isSelected = selected?.id === tile.id;
@@ -191,27 +208,28 @@ export default function MatchGame({ deck }: { deck: FlashcardDeckDetail }) {
                     type="button"
                     disabled={done}
                     onClick={() => choose(tile)}
-                    className={`flex h-24 w-full items-center justify-center overflow-auto border p-2 text-center text-label transition-colors ${
+                    className={`flex h-[6.5rem] w-full items-center justify-center overflow-auto rounded-tile border p-2.5 text-center text-body transition-colors ${
                       done
-                        ? "border-line/40 text-ink-faint/30"
+                        ? "border-dashed border-nb-track"
                         : wrong === tile.id
-                          ? "border-danger text-danger"
+                          ? "border-danger bg-nb-dangerBg text-danger"
                           : isSelected
-                            ? "border-[var(--ac)] bg-[var(--ac-bg)] text-ink-bright"
-                            : "border-line text-ink hover:border-lineHi"
+                            ? "border-[var(--ac)] bg-nb-acBg text-nb-ink"
+                            : "border-nb-line bg-nb-panel text-nb-ink hover:border-nb-lineHi"
                     }`}
                   >
                     {/* `invisible` rather than unmounted: a cleared tile keeps
                         its space, so the board does not reflow under the
                         pointer mid-round. */}
                     <span className={done ? "invisible" : ""}>
-                      <Markdown text={tile.text} className="text-label" />
+                      <Markdown text={tile.text} className="text-body" />
                     </span>
                   </button>
                 </li>
               );
             })}
           </ul>
+          <p className="mt-4 text-label text-nb-faint">Click a term, then its definition.</p>
         </>
       )}
     </ActivityChrome>

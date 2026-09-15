@@ -744,9 +744,9 @@ test("browsing a deck does not touch its schedule", async ({ page, request }) =>
   expect(dueAfter.total).toBe(dueBefore.total);
 
   // The ✗ pile earns a second pass — the reason to sort at all.
-  await page.getByRole("button", { name: /REVIEW THE 1 STILL LEARNING/ }).click();
+  await page.getByRole("button", { name: /Review the 1 still learning/ }).click();
   await expect(page.getByTestId("flashcard-front")).toContainText("browse two");
-  await expect(page.getByText("round 2")).toBeVisible();
+  await expect(page.getByText("Round 2")).toBeVisible();
 });
 
 test("starring a card in browse mode persists, because it is not session state", async ({
@@ -852,7 +852,7 @@ test("match pairs against the clock and records a best, changing no schedule", a
   const dueBefore = (await (await request.get("/api/flashcards/due-summary")).json()).total;
 
   await page.goto(`/notebook/flashcards/${deck.id}/match`);
-  await expect(page.getByText("0 / 3 paired")).toBeVisible();
+  await expect(page.getByText(/0 of 3 paired/)).toBeVisible();
 
   // Click a term then its definition. Click-to-pair, not drag: two clicks say
   // "these go together" as well as a drag does, and are testable.
@@ -862,7 +862,7 @@ test("match pairs against the clock and records a best, changing no schedule", a
   }
 
   await expect(page.getByText("3 pairs in")).toBeVisible();
-  await expect(page.getByText(/best :: /)).toBeVisible();
+  await expect(page.getByText(/^Best d/)).toBeVisible();
 
   // A game must not be able to corrupt weeks of spacing.
   const dueAfter = (await (await request.get("/api/flashcards/due-summary")).json()).total;
@@ -885,12 +885,12 @@ test("a mispair clears the selection instead of pairing", async ({ page, request
   await page.goto(`/notebook/flashcards/${deck.id}/match`);
   await page.getByRole("button", { name: "alpha front", exact: true }).click();
   await page.getByRole("button", { name: "bravo back", exact: true }).click();
-  await expect(page.getByText("0 / 2 paired")).toBeVisible();
+  await expect(page.getByText(/0 of 2 paired/)).toBeVisible();
 
   // ...and the right pair still works afterwards.
   await page.getByRole("button", { name: "alpha front", exact: true }).click();
   await page.getByRole("button", { name: "alpha back", exact: true }).click();
-  await expect(page.getByText("1 / 2 paired")).toBeVisible();
+  await expect(page.getByText(/1 of 2 paired/)).toBeVisible();
 });
 
 test("a dropped file becomes cards without touching the vault", async ({ page, request }) => {
