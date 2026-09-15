@@ -120,7 +120,7 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
   if (pool.length === 0) {
     return (
       <ActivityChrome deckId={deck.id} deckTitle={deck.title} activity="learn">
-        <p className="text-body text-ink-faint">This deck has no cards to learn yet.</p>
+        <p className="text-body text-nb-faint">This deck has no cards to learn yet.</p>
       </ActivityChrome>
     );
   }

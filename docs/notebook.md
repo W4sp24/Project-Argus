@@ -10,7 +10,7 @@ that references the old path keep resolving.
 
 ## A window of its own
 
-`POP OUT ↗` in the Notebook header moves the whole mode into a second window:
+`Open in its own window ↗` in the Notebook header moves the whole mode into a second window:
 the overview, the Course Hub, flashcards and every study activity, and the
 practice exam.
 
@@ -38,11 +38,11 @@ Five routes, and only one of them involves a model.
 
 | Route | Where | What it does |
 |---|---|---|
-| **Type them** | the deck page | Front, back, optional hint. `Tab` between fields; a click away saves. |
-| **Paste rows** | IMPORT → PASTE ROWS | Choose what separates front from back (tab, comma, dash) and what separates cards (new line, semicolon). The preview counts what will actually be created. |
-| **Drop a file** | IMPORT → A FILE, or drop anywhere on the dialog | `.md`, `.txt`, `.csv`, `.tsv` from your computer. Read in the browser, never uploaded, no model involved. |
-| **From a note** | IMPORT → FROM A NOTE | Search your vault's notes and pick one; reads every `Q::` / `A::` pair in it. |
-| **Generate** | Course Hub → STUDIO, or the deck library's ✨ GENERATE | Writes cards from material you choose, in the background, with the options below. |
+| **Type them** | the deck page, `＋ Add card` | Front, back, optional hint. `Tab` between fields; a click away saves. |
+| **Paste rows** | Import → Paste rows | Choose what separates front from back (tab, comma, dash) and what separates cards (new line, semicolon). The preview counts what will actually be created. |
+| **Drop a file** | Import → Drop a file, or drop anywhere on the dialog | `.md`, `.txt`, `.csv`, `.tsv` from your computer. Read in the browser, never uploaded, no model involved. |
+| **From a note** | Import → From a note | Search your vault's notes and pick one; reads every `Q::` / `A::` pair in it. |
+| **Generate** | Course Hub → Make something, or the deck library's ✨ Generate | Writes cards from material you choose, in the background, with the options below. |
 
 **From a note** is worth knowing about: **every note Argus generates already
 carries a `Q::`/`A::` self-test section**, so a lecture note usually imports
@@ -60,7 +60,7 @@ looks like a broken file.
 
 ### Choosing what it reads
 
-Opened from a Course Hub, generation reads the sources ticked in the SOURCES
+Opened from a Course Hub, generation reads the sources ticked in the Sources
 rail — you already answered "from what" before the dialog appeared.
 
 Opened from the deck library there is no rail, so the dialog asks. Three
@@ -68,9 +68,9 @@ answers:
 
 | | |
 |---|---|
-| **Whole course** | Everything indexed under the course you name. |
-| **Pick sources** | The course's files, listed with their index state. Tick the lecture you are actually revising. Nothing is generated until at least one is ticked. |
-| **My own file** | Drop a `.pdf`, `.pptx`, `.docx` or `.md` from your computer. It is read once for this deck and **never stored** — nothing is written to your vault and nothing is indexed. A course is optional here: a deck can be about a PDF rather than about a course. |
+| **The whole course** | Everything indexed under the course you name. |
+| **Pick files** | The course's files, listed with their index state. Tick the lecture you are actually revising. Nothing is generated until at least one is ticked. |
+| **A file of my own** | Drop a `.pdf`, `.pptx`, `.docx` or `.md` from your computer. It is read once for this deck and **never stored** — nothing is written to your vault and nothing is indexed. A course is optional here: a deck can be about a PDF rather than about a course. |
 
 Tick **Also keep this file** and the ingest dialog opens once the deck is
 queued, so the file lands in the course's materials and is indexed for next
@@ -101,38 +101,51 @@ same idea as the deck's instructions.
 
 ### Naming, filing and finding a deck
 
-Rename a deck from the library: click the `✎` on its row, or double-click its
+Rename a deck from the library: click the `✎` on its card, or double-click its
 name. `Enter` saves, `Escape` cancels, and the change is in the database — it
 survives a reload.
 
-The deck page's `✎ EDIT` renames it too, and sets its **course**. That matters
-more than it sounds: `EXPORT` writes to the course's `flashcards.md`, so a deck
-with no course cannot export, and until now nothing in the app could give it
-one.
+The deck page's `Rename` does both: the deck's name and its **course**. That
+matters more than it sounds — `Export` writes to the course's `flashcards.md`,
+so a deck with no course cannot export, and until now nothing in the app could
+give it one.
 
-A course's decks have their own **DECKS** panel in its Course Hub, under STUDIO,
-with each deck's due count and a `review →` link straight into a session. Each
-deck says what it was written from (`from lecture-04.pdf`), and the SOURCES rail
-badges each file with how many decks came out of it.
+A course's decks have their own **Decks** panel in its Course Hub, between
+"Make something" and "Already made". Each row carries its due count and how much
+of it you have mastered, and opens straight into a review when something is due.
+Each deck says what it was written from (`from lecture-04.pdf`), and the Sources
+rail says how many decks came out of each file.
 
 ### Getting cards out
 
-`EXPORT` writes the deck to its course's `flashcards.md` as `Q::`/`A::` pairs —
-the same format `FROM A NOTE` reads, so the two round-trip. A deck with no
+`Export` writes the deck to its course's `flashcards.md` as `Q::`/`A::` pairs —
+the same format `From a note` reads, so the two round-trip. A deck with no
 course has nowhere to land and will say so; give it a course first.
+
+### What "mastered" means
+
+A card counts as **mastered** once its interval reaches three weeks. That is
+Anki's "mature" threshold and it means the same thing here: a card you will not
+be asked again for three weeks is one you know, as distinct from one you are
+still learning.
+
+It is worked out from your review history rather than stored, so it is always
+current — and a card you forget stops being mastered the moment you grade it
+`again`. Every progress ring and bar in the Notebook is the same number:
+mastered out of total.
 
 ### The four ways to study
 
 | Mode | What it is | Changes your schedule? |
 |---|---|---|
 | **Review** | Spaced repetition (FSRS). Each grade button shows the real interval it will schedule. `Space` flips, `1`–`4` grade, `U` undoes. | **Yes** — this is the schedule |
-| **Flashcards** | Flip through the deck. `←`/`→`, shuffle, star. Turn on *Track progress* to sort into ✗ / ✓ piles and re-run just the ✗ pile. | **No** |
+| **Browse** | Flip through the deck. `←`/`→`, shuffle, star. Turn on *Track progress* to sort into ✗ / ✓ piles and re-run just the ✗ pile. | **No** |
 | **Learn** | Rounds of 7. A card you have not answered is multiple choice; once you have it right it asks you to type it. A typo is accepted as a near miss. | **Yes** — same schedule as Review |
 | **Match** | Pair terms against the clock, click-to-pair. Keeps your best time per deck. | **No** |
 
 That column is the point of having four modes. **Cramming and scheduling are
 different acts.** Flipping through a deck the night before a lecture must not
-rewrite spacing you have built over weeks, so Flashcards and Match record
+rewrite spacing you have built over weeks, so Browse and Match record
 nothing against your cards — the ✗/✓ piles live only for that session. Review
 and Learn both feed FSRS, so practising in either one counts.
 
@@ -143,7 +156,7 @@ recall. A card you had to argue for is not a card you knew.
 
 - **Star** a card to filter to it later. It is a property of the card, so it
   survives the session and shows in the editor.
-- A **hint** shows as `GET A HINT` on the card. Using one in Learn caps that
+- A **hint** shows on the card, and in Learn behind `Get a hint`. Using one in Learn caps that
   answer at a near miss.
 - **Suspend** a card and it stops appearing in the review queue without being
   deleted — for the card you have decided is not worth the reviews yet.
