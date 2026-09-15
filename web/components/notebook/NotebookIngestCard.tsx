@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import IngestDialog from "@/components/sources/IngestDialog";
 import IngestJobProgress from "@/components/sources/IngestJobProgress";
 import NotebookPanel from "@/components/notebook/NotebookPanel";
@@ -26,6 +26,30 @@ export default function NotebookIngestCard({ onIngested }: { onIngested?: () => 
   const [files, setFiles] = useState<File[] | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const { data: job } = useIngestJob(jobId);
+
+  /**
+   * Tell the parent when the job *settles*, not when it is accepted.
+   *
+   * A course's materials count is derived from what is on disk, so revalidating
+   * at queue time reads the state from before the file landed — the course row
+   * stays at "0 materials" and its generators stay out of reach until something
+   * unrelated refetches. Same rule `components/dashboard/IngestPanel.tsx`
+   * follows, and for the same reason.
+   *
+   * Keyed on the job id rather than the status alone: `onIngested` is an inline
+   * arrow at the call site, so it has a new identity on every render, and an
+   * effect that depends on it would re-fire for as long as the job sits in a
+   * terminal state — refetching, re-rendering, and refetching again.
+   */
+  const status = job?.status;
+  const reported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!jobId || reported.current === jobId) return;
+    if (status === "ok" || status === "partial" || status === "failed") {
+      reported.current = jobId;
+      onIngested?.();
+    }
+  }, [jobId, status, onIngested]);
 
   const target = courses?.find((entry) => entry.code === course)?.materials_path;
 
@@ -87,7 +111,6 @@ export default function NotebookIngestCard({ onIngested }: { onIngested?: () => 
           onStarted={(id) => {
             setJobId(id);
             setFiles(null);
-            onIngested?.();
           }}
         />
       )}

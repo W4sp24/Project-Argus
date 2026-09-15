@@ -305,7 +305,10 @@ export default function CoursesPanel() {
           </p>
         )}
 
-        <div className="flex flex-col gap-2.5">
+        {/* A list, not a stack of divs: a course row is reached by role in the
+            e2e suite, and `getByRole("listitem")` is the only stable handle a
+            card built out of nested divs can offer. */}
+        <ul className="flex flex-col gap-2.5">
           {visible.map((course) => {
             const chips = weakTopics.filter((topic) => topic.course === course.code).slice(0, 4);
             const courseDecks = (decks ?? []).filter((deck) => deck.course === course.code);
@@ -316,7 +319,7 @@ export default function CoursesPanel() {
             const empty = course.materials === 0 && course.notes === 0;
             const dragging = dragOverCourse === course.code;
             return (
-              <div
+              <li
                 key={course.code}
                 onDragOver={(event) => handleDragOver(course.code, event)}
                 onDragLeave={(event) => handleDragLeave(course.code, event)}
@@ -434,10 +437,10 @@ export default function CoursesPanel() {
                     Open hub →
                   </Link>
                 </div>
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       </NotebookPanel>
       {confirmDialog}
     </>

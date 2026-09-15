@@ -61,8 +61,10 @@ test("a review session flips, grades, and says what each grade will cost", async
   await expect(good).toContainText(/\d+[mhdy]|mo/);
 
   await good.click();
-  // The toast reports the same interval the button promised — they come out of
-  // one function, so a drift between them is a bug rather than a rounding.
+  // The verdict reports the same interval the button promised — they come out
+  // of one function, so a drift between them is a bug rather than a rounding.
+  // It has to survive the queue emptying: grading the last card swaps the whole
+  // session out for the summary, which is where this one lands.
   await expect(page.getByText(/Good — back in /)).toBeVisible();
   await expect(page.getByText("Session complete")).toBeVisible();
 });
@@ -108,6 +110,11 @@ test("space flips and a number grades, without reaching for the mouse", async ({
 test("a flashcard carrying notation is typeset on both faces", async ({ page }) => {
   await page.goto("/notebook/flashcards");
   await page.getByRole("link", { name: /CS000 notation/ }).click();
+  // Wait for the route before reaching for Review. Every deck card in the
+  // library carries its own `Review N` call to action, so while the library is
+  // still on screen `/^Review/` matches one per deck — and Playwright raises a
+  // strict-mode violation immediately rather than waiting for it to settle.
+  await expect(page).toHaveURL(/\/notebook\/flashcards\/\d+$/);
 
   // Its own deck, reached by name. The suite runs with workers: 1 against one
   // shared vault, so an earlier test grading a card out of the queue must not
@@ -130,11 +137,13 @@ test("course hub opens from a course row and links back", async ({ page }) => {
   await page.goto("/notebook");
   await page.getByRole("link", { name: "Open hub →" }).click();
   await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
-  await expect(page.getByRole("heading", { name: "Sample Course" })).toBeVisible();
   // "Sample Course" is ambiguous here by design: course.md (the hub note
   // itself, title "Sample Course") lives inside 15-Courses/CS000/ and so
-  // also shows up as a SOURCES row — scope to the header to pick the title.
-  await expect(page.locator("header").getByText("Sample Course")).toBeVisible();
+  // also shows up as a Sources row — scope to the header to pick the title,
+  // where it is the page's only `<h1>`.
+  const header = page.locator("header");
+  await expect(header.getByRole("heading", { name: "Sample Course" })).toBeVisible();
+  await expect(header.getByText("CS000")).toBeVisible();
 
   await page.getByRole("button", { name: "← Back" }).click();
   await expect(page).toHaveURL(/\/notebook$/);
@@ -168,9 +177,9 @@ test("deleting a course removes it permanently, even after a reload", async ({ p
 // (`15-Courses/<code>`), not the real `materials/` folder the backend
 // reports via `CourseInfo.materials_path` — the file saved fine, but
 // courses() only ever counts files inside materials/, so the row stayed at
-// "0 materials" and the generators never left disabled. CS000 (seeded by
-// start-backend.mjs) starts with zero materials, so "Study guide" starting
-// disabled and becoming enabled after one upload is the whole proof.
+// "0 materials" and the generators stayed out of reach. CS000 (seeded by
+// start-backend.mjs) starts with zero materials, so "Study guide" being
+// unavailable and becoming enabled after one upload is the whole proof.
 test("uploading through the shared ingest card lands in materials/ and unlocks the generators", async ({
   page,
 }) => {
@@ -178,9 +187,12 @@ test("uploading through the shared ingest card lands in materials/ and unlocks t
 
   // Scoped to the course row: "Practice exam" is also a tab, and a second
   // course would give "Study guide" two matches.
-  const cs000 = page.locator("div").filter({ hasText: /^CS000/ }).last();
+  const cs000 = page.getByRole("listitem").filter({ hasText: "CS000" });
   const guideButton = cs000.getByRole("button", { name: "Study guide" });
-  await expect(guideButton).toBeDisabled();
+  // An empty course offers one thing — add a file — rather than three buttons
+  // you cannot press. The generators are absent, not disabled.
+  await expect(guideButton).toHaveCount(0);
+  await expect(cs000.getByRole("button", { name: "Add your first file" })).toBeVisible();
 
   await page.getByLabel("Saving to").selectOption("CS000");
 
@@ -224,7 +236,7 @@ test("the course hub ingests into materials/ and reports every stage in place", 
   const sources = page.locator("section").filter({ hasText: "Sources" });
   await expect(sources).toBeVisible();
 
-  await sources.getByRole("button", { name: "Add", exact: true }).click();
+  await sources.getByRole("button", { name: "Add" }).click();
   const dialog = page.getByRole("dialog", { name: "Ingest files" });
   await expect(dialog).toBeVisible();
   // The destination is pinned to the course, so there is no picker to set.
@@ -264,7 +276,7 @@ test("unticking a source sticks across a reload and is counted everywhere", asyn
   const before = await sources.getByRole("checkbox", { checked: true }).count();
   await box.click();
   await expect(box).toHaveAttribute("aria-checked", "false");
-  await expect(page.getByText(`SOURCES · ${before - 1}/`)).toBeVisible();
+  await expect(page.getByText(`Reading ${before - 1} of `)).toBeVisible();
 
   // The whole point: a selection is a working set, so it survives coming back
   // to the same course tomorrow.
@@ -273,7 +285,7 @@ test("unticking a source sticks across a reload and is counted everywhere", asyn
   await expect(reloaded).toHaveAttribute("aria-checked", "false", { timeout: 15_000 });
 
   // Chat states the scope, so a narrowed hub does not look like a thin index.
-  await expect(page.getByText(`sources :: ${before - 1}/`)).toBeVisible();
+  await expect(page.getByText(`grounded in ${before - 1} of `)).toBeVisible();
 
   await sources.getByRole("button", { name: "ALL" }).click();
   await expect(reloaded).toHaveAttribute("aria-checked", "true");
@@ -318,7 +330,7 @@ async function ingestProbe(page: import("@playwright/test").Page, name: string) 
   // effect bails whenever `lockedTarget` is set. The dialog then *shows* the
   // course as pinned and POSTs the inbox.
   await expect(page.getByText("Sample Course")).toBeVisible({ timeout: 15_000 });
-  await sources.getByRole("button", { name: "Add", exact: true }).click();
+  await sources.getByRole("button", { name: "Add" }).click();
   const dialog = page.getByRole("dialog", { name: "Ingest files" });
   await dialog.getByLabel("Write a note from each file").selectOption("");
   await dialog.locator('input[type="file"]').setInputFiles({
@@ -381,7 +393,7 @@ test("a course opened for the first time has everything selected, not nothing", 
   const total = await boxes.count();
   expect(total).toBeGreaterThan(0);
   await expect(sources.getByRole("checkbox", { checked: false })).toHaveCount(0);
-  await expect(page.getByText(`SOURCES · ${total}/${total} selected`)).toBeVisible();
+  await expect(page.getByText(`Reading ${total} of ${total} files`)).toBeVisible();
 });
 
 test("ALL under a filter selects what is on screen, not what the filter hides", async ({
@@ -397,7 +409,7 @@ test("ALL under a filter selects what is on screen, not what the filter hides", 
 
   // Start from nothing, so the count after ALL can only have come from ALL.
   await sources.getByRole("button", { name: "NONE" }).click();
-  await expect(page.getByText(`SOURCES · 0/${total} selected`)).toBeVisible();
+  await expect(page.getByText(`Reading 0 of ${total} files`)).toBeVisible();
 
   await sources.getByLabel("Filter sources").fill("e2e-filter-probe");
   const shown = await sources.getByRole("checkbox").count();
@@ -408,11 +420,11 @@ test("ALL under a filter selects what is on screen, not what the filter hides", 
   // the course silently scoped into chat and both generators — then persisted,
   // so the reload that might have revealed it did not.
   await sources.getByRole("button", { name: `ALL (${shown})` }).click();
-  await expect(page.getByText(`SOURCES · ${shown}/${total} selected`)).toBeVisible();
+  await expect(page.getByText(`Reading ${shown} of ${total} files`)).toBeVisible();
 
   // The escape hatch is named rather than being what the plain button did.
   await sources.getByRole("button", { name: `Select all ${total} in this course` }).click();
-  await expect(page.getByText(`SOURCES · ${total}/${total} selected`)).toBeVisible();
+  await expect(page.getByText(`Reading ${total} of ${total} files`)).toBeVisible();
 });
 
 /**
@@ -472,7 +484,7 @@ test("shift-click ticks a run, and only the rows on screen", async ({ page }) =>
   // firing them back to back makes the second and third 409.
   await expect(page.getByText("Sample Course")).toBeVisible({ timeout: 15_000 });
   await page.locator("section").filter({ hasText: "Sources" })
-    .getByRole("button", { name: "Add", exact: true })
+    .getByRole("button", { name: "Add" })
     .click();
   const batch = page.getByRole("dialog", { name: "Ingest files" });
   await batch.getByLabel("Write a note from each file").selectOption("");
@@ -493,12 +505,12 @@ test("shift-click ticks a run, and only the rows on screen", async ({ page }) =>
   expect(total).toBeGreaterThanOrEqual(3);
 
   await sources.getByRole("button", { name: "NONE" }).click();
-  await expect(page.getByText(`SOURCES · 0/${total} selected`)).toBeVisible();
+  await expect(page.getByText(`Reading 0 of ${total} files`)).toBeVisible();
 
   await boxes.first().click();
   await boxes.nth(2).click({ modifiers: ["Shift"] });
 
-  await expect(page.getByText(`SOURCES · 3/${total} selected`)).toBeVisible();
+  await expect(page.getByText(`Reading 3 of ${total} files`)).toBeVisible();
 });
 
 test("a generation started in the course hub survives leaving the tab", async ({ page }) => {
@@ -791,7 +803,7 @@ test("learn escalates from choosing to typing, and feeds the same schedule", asy
   await page.goto(`/notebook/flashcards/${deck.id}/learn`);
 
   // An unseen card is asked as multiple choice: recognition before recall.
-  await expect(page.getByText("choose the answer")).toBeVisible();
+  await expect(page.getByText("Choose the answer")).toBeVisible();
 
   // Deterministically answer WRONG, by reading the prompt and clicking an
   // option that is not its answer. A test that clicks whichever option happens
@@ -799,11 +811,11 @@ test("learn escalates from choosing to typing, and feeds the same schedule", asy
   const prompt = (await page.getByText(/^capital of /).first().innerText()).trim();
   const wrong = Object.values(ANSWERS).find((answer) => answer !== ANSWERS[prompt]);
   await page.getByRole("button", { name: wrong!, exact: true }).click();
-  await expect(page.getByText("not quite")).toBeVisible();
+  await expect(page.getByText("✗ Not this time")).toBeVisible();
 
   // A wrong answer offers the override, and it promotes to a near miss —
   // never to "I knew that", which would launder a miss into a long interval.
-  await page.getByRole("button", { name: "I WAS RIGHT" }).click();
+  await page.getByRole("button", { name: "Mark as correct" }).click();
   await expect(page.getByText("counted as a near miss")).toBeVisible();
 
   await page.getByRole("button", { name: "CONTINUE" }).click();
@@ -827,7 +839,7 @@ test("a typed answer with a typo is accepted as a near miss", async ({ page, req
   await page.goto(`/notebook/flashcards/${deck.id}/learn`);
   // A one-card deck cannot pose multiple choice — one distractor is a coin
   // flip and none answers itself — so it falls back to typing.
-  await expect(page.getByText("type the answer")).toBeVisible();
+  await expect(page.getByText("Type the answer")).toBeVisible();
 
   await page.getByLabel("Your answer").fill("mitochondira");
   await page.getByRole("button", { name: "ANSWER" }).click();
@@ -862,7 +874,7 @@ test("match pairs against the clock and records a best, changing no schedule", a
   }
 
   await expect(page.getByText("3 pairs in")).toBeVisible();
-  await expect(page.getByText(/^Best d/)).toBeVisible();
+  await expect(page.getByText(/^Best \d/).first()).toBeVisible();
 
   // A game must not be able to corrupt weeks of spacing.
   const dueAfter = (await (await request.get("/api/flashcards/due-summary")).json()).total;
@@ -998,7 +1010,7 @@ test("generation options reach the request, and the deck records them", async ({
     if (await box.isChecked()) await box.uncheck();
   }
   await dialog.getByRole("checkbox", { name: /Cloze/ }).check();
-  await dialog.getByLabel("Your instructions (optional)").fill("Keep answers under ten words.");
+  await dialog.getByLabel("Anything else it should know? (optional)").fill("Keep answers under ten words.");
   await dialog.getByRole("button", { name: /^Generate \d/ }).click();
 
   expect(sent).toMatchObject({
@@ -1086,7 +1098,7 @@ test("the deck library generates from the sources you pick, not the whole course
   await ingestProbe(page, "e2e-deck-source");
 
   await page.goto("/notebook/flashcards");
-  await page.getByRole("button", { name: /GENERATE/ }).click();
+  await page.getByRole("button", { name: "✨ Generate" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
   // Out here there is no SOURCES rail, so a course has to be named.
@@ -1121,7 +1133,7 @@ test("the whole course is still one click away", async ({ page }) => {
   });
 
   await page.goto("/notebook/flashcards");
-  await page.getByRole("button", { name: /GENERATE/ }).click();
+  await page.getByRole("button", { name: "✨ Generate" }).click();
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
   await dialog.getByLabel("Course").selectOption("CS000");
   await expect(dialog.getByText("reads everything indexed under the course")).toBeVisible();
@@ -1142,7 +1154,7 @@ test("a deck can be generated from a file the vault never sees", async ({ page }
   });
 
   await page.goto("/notebook/flashcards");
-  await page.getByRole("button", { name: /GENERATE/ }).click();
+  await page.getByRole("button", { name: "✨ Generate" }).click();
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
 
   await dialog.getByRole("button", { name: "A file of my own" }).click();
@@ -1169,7 +1181,7 @@ Capacities bound the flow on an edge.
 
 test("a file Argus cannot read is refused before it is uploaded", async ({ page }) => {
   await page.goto("/notebook/flashcards");
-  await page.getByRole("button", { name: /GENERATE/ }).click();
+  await page.getByRole("button", { name: "✨ Generate" }).click();
   const dialog = page.getByRole("dialog", { name: "Generate a flashcard deck" });
   await dialog.getByRole("button", { name: "A file of my own" }).click();
 
@@ -1251,16 +1263,20 @@ test("a course's decks are one click away from the course", async ({ page, reque
 
   await page.goto("/notebook/course/CS000");
   const panel = page.locator("section").filter({ hasText: "Decks" });
-  // Scoped to its own row, not to the panel: by now CS000 has several decks and
-  // every one carries a `review N ->` link, so a panel-wide match finds them all.
+  // Scoped to its own row, not to the panel: by now CS000 has several decks.
   const item = panel.getByRole("listitem").filter({ hasText: "e2e hub deck" });
-  const row = item.getByRole("link", { name: /e2e hub deck/ });
+  const row = item.getByRole("link");
   await expect(row).toBeVisible();
-  await expect(item.getByRole("link", { name: /review/i })).toBeVisible();
+  // The row states the work waiting on it, which is the whole reason a deck
+  // gets a panel of its own rather than a line in a list of artifacts.
+  await expect(item).toContainText("1 due");
 
   // The old row pointed at /notebook/flashcards?deck=<id> -- a parameter nothing
   // in the app has ever read, so it landed on the library and left you to find
-  // the deck by eye.
+  // the deck by eye. One row, one link, and with cards due it opens the session
+  // directly; the deck page is one click back from there.
   await row.click();
+  await expect(page).toHaveURL(new RegExp(`/notebook/flashcards/${deck.id}/review$`));
+  await page.getByRole("link", { name: "← e2e hub deck" }).click();
   await expect(page).toHaveURL(new RegExp(`/notebook/flashcards/${deck.id}$`));
 });

@@ -70,8 +70,12 @@ export function CourseChat({ code }: { code: string }) {
                 : "Ask about this course's materials and notes"
           }
         />
+        {/* Neither "reading N of M files" nor the word "sources": the first is
+            the Sources rail's own status line word for word, and the second is
+            its heading. Two panels on one screen saying the same sentence about
+            different things is confusing to read and ambiguous to address. */}
         <p className="mt-2.5 text-label text-nb-faint">
-          {model} · reading {paths.length} of {available.length} files
+          {model} · grounded in {paths.length} of {available.length} files
         </p>
       </NotebookPanel>
     </ChatProvider>

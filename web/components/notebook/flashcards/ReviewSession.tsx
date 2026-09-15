@@ -208,6 +208,15 @@ export default function ReviewSession({
               {minutes === 1 ? "" : "s"}
             </p>
 
+            {/* The last card's verdict, which would otherwise be the one you
+                never get to read: grading the final card empties the queue and
+                swaps the whole session out for this summary. */}
+            {verdict && (
+              <p className="mt-2.5 text-body text-nb-body">
+                {GRADE_LABEL[verdict.grade]} — back in {verdict.dueLabel}.
+              </p>
+            )}
+
             <div className="mt-5 flex gap-2.5">
               <div className="flex-1 rounded-tile bg-nb-okBg p-3.5">
                 <p className="text-title font-semibold text-ok">{banked}</p>
