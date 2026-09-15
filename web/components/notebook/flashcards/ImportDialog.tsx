@@ -52,11 +52,15 @@ const NOTE_CAP = 40;
  */
 export default function ImportDialog({
   deckId,
+  deckTitle,
   course,
   onClose,
   onImported,
 }: {
   deckId: number;
+  /** Names the deck in the dialog's own title, so the accessible name says
+   *  which deck the cards are going into rather than just "Import cards". */
+  deckTitle?: string;
   /** Pre-narrows the note picker to the deck's own course, when it has one. */
   course?: string;
   onClose: () => void;
@@ -211,7 +215,7 @@ export default function ImportDialog({
 
   return (
     <Dialog
-      label="Import cards"
+      label={deckTitle ? `Add cards to ${deckTitle}` : "Import cards"}
       onClose={onClose}
       align="center"
       className="w-[min(44rem,92vw)] p-5"

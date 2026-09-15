@@ -2,9 +2,7 @@
 
 import { useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
-import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
-import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
 import GenerateDialog from "@/components/notebook/GenerateDialog";
 import {
@@ -65,6 +63,7 @@ export default function DeckList() {
   const [course, setCourse] = useState("");
   const [creating, setCreating] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [query, setQuery] = useState("");
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -162,23 +161,17 @@ export default function DeckList() {
     }
   }
 
+  const filtered = (decks ?? []).filter((deck) => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    return `${deck.title} ${deck.course} ${deck.description}`.toLowerCase().includes(needle);
+  });
+  // Exactly one deck gets the solid call to action: the one with the most work
+  // waiting. Two primary buttons on a grid is two answers to "where do I start".
+  const busiestId = [...(decks ?? [])].sort((a, b) => dueFor(b.id) - dueFor(a.id))[0]?.id;
+
   return (
-    <Panel
-      label="DECKS"
-      headerRight={
-        <span className="flex gap-2">
-          {/* Generation lives here as well as in a Course Hub: a hub knows
-              which sources you ticked, but needing to walk into one just to
-              make a deck is the friction this removes. */}
-          <Button variant="quiet" onClick={() => setGenerating(true)}>
-            ✨ GENERATE
-          </Button>
-          <Button variant="quiet" onClick={() => setShowForm((value) => !value)}>
-            {showForm ? "CANCEL" : "+ NEW DECK"}
-          </Button>
-        </span>
-      }
-    >
+    <>
       {confirmDialog}
 
       {generating && (
@@ -194,123 +187,231 @@ export default function DeckList() {
         />
       )}
 
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <label htmlFor="deck-search" className="sr-only">
+          Search decks
+        </label>
+        <input
+          id="deck-search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search decks"
+          className="min-h-10 min-w-0 flex-1 rounded-ctl border border-nb-line bg-nb-panel px-3.5 py-2.5 text-body text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
+        />
+        {/* Generation lives here as well as in a Course Hub: a hub knows which
+            sources you ticked, but needing to walk into one just to make a deck
+            is the friction this removes. */}
+        <button
+          type="button"
+          onClick={() => setGenerating(true)}
+          className="min-h-10 rounded-ctl border border-nb-line bg-nb-panel px-3.5 py-2.5 text-ctl text-nb-ink transition-colors hover:border-nb-lineHi"
+        >
+          ✨ Generate
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowForm((value) => !value)}
+          className="min-h-10 rounded-ctl bg-[var(--ac)] px-4 py-2.5 text-ctl font-semibold text-nb-onAc transition-opacity hover:opacity-90"
+        >
+          {showForm ? "Cancel" : "＋ New deck"}
+        </button>
+      </div>
+
       {showForm && (
-        <form onSubmit={create} className="mb-4 flex flex-wrap items-end gap-2 border-b border-line pb-4">
-          <label className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-              Deck title
-            </span>
+        <form
+          onSubmit={create}
+          className="mb-4 flex flex-wrap items-end gap-3 rounded-card border border-nb-line bg-nb-panel p-5"
+        >
+          <label className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <span className="text-ctl text-nb-body">Deck title</span>
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="e.g. CS201 — graph algorithms"
-              className="min-h-9 border border-line bg-sunken px-2 py-1.5 font-body text-body text-ink focus:border-lineHi"
+              className="min-h-10 rounded-ctl border border-nb-line bg-nb-void px-3 py-2.5 text-body text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
             />
           </label>
-          <label className="flex w-40 flex-col gap-1">
-            <span className="font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-              Course (optional)
-            </span>
+          <label className="flex w-40 flex-col gap-1.5">
+            <span className="text-ctl text-nb-body">Course (optional)</span>
             <input
               value={course}
               onChange={(event) => setCourse(event.target.value)}
               placeholder="CS201"
-              className="min-h-9 border border-line bg-sunken px-2 py-1.5 font-mono text-label uppercase text-ink focus:border-lineHi"
+              className="min-h-10 rounded-ctl border border-nb-line bg-nb-void px-3 py-2.5 font-mono text-label uppercase text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
             />
           </label>
-          <Button type="submit" disabled={!title.trim() || creating}>
-            {creating ? "CREATING…" : "CREATE"}
-          </Button>
+          <button
+            type="submit"
+            disabled={!title.trim() || creating}
+            className="min-h-10 rounded-ctl bg-[var(--ac)] px-4 py-2.5 text-ctl font-semibold text-nb-onAc transition-opacity hover:opacity-90 disabled:opacity-70"
+          >
+            {creating ? "Creating…" : "Create"}
+          </button>
         </form>
       )}
 
       {!decks ? (
-        <p className="text-body text-ink-faint">Loading decks…</p>
-      ) : decks.length === 0 ? (
-        <p className="text-body text-ink-faint">
-          No decks yet. Create one above, then fill it by typing cards, pasting rows, importing a
-          note&apos;s <code className="font-mono text-label">Q::</code>/
-          <code className="font-mono text-label">A::</code> pairs, or generating from a
-          course&apos;s sources.
-        </p>
+        <p className="text-body text-nb-faint">Loading decks…</p>
       ) : (
-        <ul className="space-y-1.5">
-          {decks.map((deck) => {
+        /* Still a list, even as a grid: a deck library is a list of decks, and
+           keeping `<ul>/<li>` is what lets a test scope to one card by role
+           rather than by a testid bolted on for the purpose. */
+        <ul className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((deck) => {
             const dueCount = dueFor(deck.id);
+            const complete = deck.cards > 0 && deck.mastered === deck.cards;
+            const share = deck.cards > 0 ? (deck.mastered / deck.cards) * 100 : 0;
             return (
               <li
                 key={deck.id}
-                className="flex items-center gap-2 border border-line px-3 py-2 transition-colors hover:border-lineHi"
+                className={`flex flex-col gap-3 rounded-card border bg-nb-panel p-[1.125rem] transition-colors ${
+                  deck.id === busiestId && dueCount > 0
+                    ? "border-[var(--ac)]"
+                    : "border-nb-line hover:border-nb-lineHi"
+                }`}
               >
-                {editingId === deck.id ? (
-                  <input
-                    autoFocus
-                    value={editValue}
-                    onChange={(event) => setEditValue(event.target.value)}
-                    onKeyDown={(event) => onEditKeyDown(event, deck)}
-                    onFocus={() => {
-                      cancelledRef.current = false;
-                    }}
-                    onBlur={() => void commitRename(deck)}
-                    // "Deck name", not "Deck title": the create form above owns
-                    // that label, and one page-level query matching two fields
-                    // is a strict-mode failure in every test that types here.
-                    aria-label="Deck name"
-                    className="min-h-9 min-w-0 flex-1 border border-lineHi bg-sunken px-2 py-1.5 font-body text-body text-ink"
-                  />
-                ) : (
-                  <>
-                <Link
-                  href={`/notebook/flashcards/${deck.id}`}
-                  onDoubleClick={(event) => {
-                    event.preventDefault();
-                    startRename(deck);
-                  }}
-                  className="min-w-0 flex-1"
-                >
-                  <span className="block truncate text-body text-ink">{deck.title}</span>
-                  <span className="block truncate font-mono text-meta text-ink-faint">
-                    {deck.cards} card{deck.cards === 1 ? "" : "s"}
-                    {deck.course ? ` · ${deck.course}` : ""} ·{" "}
+                <div>
+                  <div className="flex items-baseline gap-2">
+                    <span
+                      className={`truncate font-mono text-meta font-semibold tracking-[0.06em] ${
+                        deck.course ? "text-[var(--ac)]" : "text-nb-faint"
+                      }`}
+                    >
+                      {deck.course || "No course"}
+                    </span>
+                    {dueCount > 0 && (
+                      <span className="ml-auto shrink-0 rounded-full bg-nb-acBg px-2.5 py-0.5 text-meta font-semibold text-[var(--ac)]">
+                        {dueCount} due
+                      </span>
+                    )}
+                    {/* Constant, like ThreadRail's, not `Rename ${deck.title}`:
+                        a name built from the deck's own title collides with any
+                        other control whose name it happens to contain. The card
+                        is found by its text; this is reached through the card. */}
+                    <button
+                      type="button"
+                      aria-label="Rename deck"
+                      onClick={() => startRename(deck)}
+                      className={`shrink-0 text-nb-faint transition-colors hover:text-nb-ink ${
+                        dueCount > 0 ? "" : "ml-auto"
+                      }`}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${deck.title}`}
+                      onClick={() => void remove(deck)}
+                      className="shrink-0 text-nb-faint transition-colors hover:text-danger"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {editingId === deck.id ? (
+                    <input
+                      autoFocus
+                      value={editValue}
+                      onChange={(event) => setEditValue(event.target.value)}
+                      onKeyDown={(event) => onEditKeyDown(event, deck)}
+                      onFocus={() => {
+                        cancelledRef.current = false;
+                      }}
+                      onBlur={() => void commitRename(deck)}
+                      // "Deck name", not "Deck title": the create form above owns
+                      // that label, and one page-level query matching two fields
+                      // is a strict-mode failure in every test that types here.
+                      aria-label="Deck name"
+                      className="mt-1.5 min-h-9 w-full rounded-ctl border border-nb-lineHi bg-nb-void px-2.5 py-1.5 text-lead font-semibold text-nb-ink"
+                    />
+                  ) : (
+                    <Link
+                      href={`/notebook/flashcards/${deck.id}`}
+                      onDoubleClick={(event) => {
+                        event.preventDefault();
+                        startRename(deck);
+                      }}
+                      className="mt-1.5 block truncate text-lead font-semibold text-nb-ink"
+                    >
+                      {deck.title}
+                    </Link>
+                  )}
+
+                  <p className="mt-1 truncate text-label text-nb-faint">
+                    {deck.cards} card{deck.cards === 1 ? "" : "s"} ·{" "}
                     {SOURCE_LABEL[deck.source] ?? deck.source}
-                    {/* What a generated deck was asked for, and what it read.
-                        A job row is transient; this is where you look weeks
-                        later wondering why one deck is harder than another, or
-                        which lecture it came out of. */}
+                    {/* What a generated deck was asked for, and what it read. A
+                        job row is transient; this is where you look weeks later
+                        wondering why one deck is harder than another, or which
+                        lecture it came out of. */}
                     {deck.description ? ` · ${deck.description}` : ""}
                     {provenance(deck.source_paths)}
-                  </span>
+                  </p>
+                </div>
+
+                <div>
+                  <div className="h-1.5 overflow-hidden rounded-bar bg-nb-track">
+                    <span
+                      className={`block h-1.5 ${complete ? "bg-ok" : "bg-[var(--ac)]"}`}
+                      style={{ width: `${share}%` }}
+                    />
+                  </div>
+                  <p className={`mt-1.5 text-label ${complete ? "text-ok" : "text-nb-body"}`}>
+                    {deck.cards === 0
+                      ? "No cards yet"
+                      : complete
+                        ? `All ${deck.cards} mastered${dueCount === 0 ? " — nothing due" : ""}`
+                        : `${deck.mastered} of ${deck.cards} mastered`}
+                  </p>
+                </div>
+
+                <Link
+                  href={`/notebook/flashcards/${deck.id}/${dueCount > 0 ? "review" : "cards"}`}
+                  className={`rounded-ctl py-2.5 text-center text-ctl font-semibold transition-opacity hover:opacity-90 ${
+                    deck.id === busiestId && dueCount > 0
+                      ? "bg-[var(--ac)] text-nb-onAc"
+                      : "border border-nb-line text-nb-ink"
+                  }`}
+                >
+                  {dueCount > 0 ? `Review ${dueCount}` : "Browse"}
                 </Link>
-                {dueCount > 0 && (
-                  <span className="shrink-0 border border-[var(--ac)] bg-[var(--ac-bg)] px-1.5 py-0.5 font-mono text-meta text-[var(--ac)]">
-                    {dueCount} due
-                  </span>
-                )}
-                {/* Constant, like ThreadRail's, not `Rename ${deck.title}`:
-                    a name built from the deck's own title collides with any
-                    other control whose name it happens to contain. The row is
-                    found by its text; this is reached through the row. */}
-                <Button
-                  variant="quiet"
-                  aria-label="Rename deck"
-                  onClick={() => startRename(deck)}
-                >
-                  ✎
-                </Button>
-                <Button
-                  variant="quiet"
-                  aria-label={`Delete ${deck.title}`}
-                  onClick={() => void remove(deck)}
-                >
-                  ×
-                </Button>
-                  </>
-                )}
               </li>
             );
           })}
+
+          {/* Always last, and always present: the empty state and the "one more"
+              affordance are the same thing, so there is no separate zero case
+              saying something different. Tests scope a deck by its text, so
+              this extra listitem never matches one of them.
+
+              "Start from scratch", not the artboard's "New deck": that would
+              give this and the toolbar button the same accessible name, and
+              `getByRole` matches names by substring — two controls answering to
+              one name is a strict-mode failure waiting to happen and, worse, an
+              ambiguous announcement for anyone using a screen reader. It also
+              reads better opposite "✨ Generate". */}
+          <li className="flex">
+            <button
+              type="button"
+              onClick={() => setShowForm(true)}
+              className="flex min-h-[11.25rem] flex-1 flex-col justify-center gap-1.5 rounded-card border border-dashed border-nb-line p-[1.125rem] text-left transition-colors hover:border-nb-lineHi"
+            >
+              <span className="text-body font-semibold text-nb-ink">Start from scratch</span>
+              <span className="text-label text-nb-faint">
+                Type cards, paste rows, pull <span className="font-mono">Q::</span>/
+                <span className="font-mono">A::</span> pairs out of a note, or generate from a
+                lecture.
+              </span>
+            </button>
+          </li>
         </ul>
       )}
-    </Panel>
+
+      {decks && decks.length > 0 && filtered.length === 0 && (
+        <p className="mt-4 text-body text-nb-faint">
+          No deck matches “{query.trim()}”.
+        </p>
+      )}
+    </>
   );
 }

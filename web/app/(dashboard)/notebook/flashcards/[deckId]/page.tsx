@@ -3,41 +3,43 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import Panel from "@/components/Panel";
 import { useToast } from "@/components/Toast";
-import Button from "@/components/ui/Button";
 import DeckEditor from "@/components/notebook/flashcards/DeckEditor";
 import ImportDialog from "@/components/notebook/flashcards/ImportDialog";
-import NotebookStatusLine from "@/components/notebook/NotebookStatusLine";
-import { exportDeck, updateDeck, useDeck, useDueCards } from "@/lib/api";
+import NotebookPanel from "@/components/notebook/NotebookPanel";
+import ProgressRing from "@/components/notebook/ProgressRing";
+import { exportDeck, updateDeck, useDeck, useDueCards, useMatchBest } from "@/lib/api";
 
 /** One study activity, and what it does to the schedule. Saying so is the point. */
 const ACTIVITIES = [
   {
     slug: "review",
-    label: "REVIEW",
-    blurb: "Spaced repetition. Grades what you know and schedules the next visit.",
+    label: "Review",
+    blurb: "Spaced repetition. Schedules your next visit.",
+    schedules: true,
+  },
+  {
+    slug: "learn",
+    label: "Learn",
+    blurb: "Choice first, then typing. Schedules too.",
     schedules: true,
   },
   {
     slug: "cards",
-    label: "FLASHCARDS",
-    blurb: "Flip through the deck. Sort into piles without touching your schedule.",
+    label: "Browse",
+    blurb: "Cram freely. Changes nothing.",
     schedules: false,
-  },
-  {
-    slug: "learn",
-    label: "LEARN",
-    blurb: "Multiple choice, then typing, escalating as you get things right.",
-    schedules: true,
   },
   {
     slug: "match",
-    label: "MATCH",
-    blurb: "Pair terms against the clock. A game — it changes nothing.",
+    label: "Match",
+    blurb: "A game against the clock. Changes nothing.",
     schedules: false,
   },
 ] as const;
+
+const META_ACTION =
+  "rounded-ctl border border-nb-line px-3.5 py-2 text-center text-ctl text-nb-ink transition-colors hover:border-nb-lineHi disabled:opacity-70";
 
 /**
  * /notebook/flashcards/[deckId] — one deck: its cards, and the four ways to
@@ -52,6 +54,7 @@ export default function DeckPage() {
   const deckId = Number(params.deckId);
   const { data: deck, mutate: refresh } = useDeck(Number.isFinite(deckId) ? deckId : null);
   const { data: due } = useDueCards(Number.isFinite(deckId) ? deckId : null);
+  const { data: matchBest } = useMatchBest(Number.isFinite(deckId) ? deckId : null);
   const { show } = useToast();
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -70,7 +73,7 @@ export default function DeckPage() {
   /**
    * Rename the deck, and file it under a course.
    *
-   * The course half is not a nicety. EXPORT writes to the course's
+   * The course half is not a nicety. Export writes to the course's
    * `flashcards.md`, so a deck without one cannot export -- and the disabled
    * button has been telling people to "set a course on this deck" since it
    * shipped, with nothing anywhere in the app able to do it.
@@ -107,140 +110,183 @@ export default function DeckPage() {
   }
 
   if (!deck) {
-    return (
-      <>
-        <NotebookStatusLine title="Deck" />
-        <p className="text-body text-ink-faint">Loading deck…</p>
-      </>
-    );
+    return <p className="text-body text-nb-faint">Loading deck…</p>;
   }
 
   const dueCount = due?.length ?? 0;
 
   return (
     <>
-      <NotebookStatusLine title={deck.title} />
+      <Link
+        href="/notebook/flashcards"
+        className="mb-3.5 inline-block text-ctl text-nb-faint transition-colors hover:text-nb-ink"
+      >
+        ← All decks
+      </Link>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Link
-          href="/notebook/flashcards"
-          className="font-mono text-label uppercase tracking-[0.12em] text-ink-faint transition-colors hover:text-ink"
-        >
-          ← all decks
-        </Link>
-        <span className="font-mono text-meta text-ink-faint">
-          {deck.cards} card{deck.cards === 1 ? "" : "s"}
-          {deck.course ? ` · ${deck.course}` : ""} · {dueCount} due
-        </span>
-        <div className="ml-auto flex gap-2">
-          {/* A constant name, not `Rename ${deck.title}`. An accessible name
-              that interpolates a deck's title collides with whatever else is on
-              screen -- a deck called "Imported deck" made this button answer to
-              "IMPORT" alongside the IMPORT button beside it. There is one deck
-              on this page, so the title adds nothing anyway. */}
-          <Button variant="quiet" aria-label="Rename this deck" onClick={() => startEditing(deck)}>
-            ✎ EDIT
-          </Button>
-          <Button variant="quiet" onClick={() => setImporting(true)}>
-            IMPORT
-          </Button>
-          <Button
-            variant="quiet"
-            disabled={exporting || deck.cards === 0 || !deck.course}
-            onClick={() => void runExport()}
-            title={
-              deck.course
-                ? "Write these cards to the course's flashcards.md"
-                : "Set a course on this deck to export it"
-            }
-          >
-            {exporting ? "EXPORTING…" : "EXPORT"}
-          </Button>
+      <NotebookPanel className="mb-5">
+        <div className="flex flex-wrap items-center gap-6">
+          <ProgressRing value={deck.mastered} total={deck.cards} />
+
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-baseline gap-2.5">
+              {deck.course && (
+                <span className="font-mono text-meta font-semibold tracking-[0.06em] text-[var(--ac)]">
+                  {deck.course}
+                </span>
+              )}
+              <h1 className="min-w-0 font-body text-title font-semibold text-nb-ink">
+                {deck.title}
+              </h1>
+              {/* A constant name, not `Rename ${deck.title}`. An accessible name
+                  that interpolates a deck's title collides with whatever else is
+                  on screen -- a deck called "Imported deck" made this button
+                  answer to "IMPORT" alongside the Import button beside it. There
+                  is one deck on this page, so the title adds nothing anyway. */}
+              <button
+                type="button"
+                aria-label="Rename this deck"
+                onClick={() => startEditing(deck)}
+                className="text-ctl text-nb-faint transition-colors hover:text-nb-ink"
+              >
+                Rename
+              </button>
+            </div>
+
+            <p className="mt-1.5 text-body text-nb-body">
+              {[
+                `${deck.cards} card${deck.cards === 1 ? "" : "s"}`,
+                `${dueCount} due`,
+                deck.description,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+
+            {matchBest?.best_ms != null && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-nb-line px-3 py-1 text-label font-semibold text-nb-body">
+                  Match best {(matchBest.best_ms / 1000).toFixed(1)}s
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex shrink-0 flex-col gap-2">
+            <button type="button" onClick={() => setImporting(true)} className={META_ACTION}>
+              Import
+            </button>
+            <button
+              type="button"
+              disabled={exporting || deck.cards === 0 || !deck.course}
+              onClick={() => void runExport()}
+              title={
+                deck.course
+                  ? "Write these cards to the course's flashcards.md"
+                  : "Set a course on this deck to export it"
+              }
+              className={META_ACTION}
+            >
+              {exporting ? "Exporting…" : "Export"}
+            </button>
+          </div>
         </div>
-      </div>
 
-      {editing && (
-        <form
-          onSubmit={saveMeta}
-          className="mb-4 flex flex-wrap items-end gap-2 border-b border-line pb-4"
-        >
-          <label className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-              Deck name
-            </span>
-            <input
-              autoFocus
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              aria-label="Deck name"
-              className="min-h-9 border border-line bg-sunken px-2 py-1.5 font-body text-body text-ink focus:border-lineHi"
-            />
-          </label>
-          <label className="flex w-40 flex-col gap-1">
-            <span className="font-mono text-meta uppercase tracking-[0.12em] text-ink-faint">
-              Deck course
-            </span>
-            <input
-              value={course}
-              onChange={(event) => setCourse(event.target.value)}
-              aria-label="Deck course"
-              placeholder="CS201"
-              className="min-h-9 border border-line bg-sunken px-2 py-1.5 font-mono text-label uppercase text-ink focus:border-lineHi"
-            />
-          </label>
-          <Button type="submit" disabled={!name.trim() || saving}>
-            {saving ? "SAVING…" : "SAVE"}
-          </Button>
-          <Button variant="quiet" onClick={() => setEditing(false)}>
-            CANCEL
-          </Button>
-          <p className="w-full font-mono text-micro text-ink-faint">
-            A course is where EXPORT writes this deck&apos;s{" "}
-            <code className="font-mono">flashcards.md</code>. Leave it blank for a deck that
-            belongs to no course.
+        {editing && (
+          <form
+            onSubmit={saveMeta}
+            className="mt-5 flex flex-wrap items-end gap-3 border-t border-nb-line pt-5"
+          >
+            <label className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <span className="text-ctl text-nb-body">Deck name</span>
+              <input
+                autoFocus
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                aria-label="Deck name"
+                className="min-h-10 rounded-ctl border border-nb-line bg-nb-void px-3 py-2.5 text-body text-nb-ink focus:border-nb-lineHi"
+              />
+            </label>
+            <label className="flex w-40 flex-col gap-1.5">
+              <span className="text-ctl text-nb-body">Deck course</span>
+              <input
+                value={course}
+                onChange={(event) => setCourse(event.target.value)}
+                aria-label="Deck course"
+                placeholder="CS201"
+                className="min-h-10 rounded-ctl border border-nb-line bg-nb-void px-3 py-2.5 font-mono text-label uppercase text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={!name.trim() || saving}
+              className="min-h-10 rounded-ctl bg-[var(--ac)] px-4 py-2.5 text-ctl font-semibold text-nb-onAc transition-opacity hover:opacity-90 disabled:opacity-70"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button type="button" onClick={() => setEditing(false)} className={META_ACTION}>
+              Cancel
+            </button>
+            <p className="w-full text-label text-nb-faint">
+              A course is where Export writes this deck&apos;s{" "}
+              <code className="font-mono">flashcards.md</code>. Leave it blank for a deck that
+              belongs to no course.
+            </p>
+          </form>
+        )}
+
+        {deck.cards === 0 ? (
+          <p className="mt-5 border-t border-nb-line pt-5 text-body text-nb-faint">
+            Add a card to start studying.
           </p>
-        </form>
-      )}
-
-      <div className="grid gap-4 lg:grid-cols-shell">
-        <DeckEditor deck={deck} onChanged={() => void refresh()} />
-
-        <Panel label="STUDY">
-          {deck.cards === 0 ? (
-            <p className="text-body text-ink-faint">Add a card to start studying.</p>
-          ) : (
-            <ul className="space-y-2">
-              {ACTIVITIES.map((activity) => (
-                <li key={activity.slug}>
-                  <Link
-                    href={`/notebook/flashcards/${deck.id}/${activity.slug}`}
-                    className="block border border-line px-3 py-2 transition-colors hover:border-lineHi"
-                  >
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-label uppercase tracking-wide text-ink">
+        ) : (
+          <>
+            <ul className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {ACTIVITIES.map((activity) => {
+                const primary = activity.slug === "review" && dueCount > 0;
+                return (
+                  <li key={activity.slug} className="flex">
+                    <Link
+                      href={`/notebook/flashcards/${deck.id}/${activity.slug}`}
+                      className={`flex-1 rounded-tile border p-4 transition-colors ${
+                        primary
+                          ? "border-[var(--ac)] bg-nb-acBg"
+                          : "border-nb-line bg-nb-raised hover:border-nb-lineHi"
+                      }`}
+                    >
+                      <span
+                        className={`block text-ctl font-semibold ${
+                          primary ? "text-[var(--ac)]" : "text-nb-ink"
+                        }`}
+                      >
                         {activity.label}
+                        {primary ? ` · ${dueCount} due` : ""}
                       </span>
-                      {activity.slug === "review" && dueCount > 0 && (
-                        <span className="font-mono text-meta text-[var(--ac)]">
-                          {dueCount} due
-                        </span>
-                      )}
-                    </span>
-                    <span className="mt-0.5 block text-label text-ink-faint">{activity.blurb}</span>
-                  </Link>
-                </li>
-              ))}
+                      <span
+                        className={`mt-1 block text-label ${
+                          activity.schedules ? "text-nb-body" : "text-nb-faint"
+                        }`}
+                      >
+                        {activity.blurb}
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
-          )}
-          <p className="mt-3 border-t border-line pt-2 font-mono text-micro text-ink-faint">
-            Only REVIEW and LEARN change when a card comes back.
-          </p>
-        </Panel>
-      </div>
+            <p className="mt-3 text-label text-nb-faint">
+              Only Review and Learn change when a card comes back.
+            </p>
+          </>
+        )}
+      </NotebookPanel>
+
+      <DeckEditor deck={deck} onChanged={() => void refresh()} />
 
       {importing && (
         <ImportDialog
           deckId={deck.id}
+          deckTitle={deck.title}
           course={deck.course || undefined}
           onClose={() => setImporting(false)}
           onImported={() => void refresh()}

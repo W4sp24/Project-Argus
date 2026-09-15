@@ -13,7 +13,7 @@ test("study sub-nav deep-links between overview, flashcards, and exam", async ({
 
   await page.getByRole("tab", { name: "Flashcards" }).click();
   await expect(page).toHaveURL(/\/notebook\/flashcards$/);
-  await expect(page.getByText("▍DECKS")).toBeVisible();
+  await expect(page.getByPlaceholder("Search decks")).toBeVisible();
 
   await page.getByRole("tab", { name: "Practice exam" }).click();
   await expect(page).toHaveURL(/\/notebook\/exam$/);
@@ -34,7 +34,7 @@ test("a review session flips, grades, and says what each grade will cost", async
   await page.getByRole("link", { name: /CS000 flashcards/ }).click();
   await expect(page).toHaveURL(/\/notebook\/flashcards\/\d+$/);
 
-  await page.getByRole("link", { name: /^REVIEW/ }).click();
+  await page.getByRole("link", { name: /^Review/ }).click();
   await expect(page).toHaveURL(/\/review$/);
 
   const front = page.getByTestId("flashcard-front");
@@ -112,7 +112,7 @@ test("a flashcard carrying notation is typeset on both faces", async ({ page }) 
   // Its own deck, reached by name. The suite runs with workers: 1 against one
   // shared vault, so an earlier test grading a card out of the queue must not
   // decide whether this one can see its fixture.
-  await page.getByRole("link", { name: /^REVIEW/ }).click();
+  await page.getByRole("link", { name: /^Review/ }).click();
   const front = page.getByTestId("flashcard-front");
 
   // `.katex-mathml math` rather than `.katex`: that node exists only under
@@ -644,33 +644,36 @@ test("a deck is created, filled by hand, and filled by paste", async ({ page }) 
   // suite runs workers: 1 against one shared vault, so a startup fixture is
   // global state that decides other tests' outcomes.
   await page.goto("/notebook/flashcards");
-  await page.getByRole("button", { name: "+ NEW DECK" }).click();
+  await page.getByRole("button", { name: "New deck" }).click();
   await page.getByLabel("Deck title").fill("Hand-written deck");
-  await page.getByRole("button", { name: "CREATE" }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
 
   await page.getByRole("link", { name: /Hand-written deck/ }).click();
   await expect(page).toHaveURL(/\/notebook\/flashcards\/\d+$/);
 
-  // Typed in.
+  // Typed in. The form is collapsed behind the header button now — a
+  // permanently open three-field form pushed the first card below the fold.
+  await page.getByRole("button", { name: "Add card" }).click();
   await page.getByPlaceholder("the question").fill("capital of France");
   await page.getByPlaceholder("the answer").fill("Paris");
-  await page.getByRole("button", { name: "+ ADD CARD" }).click();
+  await page.getByRole("button", { name: "Add to deck" }).click();
   await expect(page.getByLabel("Front of card 1")).toHaveValue("capital of France");
 
   // Edited in place: the list you browse is the form you edit.
   await page.getByLabel("Back of card 1").fill("Paris, France");
   await page.getByLabel("Back of card 1").blur();
-  await expect(page.getByText("1 card", { exact: true })).toBeVisible();
+  // The deck's own summary line, which reads "1 card · 0 due".
+  await expect(page.getByText(/^1 card · /)).toBeVisible();
 
   // Pasted. The preview count comes from the browser twin of the server's
   // parser, so what it promises is what gets created.
-  await page.getByRole("button", { name: "IMPORT" }).click();
-  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
   await dialog.getByLabel("Paste rows").fill("ser\tto be\nestar\tto be, temporarily");
   await expect(dialog.getByText("2 cards will be added")).toBeVisible();
   await dialog.getByRole("button", { name: "IMPORT 2" }).click();
 
-  await expect(page.getByText("3 cards", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^3 cards · /)).toBeVisible();
   // Split on the first delimiter only, so a definition keeps its commas.
   await expect(page.getByLabel("Back of card 3")).toHaveValue("to be, temporarily");
 });
@@ -686,23 +689,23 @@ test("importing a note's Q::/A:: tail fills a deck", async ({ page, request }) =
   });
 
   await page.goto("/notebook/flashcards");
-  await page.getByRole("button", { name: "+ NEW DECK" }).click();
+  await page.getByRole("button", { name: "New deck" }).click();
   await page.getByLabel("Deck title").fill("Imported deck");
-  await page.getByRole("button", { name: "CREATE" }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
   await page.getByRole("link", { name: /Imported deck/ }).click();
   // The card count only renders once `useDeck` has resolved, so it is the
   // signal that the page is hydrated and the IMPORT click will be handled.
-  await expect(page.getByText("0 cards", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^0 cards · /)).toBeVisible();
 
-  await page.getByRole("button", { name: "IMPORT" }).click();
-  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
   await dialog.getByRole("tab", { name: "FROM A NOTE" }).click();
   // Picked from a list, never typed. Typing a path meant already knowing it,
   // spelled exactly, with no listing and no completion.
   await dialog.getByLabel("Search your notes").fill("e2e-selftest");
   await dialog.getByRole("button", { name: /e2e-selftest/ }).click();
 
-  await expect(page.getByText("1 card", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^1 card · /)).toBeVisible();
   await expect(page.getByLabel("Front of card 1")).toHaveValue("what is P");
 });
 
@@ -899,10 +902,10 @@ test("a dropped file becomes cards without touching the vault", async ({ page, r
   ).json();
 
   await page.goto(`/notebook/flashcards/${deck.id}`);
-  await expect(page.getByText("0 cards", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "IMPORT" }).click();
+  await expect(page.getByText(/^0 cards · /)).toBeVisible();
+  await page.getByRole("button", { name: "Import", exact: true }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
   await dialog.getByRole("tab", { name: "A FILE" }).click();
   await dialog.locator('input[type="file"]').setInputFiles({
     name: "verbs.tsv",
@@ -914,7 +917,7 @@ test("a dropped file becomes cards without touching the vault", async ({ page, r
   await expect(dialog.getByText("2 cards will be added")).toBeVisible();
   await dialog.getByRole("button", { name: "IMPORT 2" }).click();
 
-  await expect(page.getByText("2 cards", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^2 cards · /)).toBeVisible();
   // Split on the first delimiter only, so a definition keeps its commas.
   await expect(page.getByLabel("Back of card 2")).toHaveValue("to be, temporarily");
 });
@@ -928,10 +931,10 @@ test("a dropped markdown file is recognised as Q::/A:: rather than delimited", a
   ).json();
 
   await page.goto(`/notebook/flashcards/${deck.id}`);
-  await expect(page.getByText("0 cards", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "IMPORT" }).click();
+  await expect(page.getByText(/^0 cards · /)).toBeVisible();
+  await page.getByRole("button", { name: "Import", exact: true }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
   await dialog.getByRole("tab", { name: "A FILE" }).click();
   await dialog.locator('input[type="file"]').setInputFiles({
     name: "lecture.md",
@@ -954,10 +957,10 @@ test("a file that is not text is refused before anything is read", async ({ page
   ).json();
 
   await page.goto(`/notebook/flashcards/${deck.id}`);
-  await expect(page.getByText("0 cards", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "IMPORT" }).click();
+  await expect(page.getByText(/^0 cards · /)).toBeVisible();
+  await page.getByRole("button", { name: "Import", exact: true }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Import cards" });
+  const dialog = page.getByRole("dialog", { name: /^Add cards to/ });
   await dialog.getByRole("tab", { name: "A FILE" }).click();
   await dialog.locator('input[type="file"]').setInputFiles({
     name: "slides.pptx",
@@ -1226,7 +1229,7 @@ test("a courseless deck can be given the course EXPORT needs", async ({ page, re
   });
 
   await page.goto(`/notebook/flashcards/${deck.id}`);
-  const exportButton = page.getByRole("button", { name: "EXPORT" });
+  const exportButton = page.getByRole("button", { name: "Export", exact: true });
   await expect(exportButton).toBeDisabled();
 
   await page.getByRole("button", { name: "Rename this deck" }).click();
