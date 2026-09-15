@@ -22,13 +22,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 // restating them, so this script cannot drift from the tokens it audits.
 const config = readFileSync(join(here, "..", "tailwind.config.ts"), "utf8");
 
-function token(name) {
-  const match = config.match(
+function token(name, source = config) {
+  const match = source.match(
     new RegExp(String.raw`\b${name}:\s*"(#[0-9a-fA-F]{6})"`),
   );
   if (!match) throw new Error(`token "${name}" not found in tailwind.config.ts`);
   return match[1];
 }
+
+// The Notebook ramp repeats key names (`void`, `panel`, `line`, `faint`), so a
+// bare search would keep hitting the top-level token of the same name — which is
+// a different colour on a different surface. Slice the `nb: { … }` block out
+// first and resolve names inside it.
+const nbBlock = config.match(/\bnb:\s*\{([\s\S]*?)\n\s{8}\},/);
+if (!nbBlock) throw new Error("`nb` colour block not found in tailwind.config.ts");
+const nbToken = (name) => token(name, nbBlock[1]);
 
 // WCAG 2.x relative luminance: sRGB channel -> linear light, then the
 // 0.2126/0.7152/0.0722 weighting. https://www.w3.org/TR/WCAG21/#dfn-relative-luminance
@@ -68,6 +76,29 @@ for (const check of checks) {
   console.log(
     `${check.name.padEnd(10)} ${check.fg}  on void ${onVoid.toFixed(2)}:1` +
       `  on panel ${onPanel.toFixed(2)}:1  (AA ${check.min}:1) ${pass ? "PASS" : "FAIL"}`,
+  );
+}
+
+// The Notebook ramp, audited the same way. It has a third surface the rest of
+// the app does not: `raised` is the selected/nested row, lighter than `panel`,
+// and it is where the densest metadata sits — so it is the binding number here.
+const nbSurfaces = [
+  ["void", nbToken("void")],
+  ["panel", nbToken("panel")],
+  ["raised", nbToken("raised")],
+];
+console.log(
+  `\nnotebook backgrounds: ${nbSurfaces.map(([n, hex]) => `${n} ${hex}`).join("  ")}\n`,
+);
+for (const name of ["faint", "body", "ink"]) {
+  const fg = nbToken(name);
+  const ratios = nbSurfaces.map(([, hex]) => contrast(fg, hex));
+  const pass = ratios.every((r) => r >= 4.5);
+  if (!pass) failed = true;
+  console.log(
+    `nb-${name.padEnd(7)} ${fg}  ` +
+      nbSurfaces.map(([n], i) => `on ${n} ${ratios[i].toFixed(2)}:1`).join("  ") +
+      `  (AA 4.5:1) ${pass ? "PASS" : "FAIL"}`,
   );
 }
 
