@@ -15,6 +15,7 @@ const config: Config = {
     // `components/notebook/**` and the Notebook routes should use them.
     borderRadius: {
       full: "9999px",
+      bar: "0.1875rem", // 3px — progress bars and chart bars
       ctl: "0.5rem", // 8px — buttons, inputs, pills, chips
       tile: "0.625rem", // 10px — rows, tiles, nested cards
       card: "0.75rem", // 12px — panel surfaces
@@ -72,6 +73,7 @@ const config: Config = {
           line: "#1d2e34", // borders
           lineHi: "#2a4048", // hovered / focused borders
           track: "#17252a", // progress and chart tracks
+          bar: "#1c3d45", // a filled chart bar that is not the peak
           ink: "#e6f1f3", // headings, card faces
           body: "#9db3ba", // prose
           faint: "#7C949B", // metadata only — never an interactive label

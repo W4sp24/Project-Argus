@@ -2,25 +2,28 @@ import { expect, test } from "@playwright/test";
 
 test("study sub-nav deep-links between overview, flashcards, and exam", async ({ page }) => {
   await page.goto("/notebook");
-  await expect(page.getByRole("tab", { name: "OVERVIEW" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("▍COURSES")).toBeVisible(); // exact panel eyebrow — "COURSES" alone matches 3 nodes
-  // Seeded vault course. `.first()`: "CS000" appears twice since Phase H —
-  // the course card AND the shared ingest dropzone's upload-target <option>.
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  // Panel headings are sentence-case `<h2>`s since the redesign; the `▍LABEL`
+  // eyebrow is gone from the Notebook. `heading` role rather than text, because
+  // "Courses" also appears in the ingest card's course <option>s.
+  await expect(page.getByRole("heading", { name: "Courses" })).toBeVisible();
+  // Seeded vault course. `.first()`: "CS000" appears twice — the course card
+  // AND the ingest card's save-target <option>.
   await expect(page.getByText("CS000").first()).toBeVisible();
 
-  await page.getByRole("tab", { name: "FLASHCARDS" }).click();
+  await page.getByRole("tab", { name: "Flashcards" }).click();
   await expect(page).toHaveURL(/\/notebook\/flashcards$/);
   await expect(page.getByText("▍DECKS")).toBeVisible();
 
-  await page.getByRole("tab", { name: "PRACTICE EXAM" }).click();
+  await page.getByRole("tab", { name: "Practice exam" }).click();
   await expect(page).toHaveURL(/\/notebook\/exam$/);
   await expect(page.getByText("PRACTICE.EXAM")).toBeVisible();
   await expect(page.getByText("SCORES.HISTORY")).toBeVisible();
 
   // Deep link directly to a sub-page and back to overview.
   await page.goto("/notebook/flashcards");
-  await expect(page.getByRole("tab", { name: "FLASHCARDS" })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab", { name: "OVERVIEW" }).click();
+  await expect(page.getByRole("tab", { name: "Flashcards" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Overview" }).click();
   await expect(page).toHaveURL(/\/notebook$/);
 });
 
@@ -125,7 +128,7 @@ test("a flashcard carrying notation is typeset on both faces", async ({ page }) 
 
 test("course hub opens from a course row and links back", async ({ page }) => {
   await page.goto("/notebook");
-  await page.getByRole("link", { name: "HUB →" }).click();
+  await page.getByRole("link", { name: "Open hub →" }).click();
   await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
   await expect(page.getByText("COURSE.HUB · CS000")).toBeVisible();
   // "Sample Course" is ambiguous here by design: course.md (the hub note
@@ -144,10 +147,10 @@ test("course hub opens from a course row and links back", async ({ page }) => {
 test("deleting a course removes it permanently, even after a reload", async ({ page }) => {
   await page.goto("/notebook");
 
-  await page.getByRole("button", { name: "+ ADD COURSE" }).click();
+  await page.getByRole("button", { name: "Add course" }).click();
   await page.getByLabel("Course code").fill("CS999");
   await page.getByLabel("Course name").fill("Delete Me");
-  await page.getByRole("button", { name: "ADD", exact: true }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByText("CS999").first()).toBeVisible();
 
   await page.getByRole("button", { name: "Delete CS999" }).click();
@@ -165,43 +168,46 @@ test("deleting a course removes it permanently, even after a reload", async ({ p
 // (`15-Courses/<code>`), not the real `materials/` folder the backend
 // reports via `CourseInfo.materials_path` — the file saved fine, but
 // courses() only ever counts files inside materials/, so the row stayed at
-// "0 materials" and GUIDE/EXAM never left disabled. CS000 (seeded by
-// start-backend.mjs) starts with zero materials, so GUIDE starting disabled
-// and becoming enabled after one upload is the whole proof.
-test("uploading through the shared ingest panel lands in materials/ and unlocks GUIDE/EXAM", async ({
+// "0 materials" and the generators never left disabled. CS000 (seeded by
+// start-backend.mjs) starts with zero materials, so "Study guide" starting
+// disabled and becoming enabled after one upload is the whole proof.
+test("uploading through the shared ingest card lands in materials/ and unlocks the generators", async ({
   page,
 }) => {
   await page.goto("/notebook");
 
-  const guideButton = page.getByRole("button", { name: "GUIDE" });
+  // Scoped to the course row: "Practice exam" is also a tab, and a second
+  // course would give "Study guide" two matches.
+  const cs000 = page.locator("div").filter({ hasText: /^CS000/ }).last();
+  const guideButton = cs000.getByRole("button", { name: "Study guide" });
   await expect(guideButton).toBeDisabled();
 
-  await page.getByLabel("upload target").selectOption("CS000");
+  await page.getByLabel("Saving to").selectOption("CS000");
 
-  // The dropzone opens the shared dialog now rather than posting to the
-  // single-file `POST /api/ingest` with no destination choice, no note style
-  // and no progress. Pinned to the selected course, so there is no picker.
-  await page.getByRole("button", { name: /drop a file, or click to choose/ }).click();
+  // Choosing files opens the shared dialog pre-loaded, rather than posting to
+  // the single-file `POST /api/ingest` with no destination choice, no note
+  // style and no progress. Pinned to the selected course, so there is no
+  // picker. `setInputFiles` drives the identical handler a drop would.
+  await page.locator("label").filter({ hasText: "Drop a lecture here" }).locator("input[type=file]").setInputFiles({
+    name: "syllabus.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4 fake pdf bytes"),
+  });
   const dialog = page.getByRole("dialog", { name: "Ingest files" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("Save to")).toHaveCount(0);
 
   await dialog.getByLabel("Write a note from each file").selectOption("");
-  await dialog.locator('input[type="file"]').setInputFiles({
-    name: "syllabus.pdf",
-    mimeType: "application/pdf",
-    buffer: Buffer.from("%PDF-1.4 fake pdf bytes"),
-  });
   await dialog.getByRole("button", { name: /^Ingest/ }).click();
   await expect(dialog).toBeHidden();
 
-  // Per-file progress in the panel, where the old flow had one status line.
+  // Per-file progress in the card, where the old flow had one status line.
   await expect(page.getByText("syllabus.pdf")).toBeVisible({ timeout: 30_000 });
 
   // The generators unlock only once the job settles -- the parent is told
   // then, not when the upload was accepted.
   await expect(guideButton).toBeEnabled({ timeout: 30_000 });
-  await expect(page.getByRole("button", { name: "+ EXAM" })).toBeEnabled();
+  await expect(cs000.getByRole("button", { name: "Practice exam" })).toBeEnabled();
 });
 
 // These run against the real backend, so the generator is a live provider
@@ -352,7 +358,7 @@ test("a course opened for the first time has everything selected, not nothing", 
   // then look.
   await page.addInitScript(() => window.localStorage.clear());
   await page.goto("/notebook");
-  await page.getByRole("link", { name: "HUB →" }).click();
+  await page.getByRole("link", { name: "Open hub →" }).click();
   await ingestProbe(page, "e2e-fresh-mount");
 
   // Leave and come back *client-side*, so the hub remounts with SWR's cache
@@ -363,7 +369,7 @@ test("a course opened for the first time has everything selected, not nothing", 
   // runs harmlessly before there is any data to reconcile.
   await page.getByRole("button", { name: "← BACK" }).click();
   await expect(page).toHaveURL(/\/notebook$/);
-  await page.getByRole("link", { name: "HUB →" }).click();
+  await page.getByRole("link", { name: "Open hub →" }).click();
   await expect(page).toHaveURL(/\/notebook\/course\/CS000$/);
 
   const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
@@ -458,7 +464,7 @@ test("shift-click ticks a run, and only the rows on screen", async ({ page }) =>
   // a new place. This asserts the range is bounded by what is on screen.
   await page.addInitScript(() => window.localStorage.clear());
   await page.goto("/notebook");
-  await page.getByRole("link", { name: "HUB →" }).click();
+  await page.getByRole("link", { name: "Open hub →" }).click();
 
   // Ingests its own rows so it does not depend on what an earlier spec left
   // behind -- running this file alone, CS000's rail is empty. One job, not
@@ -567,7 +573,7 @@ test("a generation started in the course hub survives leaving the tab", async ({
   // (The Course Hub renders no sub-nav of its own -- it is a workspace, not
   // one of the three tabbed pages -- so this leaves by URL.)
   await page.goto("/notebook/flashcards");
-  await expect(page.getByRole("tab", { name: "FLASHCARDS" })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "Flashcards" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -586,14 +592,14 @@ test("the old study URLs still land on the notebook", async ({ page }) => {
   // the rename from being a breaking change for the one user who has them.
   await page.goto("/study");
   await expect(page).toHaveURL(/\/notebook$/);
-  await expect(page.getByRole("tab", { name: "OVERVIEW" })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
 
   await page.goto("/study/flashcards");
   await expect(page).toHaveURL(/\/notebook\/flashcards$/);
-  await expect(page.getByRole("tab", { name: "FLASHCARDS" })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "Flashcards" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -608,7 +614,7 @@ test("the notebook opens in a window of its own", async ({ page, context }) => {
 
   const [popup] = await Promise.all([
     context.waitForEvent("page"),
-    page.getByRole("button", { name: /pop out/i }).click(),
+    page.getByRole("button", { name: /Open in its own window/ }).click(),
   ]);
   await popup.waitForLoadState();
   await expect(popup).toHaveURL(/\/notebook\?window=standalone$/);
@@ -616,16 +622,16 @@ test("the notebook opens in a window of its own", async ({ page, context }) => {
   // Its own chrome: the page's sub-nav is there, the six-mode strip is not.
   // A window that exists to hold one mode must not offer to navigate out of
   // it -- there would be no way back and no sibling chrome.
-  await expect(popup.getByRole("tab", { name: "FLASHCARDS" })).toBeVisible();
+  await expect(popup.getByRole("tab", { name: "Flashcards" })).toBeVisible();
   await expect(popup.getByRole("tablist", { name: "Mode" })).toHaveCount(0);
 
   // And it does not offer to pop itself out again.
-  await expect(popup.getByRole("button", { name: /pop out/i })).toHaveCount(0);
+  await expect(popup.getByRole("button", { name: /Open in its own window/ })).toHaveCount(0);
 
   // The flag outlives the query string: it is kept in sessionStorage, which is
   // scoped to this window, so client-side navigation inside it stays
   // standalone while the window that opened it stays ordinary.
-  await popup.getByRole("tab", { name: "FLASHCARDS" }).click();
+  await popup.getByRole("tab", { name: "Flashcards" }).click();
   await expect(popup).toHaveURL(/\/notebook\/flashcards$/);
   await expect(popup.getByRole("tablist", { name: "Mode" })).toHaveCount(0);
   await expect(page.getByRole("tablist", { name: "Mode" })).toBeVisible();

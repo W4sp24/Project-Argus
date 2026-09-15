@@ -2,17 +2,30 @@
 
 import Link from "next/link";
 import { useRef, useState, type DragEvent } from "react";
-import Panel from "@/components/Panel";
+import NotebookPanel from "@/components/notebook/NotebookPanel";
 import { useToast } from "@/components/Toast";
-import Button from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/useConfirm";
-import { ApiError, apiFetch, mutateJSON, useStudyCourses, useStudyExams, useVault } from "@/lib/api";
+import {
+  ApiError,
+  apiFetch,
+  mutateJSON,
+  useDueSummary,
+  useFlashcardDecks,
+  useStudyCourses,
+  useStudyExams,
+  useVault,
+} from "@/lib/api";
 import { useJobs } from "@/lib/jobs";
 import { selectedModel } from "@/lib/models";
-import { useWeakTopics } from "@/lib/useStudySignals";
+import { useNextExamByCourse, useWeakTopics } from "@/lib/useStudySignals";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md"];
 const SAFE_CODE_RE = /^[A-Za-z0-9._-]+$/;
+
+/** The quiet action buttons on a course row. One string, because there are
+ *  three of them and they must not drift apart. */
+const ROW_ACTION =
+  "rounded-ctl border border-nb-line bg-nb-panel px-3 py-2 text-ctl text-nb-ink transition-colors hover:border-nb-lineHi disabled:opacity-70";
 
 /** Mirrors the vault template's `CS000/course.md` (under the taxonomy's
  *  courses dir — see `useVault().courses_dir`, never a hardcoded folder
@@ -81,7 +94,10 @@ export default function CoursesPanel() {
   const { data: courses, mutate: refreshCourses } = useStudyCourses();
   const { mutate: refreshExams } = useStudyExams();
   const { data: vault } = useVault();
+  const { data: decks } = useFlashcardDecks();
+  const { data: dueSummary } = useDueSummary();
   const weakTopics = useWeakTopics();
+  const examsByCourse = useNextExamByCourse((courses ?? []).map((course) => course.code));
   const { show } = useToast();
   const { confirm, confirmDialog } = useConfirm();
   // Taxonomy-derived — never hardcode the courses folder name (see corpus.py
@@ -238,96 +254,125 @@ export default function CoursesPanel() {
 
   return (
     <>
-      <Panel
-        label="COURSES"
+      <NotebookPanel
+        heading="Courses"
         headerRight={
-          <Button
-            variant="ghost"
+          <button
+            type="button"
             aria-expanded={showAddForm}
             onClick={() => setShowAddForm((v) => !v)}
-            className="hover:text-[var(--ac)]"
+            className="text-ctl text-[var(--ac)] transition-opacity hover:opacity-80"
           >
-            + ADD COURSE
-          </Button>
+            ＋ Add course
+          </button>
         }
       >
         {showAddForm && (
           <form
             onSubmit={addCourse}
-            className="mb-4 flex flex-wrap items-center gap-2 border border-dashed border-line px-3 py-3"
+            className="mb-4 flex flex-wrap items-center gap-2 rounded-tile border border-dashed border-nb-line p-3"
           >
             <input
               value={addCode}
               onChange={(event) => setAddCode(event.target.value)}
               placeholder="CODE (e.g. CS301)"
               aria-label="Course code"
-              className="w-36 border border-line bg-sunken px-2 py-1.5 font-mono text-label placeholder:text-ink-faint focus:border-lineHi"
+              className="w-36 rounded-ctl border border-nb-line bg-nb-void px-3 py-2 font-mono text-label text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
             />
             <input
               value={addName}
               onChange={(event) => setAddName(event.target.value)}
               placeholder="Course name"
               aria-label="Course name"
-              className="min-w-0 flex-1 border border-line bg-sunken px-2 py-1.5 text-body placeholder:text-ink-faint focus:border-lineHi"
+              className="min-w-0 flex-1 rounded-ctl border border-nb-line bg-nb-void px-3 py-2 text-body text-nb-ink placeholder:text-nb-faint focus:border-nb-lineHi"
             />
-            <Button
+            <button
               type="submit"
-              size="md"
               disabled={!addCode.trim() || !addName.trim() || creating || !coursesDir}
+              className="rounded-ctl bg-[var(--ac)] px-4 py-2 text-ctl font-semibold text-nb-onAc transition-opacity hover:opacity-90 disabled:opacity-70"
             >
-              {creating ? "ADDING…" : "ADD"}
-            </Button>
+              {creating ? "Adding…" : "Add"}
+            </button>
           </form>
         )}
 
         {visible.length === 0 && (
-          <p className="text-body text-ink-faint">
+          <p className="text-body text-nb-faint">
             No courses yet — create a folder like{" "}
-            <span className="font-mono text-xs">{coursesDir ?? "…"}/CS201/</span> with a{" "}
-            <span className="font-mono text-xs">course.md</span> in your vault.
+            <span className="font-mono text-label text-nb-body">{coursesDir ?? "…"}/CS201/</span>{" "}
+            with a <span className="font-mono text-label text-nb-body">course.md</span> in your
+            vault.
           </p>
         )}
 
-        <div className="space-y-3">
+        <div className="flex flex-col gap-2.5">
           {visible.map((course) => {
             const chips = weakTopics.filter((topic) => topic.course === course.code).slice(0, 4);
+            const courseDecks = (decks ?? []).filter((deck) => deck.course === course.code);
+            const dueHere = (dueSummary?.decks ?? [])
+              .filter((deck) => deck.course === course.code)
+              .reduce((sum, deck) => sum + deck.due, 0);
+            const examIn = examsByCourse[course.code];
+            const empty = course.materials === 0 && course.notes === 0;
+            const dragging = dragOverCourse === course.code;
             return (
               <div
                 key={course.code}
                 onDragOver={(event) => handleDragOver(course.code, event)}
                 onDragLeave={(event) => handleDragLeave(course.code, event)}
                 onDrop={(event) => handleDrop(course.code, event)}
-                className={`border p-3 transition-colors ${
-                  dragOverCourse === course.code ? "border-[var(--ac)] bg-[var(--ac-bg)]" : "border-line hover:border-lineHi"
+                className={`rounded-tile border p-4 transition-colors ${
+                  dragging
+                    ? "border-[var(--ac)] bg-nb-acBg"
+                    : empty
+                      ? "border-dashed border-nb-line"
+                      : "border-nb-line bg-nb-raised hover:border-nb-lineHi"
                 }`}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="flex items-center gap-1.5 font-mono text-meta uppercase tracking-wide text-ink-faint">
-                      {course.code}
-                    </p>
-                    <p className="truncate text-lead font-medium text-ink-bright">{course.title}</p>
-                  </div>
+                <div className="flex flex-wrap items-baseline gap-2.5">
+                  <span className="font-mono text-meta font-semibold tracking-[0.06em] text-[var(--ac)]">
+                    {course.code}
+                  </span>
+                  <span className="min-w-0 truncate text-lead font-semibold text-nb-ink">
+                    {course.title}
+                  </span>
+                  {examIn !== undefined && (
+                    <span className="rounded-full bg-nb-dangerBg px-2.5 py-0.5 text-meta font-semibold text-danger">
+                      {examIn === 0
+                        ? "Exam today"
+                        : `Exam in ${examIn} day${examIn === 1 ? "" : "s"}`}
+                    </span>
+                  )}
                   <button
                     aria-label={`Delete ${course.code}`}
                     onClick={() => void removeCourse(course.code)}
-                    className="shrink-0 font-mono text-xs text-ink-faint transition-colors hover:text-danger"
+                    className="ml-auto shrink-0 text-nb-faint transition-colors hover:text-danger"
                   >
                     ×
                   </button>
                 </div>
-                <p className="mt-1 font-mono text-label text-ink-faint">
-                  {course.materials} material{course.materials === 1 ? "" : "s"} · {course.notes} note
-                  {course.notes === 1 ? "" : "s"}
-                  {dragOverCourse === course.code && <span className="ml-2 text-[var(--ac)]">— drop to upload</span>}
+
+                <p className="mt-1.5 text-ctl text-nb-body">
+                  {empty
+                    ? "No materials yet — drop a lecture here and Argus can write a guide, a deck or an exam from it."
+                    : [
+                        `${course.materials} material${course.materials === 1 ? "" : "s"}`,
+                        `${course.notes} note${course.notes === 1 ? "" : "s"}`,
+                        courseDecks.length > 0 &&
+                          `${courseDecks.length} deck${courseDecks.length === 1 ? "" : "s"}`,
+                        dueHere > 0 && `${dueHere} card${dueHere === 1 ? "" : "s"} due`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                  {dragging && <span className="ml-2 text-[var(--ac)]">— drop to upload</span>}
                 </p>
 
                 {chips.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
                     {chips.map((chip) => (
                       <span
                         key={chip.topic}
-                        className="border border-line px-1.5 py-0.5 font-mono text-meta text-ink-muted"
+                        className="rounded-full border border-nb-dangerLine px-2.5 py-0.5 text-label text-danger"
                       >
                         {chip.topic}
                       </span>
@@ -335,7 +380,7 @@ export default function CoursesPanel() {
                   </div>
                 )}
 
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+                <div className="mt-3.5 flex flex-wrap items-center gap-2">
                   <input
                     ref={(el) => {
                       fileInputs.current[course.code] = el;
@@ -352,36 +397,48 @@ export default function CoursesPanel() {
                   <button
                     onClick={() => fileInputs.current[course.code]?.click()}
                     disabled={uploading !== null}
-                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
+                    className={
+                      empty
+                        ? "rounded-ctl border border-[var(--ac)] bg-nb-acBg px-3 py-2 text-ctl font-semibold text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-70"
+                        : ROW_ACTION
+                    }
                   >
-                    {uploading === course.code ? "UPLOADING…" : "+ FILES"}
+                    {uploading === course.code
+                      ? "Uploading…"
+                      : empty
+                        ? "Add your first file"
+                        : "Add files"}
                   </button>
-                  <button
-                    onClick={() => generate("guide", course.code)}
-                    disabled={busy("guide", course.code) || course.materials === 0}
-                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
-                  >
-                    {busy("guide", course.code) ? "WRITING…" : "GUIDE"}
-                  </button>
-                  <button
-                    onClick={() => generate("exam", course.code)}
-                    disabled={busy("exam", course.code) || course.materials === 0}
-                    className="border border-line px-2.5 py-1 font-mono text-meta uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:opacity-70"
-                  >
-                    {busy("exam", course.code) ? "GENERATING…" : "+ EXAM"}
-                  </button>
+                  {!empty && (
+                    <>
+                      <button
+                        onClick={() => generate("guide", course.code)}
+                        disabled={busy("guide", course.code) || course.materials === 0}
+                        className={ROW_ACTION}
+                      >
+                        {busy("guide", course.code) ? "Writing…" : "Study guide"}
+                      </button>
+                      <button
+                        onClick={() => generate("exam", course.code)}
+                        disabled={busy("exam", course.code) || course.materials === 0}
+                        className={ROW_ACTION}
+                      >
+                        {busy("exam", course.code) ? "Generating…" : "Practice exam"}
+                      </button>
+                    </>
+                  )}
                   <Link
                     href={`/notebook/course/${encodeURIComponent(course.code)}`}
-                    className="ml-auto font-mono text-meta uppercase tracking-wide text-[var(--ac)] transition-colors hover:opacity-80"
+                    className="ml-auto text-ctl font-semibold text-[var(--ac)] transition-opacity hover:opacity-80"
                   >
-                    HUB →
+                    Open hub →
                   </Link>
                 </div>
               </div>
             );
           })}
         </div>
-      </Panel>
+      </NotebookPanel>
       {confirmDialog}
     </>
   );

@@ -39,6 +39,38 @@ export function useNextExam(): { text: string; days: number } | null {
   return { text: candidates[0].text, days };
 }
 
+/**
+ * The same signal as `useNextExam`, split per course — the countdown pill on a
+ * course card.
+ *
+ * A task carries no course field, so the only honest link is the one a person
+ * already writes by hand: "CS201 midterm" mentions the code. Matched on a word
+ * boundary so `CS20` does not claim `CS201`'s exam, and a task that names no
+ * course simply belongs to none rather than being assigned to the first one.
+ */
+export function useNextExamByCourse(codes: string[]): Record<string, number> {
+  const { data: buckets } = useTasksBoard();
+  if (!buckets || codes.length === 0) return {};
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const soonest: Record<string, number> = {};
+  for (const task of Object.values(buckets).flat()) {
+    if (task.done || !task.due || !EXAM_KEYWORD_RE.test(task.text)) continue;
+    const days = Math.round(
+      (parseLocalDate(task.due).getTime() - today.getTime()) / 86_400_000,
+    );
+    if (days < 0) continue;
+    for (const code of codes) {
+      const mentions = new RegExp(`\\b${code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      if (!mentions.test(task.text)) continue;
+      if (soonest[code] === undefined || days < soonest[code]) soonest[code] = days;
+    }
+  }
+  return soonest;
+}
+
 export interface WeakTopic {
   course: string;
   topic: string;
