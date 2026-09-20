@@ -129,12 +129,26 @@ def _extract_pptx(file_path: Path) -> list[Block]:
 
 
 def _extract_docx(file_path: Path) -> list[Block]:
+    """One block per heading section, with tables kept as Markdown.
+
+    Previously the whole document was one block, which meant tables vanished
+    (a table is not a paragraph) and a claim from page 30 cited the same
+    location as one from page 1. See
+    :mod:`backend.rag.extractors.docx_body`.
+    """
     import docx  # heavy import kept lazy
 
-    paragraphs = [p.text for p in docx.Document(file_path).paragraphs if p.text.strip()]
-    if not paragraphs:
-        return []
-    return [Block(text="\n".join(paragraphs), meta={})]
+    from backend.rag.extractors.docx_body import document_sections
+
+    return [
+        Block(
+            text=text,
+            meta={"section": heading, "extraction": {"method": "text"}}
+            if heading
+            else {"extraction": {"method": "text"}},
+        )
+        for heading, text in document_sections(docx.Document(file_path))
+    ]
 
 
 def _extract_eml(file_path: Path) -> list[Block]:

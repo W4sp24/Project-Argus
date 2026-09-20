@@ -286,6 +286,12 @@ def chunk_blocks(
         for key in ("page", "slide"):
             if key in block.meta:
                 base_meta[key] = block.meta[key]
+        # Flattened to a scalar because chroma metadata values may only be
+        # str/int/float/bool -- a nested dict raises at add() time. "" for the
+        # formats that have no notion of one, which is also what every chunk
+        # indexed before this field existed reads as.
+        extraction = block.meta.get("extraction") or {}
+        base_meta["extract_method"] = str(extraction.get("method") or "")
 
         pieces = (
             _sections(block.text)
@@ -298,6 +304,16 @@ def chunk_blocks(
                 if not window.strip():
                     continue
                 text = f"{heading_line}\n{window}" if heading_line else window
-                meta = {**base_meta, "heading": heading, "breadcrumb": breadcrumb}
+                # `seq` is this chunk's position in its own file. Chroma
+                # returns documents in no defined order, so without it there
+                # is no way to put a file back into the order it was written
+                # -- which is what a generator needs in order to walk a deck
+                # from slide 1 rather than from wherever the store started.
+                meta = {
+                    **base_meta,
+                    "heading": heading,
+                    "breadcrumb": breadcrumb,
+                    "seq": len(chunks),
+                }
                 chunks.append(Chunk(text=text, meta=meta))
     return chunks

@@ -52,7 +52,17 @@ EMBED_BATCH = 64
 # inline #tags with frontmatter tags. An index built under version 1 has
 # run-on, heading-less chunk text and misses every inline tag, so it must be
 # rebuilt rather than mixed in with new-shape chunks.
-SCHEMA_VERSION = 2
+#
+# Bumped 2 -> 3 for the extraction recovery: PowerPoint decks now yield their
+# equations, grouped shapes, tables and speaker notes, and image-only PDF
+# pages yield OCR text, so an index built under version 2 holds a *fraction*
+# of what the same files say — the two maths-heavy decks in the author's
+# vault were indexed at 29% and 32% of their real content. chunk.meta also
+# gained `seq` (position within the file, so document order is recoverable
+# from a store that returns rows in none) and `extract_method`. Old chunks
+# have neither and cannot be ordered or attributed, so they must be rebuilt
+# rather than mixed in.
+SCHEMA_VERSION = 3
 _COLLECTION_METADATA = {"hnsw:space": "cosine", "schema_version": SCHEMA_VERSION}
 
 
