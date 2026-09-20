@@ -687,31 +687,56 @@ def grade_card(
     name: str,
     now: datetime | None = None,
 ) -> GradeResult:
-    """Apply an FSRS review to one card and persist the new state."""
+    """Apply an FSRS review to one card and persist the new state.
+
+    Read-modify-write, and therefore transactional. Current FSRS state is
+    derived from the newest review row (``_latest_reviews``), so two grades
+    landing together both read the *same* prior state, both schedule from it,
+    and the second row becomes "latest" — silently discarding the first
+    review's effect on stability and difficulty. The card is then scheduled as
+    though it had been seen once instead of twice.
+
+    That is reachable from the UI: Learn's four choice buttons are all live
+    while a grade is in flight, and its "Mark as correct" path could post a
+    second grade for one answer.
+
+    ``BEGIN IMMEDIATE`` takes the write lock *before* the read, so the state
+    a review schedules from is the state it writes against. WAL plus
+    ``connect()``'s deliberate 30-second busy timeout absorb the contention.
+    """
     _card_row(conn, deck_id, ref)
     at = now or datetime.now(UTC)
-    state = _state_of(_latest_reviews(conn, deck_id).get(ref))
-    try:
-        new_card = scheduler.review(state, name, at)
-    except SchedulerError as exc:
-        raise FlashcardsError(str(exc)) from exc
 
-    conn.execute(
-        "INSERT INTO flashcard_reviews"
-        " (card_id, deck_id, grade, state, step, stability, difficulty, due_at, last_review_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            ref,
-            deck_id,
-            name,
-            int(new_card.state),
-            new_card.step,
-            new_card.stability,
-            new_card.difficulty,
-            new_card.due.isoformat(),
-            new_card.last_review.isoformat() if new_card.last_review else None,
-        ),
-    )
+    # sqlite3 in its default isolation mode opens a deferred transaction on
+    # the first INSERT, which is too late — the SELECT has already happened.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        state = _state_of(_latest_reviews(conn, deck_id).get(ref))
+        try:
+            new_card = scheduler.review(state, name, at)
+        except SchedulerError as exc:
+            raise FlashcardsError(str(exc)) from exc
+
+        conn.execute(
+            "INSERT INTO flashcard_reviews"
+            " (card_id, deck_id, grade, state, step, stability, difficulty, due_at,"
+            " last_review_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ref,
+                deck_id,
+                name,
+                int(new_card.state),
+                new_card.step,
+                new_card.stability,
+                new_card.difficulty,
+                new_card.due.isoformat(),
+                new_card.last_review.isoformat() if new_card.last_review else None,
+            ),
+        )
+    except BaseException:
+        conn.rollback()
+        raise
     conn.commit()
     return scheduler.result_for(new_card, name, at, card_id=ref)
 
