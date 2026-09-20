@@ -224,3 +224,46 @@ def _blank_pdf(pages: int = 1) -> bytes:
     buffer = __import__("io").BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+def test_a_remembered_page_is_not_read_again(tmp_path: Path) -> None:
+    """OCR costs ~7s a page; a reindex must not re-pay it for unchanged text."""
+    pytest.importorskip("pypdfium2")
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(_blank_pdf())
+    store: dict[tuple[str, int], tuple[str, dict]] = {}
+    calls: list[int] = []
+
+    def policy() -> OcrPolicy:
+        return _policy(
+            calls=calls,
+            cache_get=lambda key, page: store.get((key, page)),
+            cache_put=lambda key, page, text, meta: store.__setitem__((key, page), (text, meta)),
+        )
+
+    first = extract_blocks(pdf, ocr=policy())
+    assert len(calls) == 1 and len(store) == 1
+
+    second = extract_blocks(pdf, ocr=policy())
+    assert len(calls) == 1, "the second pass re-read a page it had already read"
+    assert second[0].text == first[0].text
+    assert second[0].meta["extraction"] == first[0].meta["extraction"]
+
+
+def test_editing_the_file_invalidates_its_remembered_pages(tmp_path: Path) -> None:
+    """The cache keys on content, so nothing has to notice an edit."""
+    pytest.importorskip("pypdfium2")
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(_blank_pdf())
+    store: dict[tuple[str, int], tuple[str, dict]] = {}
+    calls: list[int] = []
+    kwargs = {
+        "calls": calls,
+        "cache_get": lambda key, page: store.get((key, page)),
+        "cache_put": lambda key, page, text, meta: store.__setitem__((key, page), (text, meta)),
+    }
+    extract_blocks(pdf, ocr=_policy(**kwargs))
+    pdf.write_bytes(_blank_pdf(pages=2))
+    extract_blocks(pdf, ocr=_policy(**kwargs))
+
+    assert len(calls) == 3, "one page first time, two after the edit"

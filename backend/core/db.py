@@ -504,6 +504,31 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     PRIMARY KEY (calendar_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start);
+
+-- What a PDF page said, so OCR is paid once rather than once per reindex.
+-- Reading an image-only page costs ~7s (render at 200dpi, then two models),
+-- and ICS26011's four decks are 133 such pages -- fifteen minutes that a
+-- `reindex_all` would otherwise re-spend on unchanged text every time the
+-- chunk schema moves.
+--
+-- Keyed by content hash, not path: a file renamed, moved between courses or
+-- re-uploaded is the same pixels and deserves the same answer, and editing
+-- the PDF changes the hash so the row invalidates itself with nobody
+-- noticing. `method` holds the extraction metadata as JSON rather than a bare
+-- string, so a cached page can still say how confident the read was.
+--
+-- Everything here is derived: dropping the table costs one re-extraction, so
+-- it carries no foreign keys and nothing cascades into it.
+CREATE TABLE IF NOT EXISTS extraction_cache (
+    file_hash   TEXT    NOT NULL,
+    page        INTEGER NOT NULL,
+    text        TEXT    NOT NULL,
+    method      TEXT    NOT NULL DEFAULT '{}',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (file_hash, page)
+);
+CREATE INDEX IF NOT EXISTS idx_extraction_cache_created
+    ON extraction_cache(created_at);
 """
 
 

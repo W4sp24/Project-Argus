@@ -92,6 +92,7 @@ def create_app(
     model_prober: Callable | None = None,
     model_puller: Callable | None = None,
     ingest_job_runner: Callable | None = None,
+    ocr: object | None = None,
 ) -> FastAPI:
     """Build the FastAPI app around the given (or default) settings.
 
@@ -209,9 +210,72 @@ def create_app(
             with _shared_index_lock:
                 if _shared_index is None:
                     _shared_index = make_index_factory(
-                        resolved.db_path.parent / "chroma", taxonomy=resolved.taxonomy
+                        resolved.db_path.parent / "chroma",
+                        taxonomy=resolved.taxonomy,
+                        ocr=ocr if ocr is not None else _default_ocr(),
                     )
         return _shared_index()
+
+    def _default_ocr():
+        """How hard to try on a PDF page that has no text layer.
+
+        This is the composition root for the OCR pass, and it has to be: it is
+        the one place allowed to hold ``rag`` and ``agent`` at the same time.
+        ``rag/`` must not import ``agent/`` -- the dependency runs the other
+        way -- so the vision escalation and the page cache both reach the
+        extractor as plain callables built here.
+
+        ``describe`` is synchronous because ``extract_blocks`` is reached from
+        ``VaultIndex.upsert_file`` on a worker thread inside ``reindex_all``'s
+        loop; ``asyncio.run`` there is the same idiom the study and ingest job
+        bodies already use, and it is safe for the same reason -- a worker
+        thread with no running loop of its own.
+        """
+        from backend.core.db import connect, init_schema
+        from backend.core.extraction_cache import get_page, put_page
+        from backend.rag.extractors.ocr import OcrPolicy
+
+        # A connection per call rather than one held open: these run on the
+        # indexer's worker thread, and sqlite3 connections are not shareable
+        # across threads. `with connect(...)` would be a transaction scope,
+        # not a close, which is why the repo spells this try/finally.
+        def _with_conn(work):
+            conn = connect(resolved.db_path)
+            try:
+                init_schema(conn)
+                return work(conn)
+            finally:
+                conn.close()
+
+        def cache_get(content_hash: str, page: int):
+            return _with_conn(lambda conn: get_page(conn, content_hash, page))
+
+        def cache_put(content_hash: str, page: int, text: str, meta: dict) -> None:
+            _with_conn(lambda conn: put_page(conn, content_hash, page, text, meta))
+
+        def describe(png: bytes, prompt: str) -> str:
+            import asyncio
+
+            from backend.agent.generate import agent_describe_image
+
+            return asyncio.run(
+                agent_describe_image(
+                    png,
+                    prompt,
+                    feature="ocr",
+                    db_path=resolved.db_path,
+                    settings=resolved,
+                )
+            )
+
+        return OcrPolicy(
+            describe=describe,
+            # 0 unless the user asked for it: a fresh install must never
+            # quietly spend tokens transcribing a 400-page scan.
+            max_vision_pages=resolved.ocr_vision_pages,
+            cache_get=cache_get,
+            cache_put=cache_put,
+        )
 
     def _default_generator(feature: str) -> Callable:
         """agent_generate bound to a feature label + db so usage rows attribute.

@@ -44,6 +44,7 @@ from backend.agent.adapters import (
     ToolSpec,
     ToolStarted,
     UsageReported,
+    encode_image,
     flatten_tool_result,
     require_user_turn,
     summarize_tool_result,
@@ -113,10 +114,17 @@ def to_gemini_tools(tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
 
 def to_gemini_contents(messages: Sequence[Message]) -> list[dict[str, Any]]:
     """Render the conversation as ``contents``; ``assistant`` becomes ``model``."""
-    return [
-        {"role": "model" if m.role == "assistant" else "user", "parts": [{"text": m.text}]}
-        for m in messages
-    ]
+    contents: list[dict[str, Any]] = []
+    for message in messages:
+        parts: list[dict[str, Any]] = [
+            {"inlineData": {"mimeType": "image/png", "data": encode_image(png)}}
+            for png in message.images
+        ]
+        parts.append({"text": message.text})
+        contents.append(
+            {"role": "model" if message.role == "assistant" else "user", "parts": parts}
+        )
+    return contents
 
 
 @dataclass

@@ -52,12 +52,15 @@ def _extract_pdf(file_path: Path, ocr: OcrPolicy | None = None) -> list[Block]:
     # A one-element list so read_page_image can spend from it: the vision cap
     # is per document, not per page.
     budget = [ocr.max_vision_pages if ocr else 0]
+    # Computed at most once per file, and only when something actually needs
+    # reading: hashing every PDF on every reindex would be a cost of its own.
+    digest: list[str] = []
     with pdfplumber.open(file_path) as pdf:
         for number, page in enumerate(pdf.pages, start=1):
             text = (page.extract_text() or "").strip()
             meta: dict[str, Any] = {"page": number, "extraction": {"method": "text"}}
             if ocr is not None and page_needs_ocr(text, min_chars=ocr.min_native_chars):
-                text, method = _read_page_image(file_path, number - 1, ocr, budget)
+                text, method = _read_page_image(file_path, number, ocr, budget, digest)
                 meta["extraction"] = method
             if text:
                 blocks.append(Block(text=text, meta=meta))
@@ -65,17 +68,33 @@ def _extract_pdf(file_path: Path, ocr: OcrPolicy | None = None) -> list[Block]:
 
 
 def _read_page_image(
-    file_path: Path, index: int, ocr: OcrPolicy, budget: list[int]
+    file_path: Path, page: int, ocr: OcrPolicy, budget: list[int], digest: list[str]
 ) -> tuple[str, dict[str, Any]]:
-    """Render and read one page, degrading to silence if anything fails."""
-    from backend.rag.extractors.ocr import read_page_image, render_page
+    """Render and read one 1-based page, degrading to silence if it fails."""
+    from backend.rag.extractors.ocr import file_digest, read_page_image, render_page
+
+    if (ocr.cache_get or ocr.cache_put) and not digest:
+        digest.append(file_digest(file_path))
+    key = digest[0] if digest else ""
+
+    if ocr.cache_get and key:
+        remembered = ocr.cache_get(key, page)
+        if remembered is not None:
+            return remembered
 
     try:
-        png = render_page(file_path, index, dpi=ocr.dpi)
+        png = render_page(file_path, page - 1, dpi=ocr.dpi)
     except Exception as exc:  # noqa: BLE001 - one bad page must not stop the file
-        logger.warning("failed to render %s page %s: %s", file_path, index + 1, exc)
+        logger.warning("failed to render %s page %s: %s", file_path, page, exc)
         return "", {"method": "none"}
-    return read_page_image(png, ocr, vision_budget=budget)
+
+    text, method = read_page_image(png, ocr, vision_budget=budget)
+    # A page that read as nothing is still worth remembering: it is usually a
+    # genuinely blank or purely pictorial page, and re-deriving that costs the
+    # same seven seconds as re-deriving real text.
+    if ocr.cache_put and key and method.get("method") != "none":
+        ocr.cache_put(key, page, text, method)
+    return text, method
 
 
 def _extract_pptx(file_path: Path) -> list[Block]:

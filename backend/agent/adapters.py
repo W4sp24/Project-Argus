@@ -171,6 +171,19 @@ class Message:
 
     role: Literal["user", "assistant"]
     text: str
+    #: PNG bytes to send alongside the text. Empty for every conversational
+    #: turn; used by the OCR escalation, which hands a model a rendered page
+    #: that local OCR could not read. Each provider spells an image block
+    #: differently, so the conversion lives in the adapters and this stays the
+    #: one provider-agnostic shape.
+    images: tuple[bytes, ...] = ()
+
+
+def encode_image(png: bytes) -> str:
+    """Base64 a PNG for the providers, all three of which want it that way."""
+    import base64
+
+    return base64.b64encode(png).decode("ascii")
 
 
 def require_user_turn(messages: Sequence[Message]) -> Sequence[Message]:

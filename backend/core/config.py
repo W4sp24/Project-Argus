@@ -99,6 +99,12 @@ class Settings:
     # a half-staged cross-encoder model fails hard instead of degrading), so
     # it must default to closed rather than silently on for every install.
     rerank_enabled: bool = False
+    #: How many pages per document may be escalated from local OCR to a vision
+    #: model. Zero -- off -- because escalation spends tokens per page, and a
+    #: first ingest of a 400-page scan must never do that on a default anyone
+    #: did not choose. Local OCR is unaffected: it runs whenever the engine is
+    #: installed, offline and free.
+    ocr_vision_pages: int = 0
 
     @classmethod
     def load(cls, env_file: Path | None = None) -> Settings:
@@ -118,6 +124,7 @@ class Settings:
             external_port=_parse_int(values.get("ARGUS_EXTERNAL_PORT"), DEFAULT_EXTERNAL_PORT),
             external_base_url=values.get("ARGUS_EXTERNAL_BASE_URL", "").strip(),
             rerank_enabled=_parse_bool(values.get("ARGUS_RAG_RERANK"), False),
+            ocr_vision_pages=max(0, _parse_int(values.get("ARGUS_OCR_VISION_PAGES"), 0)),
         )
 
     @property

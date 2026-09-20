@@ -106,6 +106,13 @@ OcrEngine = Callable[[bytes], OcrResult]
 Describe = Callable[[bytes, str], str]
 
 
+#: Looks up a remembered page, or stores one. Injected for the same reason
+#: ``describe`` is: ``rag/`` has no database connection and should not grow
+#: one for a cache.
+CacheGet = Callable[[str, int], "tuple[str, dict] | None"]
+CachePut = Callable[[str, int, str, dict], None]
+
+
 @dataclass(frozen=True)
 class OcrPolicy:
     """Whether, and how hard, to try to read an image-only page.
@@ -121,6 +128,8 @@ class OcrPolicy:
     engine: OcrEngine | None = None
     describe: Describe | None = None
     max_vision_pages: int = 0
+    cache_get: CacheGet | None = None
+    cache_put: CachePut | None = None
 
 
 def page_needs_ocr(native_text: str, *, min_chars: int = MIN_NATIVE_CHARS) -> bool:
@@ -192,6 +201,19 @@ def default_engine() -> OcrEngine | None:
         )
 
     return run
+
+
+def file_digest(path: Path) -> str:
+    """A content hash for one file, used as the extraction cache's key.
+
+    Re-exported from :mod:`backend.core.extraction_cache` so that callers in
+    ``rag/`` have one import for the whole OCR path; ``core/`` is platform, so
+    depending on it does not bend the layering the way importing a feature
+    would.
+    """
+    from backend.core.extraction_cache import file_hash
+
+    return file_hash(path)
 
 
 def render_page(path: Path, index: int, *, dpi: int = DEFAULT_DPI) -> bytes:

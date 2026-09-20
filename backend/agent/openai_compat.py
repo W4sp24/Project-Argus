@@ -41,6 +41,7 @@ from backend.agent.adapters import (
     ToolStarted,
     UsageReported,
     describe_arguments,
+    encode_image,
     flatten_tool_result,
     is_local_endpoint,
     require_user_turn,
@@ -160,6 +161,27 @@ def parse_tool_arguments(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _to_openai(message: Message) -> dict[str, Any]:
+    """One turn as OpenAI content. Plain text stays a plain string.
+
+    A bare string is not merely tidier: several OpenAI-compatible servers
+    (Ollama among them) reject the list form for a text-only turn, so sending
+    it unconditionally would break every local model to support a feature they
+    mostly cannot do anyway.
+    """
+    if not message.images:
+        return {"role": message.role, "content": message.text}
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{encode_image(png)}"},
+        }
+        for png in message.images
+    ]
+    blocks.append({"type": "text", "text": message.text})
+    return {"role": message.role, "content": blocks}
+
+
 @dataclass
 class OpenAICompatAdapter:
     """Runs the chat+tool-calling loop against any OpenAI-compatible endpoint."""
@@ -235,7 +257,7 @@ class OpenAICompatAdapter:
         conversation: list[dict[str, Any]] = []
         if system_prompt:
             conversation.append({"role": "system", "content": system_prompt})
-        conversation.extend({"role": m.role, "content": m.text} for m in messages)
+        conversation.extend(_to_openai(m) for m in messages)
 
         by_name = {spec.name: spec for spec in tools}
         totals = {"input_tokens": 0, "output_tokens": 0}

@@ -21,6 +21,7 @@ from typing import Any
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.rag.chunk import Chunk, chunk_blocks
 from backend.rag.extract import extract_blocks
+from backend.rag.extractors.ocr import OcrPolicy
 from backend.vault.links import LinkIndex, build_link_index
 from backend.vault.paths import is_indexable
 
@@ -84,9 +85,20 @@ class ReindexResult:
 class VaultIndex:
     """Persistent local index over one vault. Heavy deps load lazily."""
 
-    def __init__(self, db_dir: Path, *, taxonomy: Taxonomy | None = None) -> None:
+    def __init__(
+        self,
+        db_dir: Path,
+        *,
+        taxonomy: Taxonomy | None = None,
+        ocr: OcrPolicy | None = None,
+    ) -> None:
         self._db_dir = db_dir
         self._taxonomy = taxonomy or active_taxonomy()
+        # How hard to try on a PDF page with no text layer. None keeps the
+        # behaviour every caller had before OCR existed: such a page is
+        # simply unread. Built by backend.main, which is one of the three
+        # modules allowed to know about every layer at once.
+        self._ocr = ocr
         self._model: Any = None
         self._collection: Any = None
         # `all_chunks()`/`bm25()` cache: a full `collection.get()` of every
@@ -194,7 +206,7 @@ class VaultIndex:
         file_path = vault_path / rel_path
         if not file_path.is_file():
             return 0
-        blocks = extract_blocks(file_path, errors=errors)
+        blocks = extract_blocks(file_path, errors=errors, ocr=self._ocr)
         chunks = chunk_blocks(blocks, rel_path, taxonomy=self._taxonomy)
         if not chunks:
             return 0
@@ -356,7 +368,10 @@ class VaultIndex:
 
 
 def make_index_factory(
-    db_dir: Path, *, taxonomy: Taxonomy | None = None
+    db_dir: Path,
+    *,
+    taxonomy: Taxonomy | None = None,
+    ocr: OcrPolicy | None = None,
 ) -> Callable[[], VaultIndex]:
     """A zero-arg callable handing out **one** :class:`VaultIndex`, built lazily.
 
@@ -387,7 +402,7 @@ def make_index_factory(
         if not holder:
             with lock:
                 if not holder:
-                    holder.append(VaultIndex(db_dir, taxonomy=taxonomy))
+                    holder.append(VaultIndex(db_dir, taxonomy=taxonomy, ocr=ocr))
         return holder[0]
 
     return factory

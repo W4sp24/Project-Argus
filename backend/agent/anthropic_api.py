@@ -35,6 +35,7 @@ from backend.agent.adapters import (
     ToolStarted,
     UsageReported,
     describe_arguments,
+    encode_image,
     flatten_tool_result,
     require_user_turn,
     summarize_tool_result,
@@ -111,6 +112,26 @@ def _parse(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _to_anthropic(message: Message) -> dict[str, Any]:
+    """One turn as Anthropic content. Plain text stays a plain string.
+
+    The image goes *before* the text: the API documents that ordering as
+    giving better results, and it also reads correctly -- here is the page,
+    now here is what to do with it.
+    """
+    if not message.images:
+        return {"role": message.role, "content": message.text}
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": encode_image(png)},
+        }
+        for png in message.images
+    ]
+    blocks.append({"type": "text", "text": message.text})
+    return {"role": message.role, "content": blocks}
+
+
 @dataclass
 class AnthropicAPIAdapter:
     """Runs the chat+tool-calling loop against the Anthropic Messages API."""
@@ -163,9 +184,7 @@ class AnthropicAPIAdapter:
         max_turns: int,
     ) -> AsyncIterator[AgentEvent]:
         require_user_turn(messages)
-        conversation: list[dict[str, Any]] = [
-            {"role": m.role, "content": m.text} for m in messages
-        ]
+        conversation: list[dict[str, Any]] = [_to_anthropic(m) for m in messages]
         by_name = {spec.name: spec for spec in tools}
         totals = {
             "input_tokens": 0,
