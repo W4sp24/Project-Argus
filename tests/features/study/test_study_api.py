@@ -602,3 +602,45 @@ def test_a_generated_note_is_marked_as_written_by_argus(client: TestClient, tmp_
 
     assert by_path["15-Courses/CS201/notes/lecture-01.notes.md"] == "note"
     assert by_path["15-Courses/CS201/notes/my-own-thoughts.md"] is None
+
+
+def test_exam_topics_narrow_the_corpus_rather_than_the_prompt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The defect this fixes.
+
+    `topics` used to be interpolated into one line of the prompt -- "Focus on:
+    Taylor series." -- while the corpus stayed every chunk of the course in
+    store order, truncated to a 60k prefix. Asking for an exam on week 9
+    therefore produced one written from weeks 1-4. Now each topic is a
+    retrieval query, so it decides what the model can see at all.
+    """
+    asked: list[str] = []
+
+    def fake_retrieve(index, query, vault_path, **kwargs):
+        asked.append(query)
+        return [
+            {
+                "text": "Taylor's formula with integral remainder",
+                "meta": {"path": "wk9.pdf", "course": "CS201", "slide": 20, "seq": 0},
+            }
+        ]
+
+    monkeypatch.setattr("backend.rag.select.retrieve", fake_retrieve)
+
+    vault = tmp_path / "vault"
+    (vault / "15-Courses" / "CS201" / "materials").mkdir(parents=True)
+    (vault / "15-Courses" / "CS201" / "course.md").write_text("# CS201\n", encoding="utf-8")
+    app = create_app(
+        Settings(_vault_path=vault), generator=fake_generator, index_factory=FakeIndex
+    )
+    response = TestClient(app).post(
+        "/api/study/exam",
+        json={"course": "CS201", "topics": "Taylor series, Rolle's theorem", "n": 2},
+    )
+
+    assert response.status_code in (200, 422), response.text
+    assert asked == ["Taylor series", "Rolle's theorem"], (
+        "each topic must be searched on its own — one long query matches "
+        "passages vaguely about both and strongly about neither"
+    )

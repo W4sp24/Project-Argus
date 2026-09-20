@@ -5,6 +5,7 @@ The generator (agent) and vault index are injected so tests run with fakes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import sqlite3
@@ -22,7 +23,6 @@ from backend.features.ingest import store
 from backend.features.study.corpus import (
     CourseInfo,
     CourseSourceInfo,
-    course_corpus,
     course_sources,
     courses,
 )
@@ -35,6 +35,7 @@ from backend.features.study.practice_exam import (
     generate_practice_exam,
 )
 from backend.features.study.study_guide import generate_study_guide
+from backend.rag.select import CorpusSelection, select_corpus, topic_queries
 from backend.vault.errors import raise_http
 from backend.vault.writer import WriterError, WriterForbidden, save_ingest_file
 
@@ -238,17 +239,38 @@ def build_study_router(
         ).start()
         return {"path": rel_path, "status": "saved, indexing in background"}
 
-    def _corpus_for(course: str, sources: list[str] | None) -> list[dict[str, Any]]:
+    async def _corpus_for(
+        course: str, sources: list[str] | None, topics: str | None = None
+    ) -> CorpusSelection:
         """The chunks a generation should read, or the reason there are none.
 
         Worth its own error rather than reusing the generators' "no indexed
         material for course X — upload to materials/ first": with a selection
         in play that sentence is simply wrong, and it sends the user off to
         upload a file they already have.
+
+        ``topics`` becomes retrieval queries rather than a sentence in the
+        prompt. Before this, "focus on Taylor series" narrowed nothing: the
+        corpus was still every chunk of the course in store order, truncated
+        to a 60k prefix, so an exam on week 9 was written from weeks 1-4.
+
+        Off the event loop because the selection reads the whole collection
+        (and, with a query, runs the embedding model). This handler is
+        ``async``, so doing that inline blocked every other request for the
+        duration -- which is the reason ``agent/runtime.py`` already
+        ``to_thread``s its own call into retrieval.
         """
-        corpus = course_corpus(index_factory(), course, sources)
-        if corpus or sources is None:
-            return corpus
+        selection = await asyncio.to_thread(
+            select_corpus,
+            index_factory(),
+            course=course,
+            paths=sources,
+            queries=topic_queries(topics),
+            vault_path=settings.vault_path,
+            taxonomy=settings.taxonomy,
+        )
+        if selection.chunks or sources is None:
+            return selection
         if not sources:
             raise HTTPException(
                 status_code=422,
@@ -311,7 +333,8 @@ def build_study_router(
         # Read here, not in the job, on purpose: "none of the selected sources
         # are indexed" is a 422 about *this request*, and answering it with a
         # 202 and a job that fails a minute later is strictly worse.
-        corpus = _corpus_for(course, request.sources)
+        selection = await _corpus_for(course, request.sources)
+        corpus = selection.chunks
         if request.background:
             job_id = _accept(
                 "guide",
@@ -346,7 +369,8 @@ def build_study_router(
     @router.post("/exam")
     async def exam(request: ExamRequest) -> Any:
         course = SAFE_NAME_RE.sub("", request.course)
-        corpus = _corpus_for(course, request.sources)
+        selection = await _corpus_for(course, request.sources, request.topics)
+        corpus = selection.chunks
         if request.background:
             job_id = _accept(
                 "exam",

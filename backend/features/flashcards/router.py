@@ -117,6 +117,10 @@ class GenerateDeckRequest(BaseModel):
     #: The SOURCES-rail selection. `None` means the whole course, which is what
     #: a caller with no rail (the Notebook overview) sends.
     sources: list[str] | None = None
+    #: Free-text topics to aim the deck at. These become retrieval queries,
+    #: not a sentence in the prompt, so "Taylor series" narrows which chunks
+    #: the model ever sees rather than asking it to prefer some of them.
+    topics: str | None = None
     model: str | None = None
     n: int = 20
     title: str | None = None
@@ -190,7 +194,9 @@ def build_flashcards_router(
     def _fail(exc: FlashcardsError, status: int) -> HTTPException:
         return HTTPException(status_code=status, detail=str(exc))
 
-    def _corpus_or_422(course: str, sources: list[str] | None) -> list[dict[str, Any]]:
+    def _corpus_or_422(
+        course: str, sources: list[str] | None, topics: str | None = None
+    ) -> list[dict[str, Any]]:
         """The chunks a generation should read, or the reason there are none.
 
         The same guard `study/router.py::_corpus_for` puts in front of the same
@@ -206,7 +212,13 @@ def build_flashcards_router(
         raise, phrased for that case.
         """
         assert corpus_for is not None  # guarded by the caller's 503
-        corpus = corpus_for(course, sources)
+        try:
+            corpus = corpus_for(course, sources, topics)
+        except TypeError:
+            # A two-argument corpus provider -- every test fake, and the shape
+            # this took before topics scoped retrieval. Same fallback idiom as
+            # `_bind_model` above.
+            corpus = corpus_for(course, sources)
         if corpus or sources is None:
             return corpus
         if not sources:
@@ -283,7 +295,7 @@ def build_flashcards_router(
             generate.validate_options(request.difficulty, styles)
         except FlashcardsError as exc:
             raise _fail(exc, 422) from exc
-        corpus = _corpus_or_422(request.course, request.sources)
+        corpus = _corpus_or_422(request.course, request.sources, request.topics)
         # Read off the corpus, not off `request.sources`: `None` there means the
         # whole course and names no files at all, and a path the caller ticked
         # may have no indexed chunks. The corpus is what will actually be read,

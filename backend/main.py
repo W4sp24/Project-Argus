@@ -38,10 +38,10 @@ from backend.features.notes.router import build_notes_router
 from backend.features.quick_links.router import build_quick_links_router
 from backend.features.review.router import build_review_router
 from backend.features.search.router import build_search_router
-from backend.features.study.corpus import course_corpus
 from backend.features.study.router import build_study_router
 from backend.features.system.router import build_system_router
 from backend.features.tasks.router import build_tasks_router
+from backend.rag.select import select_corpus, topic_queries
 
 logger = logging.getLogger("argus.rag")
 
@@ -342,7 +342,14 @@ def create_app(
             # `index` is the factory, not an instance -- the study router calls it
             # the same way. Calling it per request is what keeps a test's fake
             # index injectable.
-            lambda course, sources: course_corpus(index(), course, sources),
+            lambda course, sources, topics=None: select_corpus(
+                index(),
+                course=course,
+                paths=sources,
+                queries=topic_queries(topics),
+                vault_path=resolved.vault_path,
+                taxonomy=resolved.taxonomy,
+            ).chunks,
             job_runner=ingest_job_runner,
         )
     )
