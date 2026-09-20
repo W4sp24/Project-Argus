@@ -20,6 +20,7 @@ import os
 import sys
 
 from PyInstaller.utils.hooks import (
+    collect_all,
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
@@ -268,6 +269,32 @@ binaries += collect_dynamic_libs("torch")
 datas += collect_data_files("pdfminer")  # cmap tables; without them CJK PDFs raise
 datas += collect_data_files("pptx")  # default template
 datas += collect_data_files("docx")  # default template
+
+# --- OCR for image-only PDF pages ------------------------------------------
+# collect_all, not a hidden import: onnxruntime loads onnxruntime_pybind11_state
+# from a DLL that static analysis never sees, and a bare hiddenimports entry
+# freezes cleanly and then raises ImportError the first time a user scans a
+# slide deck. RapidOCR's detection/recognition/classification weights are
+# package data of the same kind -- without them the import succeeds and the
+# first call dies on a missing .onnx.
+#
+# Both are wrapped, and both use safe_metadata rather than required_metadata,
+# because backend/rag/extractors/ocr.py treats an absent engine as a logged
+# degradation: a build that froze these wrongly should lose OCR, not fail to
+# start. desktop/tests/smoke_backend.py asserts the frozen binary can still
+# import the engine, so a mis-frozen build fails the build rather than a
+# user's first scan.
+for _ocr_package in ("onnxruntime", "rapidocr_onnxruntime"):
+    try:
+        _ocr_datas, _ocr_binaries, _ocr_hidden = collect_all(_ocr_package)
+    except Exception:  # noqa: BLE001 - the [rag] extra may not be installed
+        continue
+    datas += _ocr_datas
+    binaries += _ocr_binaries
+    hiddenimports += _ocr_hidden
+datas += safe_metadata("onnxruntime")
+datas += safe_metadata("rapidocr-onnxruntime")
+binaries += collect_dynamic_libs("pypdfium2")
 
 # --- claude-agent-sdk ------------------------------------------------------
 datas += collect_data_files("claude_agent_sdk")
