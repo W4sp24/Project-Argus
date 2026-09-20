@@ -391,10 +391,14 @@ def test_finished_jobs_do_not_accumulate_forever(conn: sqlite3.Connection) -> No
     """
     from backend.features.ingest.store import JOB_RETENTION_CAP
 
-    ids = [
-        store.create_job(conn, target="t", summary_prompt="", filenames=["a.md"])
-        for _ in range(JOB_RETENTION_CAP + 5)
-    ]
+    # Finished, as the test's name says: pruning deliberately exempts active
+    # rows now, because a long generation older than the cap used to be
+    # deleted underneath its own worker.
+    ids = []
+    for _ in range(JOB_RETENTION_CAP + 5):
+        job_id = store.create_job(conn, target="t", summary_prompt="", filenames=["a.md"])
+        store.finish_job(conn, job_id, status="ok")
+        ids.append(job_id)
 
     kept = conn.execute("SELECT COUNT(*) AS n FROM ingest_jobs").fetchone()["n"]
     assert kept == JOB_RETENTION_CAP
@@ -407,3 +411,23 @@ def test_finished_jobs_do_not_accumulate_forever(conn: sqlite3.Connection) -> No
     # because connect() turns on PRAGMA foreign_keys.
     items = conn.execute("SELECT COUNT(*) AS n FROM ingest_job_items").fetchone()["n"]
     assert items == JOB_RETENTION_CAP
+
+
+def test_a_running_job_is_never_pruned_from_under_its_own_worker(conn) -> None:
+    """The silent one.
+
+    A generation older than JOB_RETENTION_CAP newer jobs was deleted while it
+    was still running. Its worker then found no item, logged "job %s vanished
+    before it ran" and returned -- after the model call had already been paid
+    for, and with nothing in the UI to say so.
+    """
+    from backend.features.ingest.store import JOB_RETENTION_CAP
+
+    long_runner = store.create_job(conn, target="t", summary_prompt="", filenames=["a.md"])
+    store.start_job(conn, long_runner)
+
+    for _ in range(JOB_RETENTION_CAP + 5):
+        job_id = store.create_job(conn, target="t", summary_prompt="", filenames=["b.md"])
+        store.finish_job(conn, job_id, status="ok")
+
+    assert store.get_job(conn, long_runner) is not None

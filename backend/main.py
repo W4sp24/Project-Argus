@@ -277,6 +277,48 @@ def create_app(
             cache_put=cache_put,
         )
 
+    def _default_job_pool() -> Callable[[Callable[[], None]], None]:
+        """One bounded pool for every long-running job in the process.
+
+        Each router carried its own ``threading.Thread(daemon=True).start()``,
+        which is unbounded by construction: a job is a whole pipeline --
+        its own SQLite connection, its own asyncio event loop, an embedding
+        model or a provider call, and a prompt of up to 60,000 characters held
+        for the duration. Nothing capped how many ran at once, so a user who
+        clicked through a course could have a dozen alive together.
+
+        The slot groups in ``ingest.store`` bound how many jobs of one *kind*
+        are accepted; this bounds how many threads exist at all, including the
+        kinds that hold no slot.
+
+        Sized at the sum of the slot capacities plus headroom for the
+        unslotted kinds, and daemon threads so the pool never delays shutdown
+        -- the same posture the threads it replaces had.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="argus-job")
+
+        def submit(run: Callable[[], None]) -> None:
+            def guarded() -> None:
+                try:
+                    run()
+                except Exception:
+                    # A job body already records its own failure on the job
+                    # row; this is the last resort for one that died before
+                    # it could. Without it the exception is swallowed into a
+                    # Future nobody reads.
+                    logger.exception("job failed outside its own error handling")
+
+            pool.submit(guarded)
+
+        return submit
+
+    # Built once per app, not per router: the whole point is that every
+    # long-running job in the process shares one bounded pool. A test that
+    # injects its own synchronous runner never constructs it.
+    job_runner = ingest_job_runner or _default_job_pool()
+
     def _default_generator(feature: str) -> Callable:
         """agent_generate bound to a feature label + db so usage rows attribute.
 
@@ -319,7 +361,7 @@ def create_app(
             resolved,
             generator or _default_generator("study"),
             index,
-            job_runner=ingest_job_runner,
+            job_runner=job_runner,
         )
     )
     app.include_router(
@@ -327,7 +369,7 @@ def create_app(
             resolved,
             generator or _default_generator("ingest"),
             index,
-            job_runner=ingest_job_runner,
+            job_runner=job_runner,
         )
     )
     app.include_router(build_system_router(resolved, model_prober, model_puller, index))
@@ -350,12 +392,12 @@ def create_app(
                 vault_path=resolved.vault_path,
                 taxonomy=resolved.taxonomy,
             ).chunks,
-            job_runner=ingest_job_runner,
+            job_runner=job_runner,
         )
     )
     app.include_router(build_quick_links_router(resolved))
     app.include_router(build_search_router(resolved, index))
-    app.include_router(build_index_router(resolved, index, job_runner=ingest_job_runner))
+    app.include_router(build_index_router(resolved, index, job_runner=job_runner))
     app.include_router(build_review_router(resolved, planner or _default_planner()))
     app.include_router(build_briefing_router(resolved, briefing_composer or _default_composer()))
     app.include_router(build_insights_router(resolved))

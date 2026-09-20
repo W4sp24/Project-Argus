@@ -313,21 +313,33 @@ def build_study_router(
         return run
 
     def _accept(kind: str, course: str, filename: str, params: dict[str, Any]) -> str:
-        """Write the queued job row for one generation. Returns its id.
+        """Claim a generation slot and write the job row. Returns its id.
 
-        No single-flight check: study generation shares no resource with an
-        ingest or a reindex, and nothing stops two of these from running
-        together -- see ``ingest.store.SLOT_GROUPS``.
+        Generation now holds a slot (``ingest.store.SLOT_GROUPS``), three at a
+        time, and the claim is atomic. Ungrouped, every click spawned a
+        thread: N clicks on GENERATE meant N daemon threads, N connections, N
+        event loops and N concurrent provider calls, each pinning its own 60k
+        prompt.
+
+        A full slot is a 409 rather than a queue, because the Course Hub's
+        buttons show a running state per kind and have nowhere to say
+        "queued behind someone else's course".
         """
         conn = db()
         try:
-            return store.create_job(
+            return store.claim_job(
                 conn,
                 target=settings.taxonomy.course_study(course),
                 filenames=[filename],
                 kind=kind,
                 params=params,
             )
+        except store.SlotBusyError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"already generating — {exc.blocking['kind']} in progress, "
+                "wait for it to finish",
+            ) from exc
         finally:
             conn.close()
 

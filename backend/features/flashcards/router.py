@@ -313,7 +313,7 @@ def build_flashcards_router(
                 source="generated",
                 source_paths=source_paths,
             )
-            job_id = jobstore.create_job(
+            job_id = jobstore.claim_job(
                 conn,
                 target=settings.taxonomy.course_study(request.course),
                 filenames=[f"{request.course} flashcards"],
@@ -328,6 +328,15 @@ def build_flashcards_router(
             )
         except FlashcardsError as exc:
             raise _fail(exc, 422) from exc
+        except jobstore.SlotBusyError as exc:
+            # The deck row is already written and stays: it records what was
+            # asked for, and a deck with no cards is visibly unfinished in a
+            # way a vanished request is not.
+            raise HTTPException(
+                status_code=409,
+                detail=f"already generating — {exc.blocking['kind']} in progress, "
+                "wait for it to finish",
+            ) from exc
         finally:
             conn.close()
 
@@ -414,7 +423,7 @@ def build_flashcards_router(
                 # a real source path, which is what the SOURCES rail badges on.
                 source_paths=[name],
             )
-            job_id = jobstore.create_job(
+            job_id = jobstore.claim_job(
                 conn,
                 target=settings.taxonomy.course_study(course) if course else name,
                 filenames=[name],
@@ -430,6 +439,15 @@ def build_flashcards_router(
             )
         except FlashcardsError as exc:
             raise _fail(exc, 422) from exc
+        except jobstore.SlotBusyError as exc:
+            # The deck row is already written and stays: it records what was
+            # asked for, and a deck with no cards is visibly unfinished in a
+            # way a vanished request is not.
+            raise HTTPException(
+                status_code=409,
+                detail=f"already generating — {exc.blocking['kind']} in progress, "
+                "wait for it to finish",
+            ) from exc
         finally:
             conn.close()
 

@@ -61,18 +61,42 @@ JOB_KINDS = ("ingest", "reindex", "guide", "exam", "relink", "deck")
 #: 'index' group makes them contend, which is what they should always have
 #: done.
 #:
-#: Study generation is deliberately NOT in a group. A guide or an exam is an
-#: LLM call plus a write into the course's ``study/`` folder -- the one
+#: Study generation shares nothing with an ingest -- a guide or an exam is an
+#: LLM call plus a write into the course's ``study/`` folder, the one
 #: sanctioned exception to I1, so it takes no git snapshot -- and it reads its
-#: corpus in the request handler, before the job exists. It shares no resource
-#: with an ingest, and making a user wait for one to run the other would be a
-#: restriction with nothing behind it. A kind absent from this mapping never
-#: blocks and is never blocked.
+#: corpus in the request handler, before the job exists. Making a user wait
+#: for a reindex to write an exam would be a restriction with nothing behind
+#: it, so 'generate' is its own group rather than joining 'index'.
+#:
+#: It *is* a group, though, where it used to be nothing at all. Ungrouped,
+#: every click spawned a thread: N clicks on GENERATE meant N daemon threads,
+#: N SQLite connections, N event loops and N concurrent provider calls, all
+#: pinning their own 60k-character prompt. The old comment reasoned only about
+#: git and chroma and concluded "contends with nothing", which is true of the
+#: vault and false of the machine.
 #:
 #: A relink *is* in the 'index' group, by the same test: it takes one
 #: ``snapshot_vault`` and re-upserts every note it rewrites, so it contends for
 #: the git index and the embedding model exactly as an ingest does.
-SLOT_GROUPS: dict[str, str] = {"ingest": "index", "reindex": "index", "relink": "index"}
+SLOT_GROUPS: dict[str, str] = {
+    "ingest": "index",
+    "reindex": "index",
+    "relink": "index",
+    "guide": "generate",
+    "exam": "generate",
+    "deck": "generate",
+}
+
+#: How many jobs of a group may be active at once.
+#:
+#: 'index' is 1 and always was: one embedding model, one chroma directory, one
+#: ``.git/index.lock``. 'generate' is 3 because generating a guide *and* a
+#: deck at once is a thing the Course Hub deliberately offers -- its three
+#: STUDIO buttons each track their own kind -- while a fourth concurrent
+#: generation is a double-click rather than an intention.
+#:
+#: A kind absent from :data:`SLOT_GROUPS` is still unconstrained.
+SLOT_CAPACITY: dict[str, int] = {"index": 1, "generate": 3}
 
 
 def _slot_peers(kind: str) -> tuple[str, ...]:
@@ -156,20 +180,67 @@ def _item_row(row: sqlite3.Row) -> dict[str, Any]:
 JOB_RETENTION_CAP = 500
 
 
-def _prune(conn: sqlite3.Connection) -> None:
-    """Drop all but the newest ``JOB_RETENTION_CAP`` jobs.
+def _prune(conn: sqlite3.Connection, *, protect: str | None = None) -> None:
+    """Drop all but the newest ``JOB_RETENTION_CAP`` *finished* jobs.
 
     By ``created_at``, then ``rowid`` -- ``id`` is a uuid hex string, so
     ordering by it would delete essentially at random. Items go with their job
     through ``ON DELETE CASCADE``, which `connect()`'s ``PRAGMA foreign_keys=ON``
     makes real.
+
+    Active jobs are exempt, and so is ``protect`` -- the row being created by
+    the call that triggered this prune. Without either, a long-running job
+    older than ``JOB_RETENTION_CAP`` newer ones was deleted underneath its own
+    worker, which then found no item, logged "job %s vanished before it ran"
+    and returned silently, after the model call had already been paid for.
     """
+    keepers = list(ACTIVE_STATUSES)
     conn.execute(
         "DELETE FROM ingest_jobs WHERE id NOT IN ("
         "  SELECT id FROM ingest_jobs ORDER BY created_at DESC, rowid DESC LIMIT ?"
-        ")",
-        (JOB_RETENTION_CAP,),
+        f") AND status NOT IN {_in_clause(tuple(keepers))} AND id IS NOT ?",
+        (JOB_RETENTION_CAP, protect),
     )
+
+
+class SlotBusyError(RuntimeError):
+    """Raised by :func:`claim_job` when the kind's group is already full.
+
+    Carries the blocking job so the route can name it in its 409 rather than
+    saying only that something else is running.
+    """
+
+    def __init__(self, blocking: dict[str, Any]) -> None:
+        self.blocking = blocking
+        super().__init__(f"{blocking.get('kind', 'a job')} {blocking.get('id')} holds the slot")
+
+
+def claim_job(conn: sqlite3.Connection, **kwargs: Any) -> str:
+    """Take the slot and write the job row, atomically, or raise :class:`SlotBusyError`.
+
+    Every route that starts a long job used to do this as two autocommitted
+    statements: ask ``running_job`` whether anything was in the way, then call
+    :func:`create_job`. Two simultaneous requests could both see an empty slot
+    and both create -- so the 409 was advisory, and the thing it was advising
+    against is the `.git/index.lock` race and the doubled embedding-model load
+    that :data:`SLOT_GROUPS` exists to prevent. The desktop shell supervises
+    three processes against one database, so this is not a theoretical window.
+
+    ``BEGIN IMMEDIATE`` takes the write lock before the read, which makes the
+    check and the claim one decision.
+    """
+    kind = str(kwargs.get("kind", "ingest"))
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        blocking = _blocking_row(conn, kind, "*")
+        if blocking is not None:
+            raise SlotBusyError(_job_row(blocking))
+        job_id = create_job(conn, _in_transaction=True, **kwargs)
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+    return job_id
 
 
 def create_job(
@@ -181,6 +252,7 @@ def create_job(
     note_style: str = "",
     kind: str = "ingest",
     params: dict[str, Any] | None = None,
+    _in_transaction: bool = False,
 ) -> str:
     """Record a queued job and one queued item per file. Returns the job id.
 
@@ -208,8 +280,12 @@ def create_job(
         "INSERT INTO ingest_job_items (job_id, filename, stage) VALUES (?, ?, 'queued')",
         [(job_id, name) for name in filenames],
     )
-    _prune(conn)
-    conn.commit()
+    _prune(conn, protect=job_id)
+    # `claim_job` owns the transaction when it calls through here: committing
+    # in the middle of it would release the slot lock before the row it is
+    # protecting is safe.
+    if not _in_transaction:
+        conn.commit()
     return job_id
 
 
@@ -222,12 +298,27 @@ def merge_params(conn: sqlite3.Connection, job_id: str, values: dict[str, Any]) 
     generation's written ``path`` -- written when it finishes. Replacing would
     make the finished row unable to say what was asked for.
     """
-    row = conn.execute("SELECT params FROM ingest_jobs WHERE id = ?", (job_id,)).fetchone()
-    if row is None:
-        return
-    merged = _decode_params(row["params"]) or {}
-    merged.update(values)
-    conn.execute("UPDATE ingest_jobs SET params = ? WHERE id = ?", (json.dumps(merged), job_id))
+    # In one transaction: the SELECT and the UPDATE were separate
+    # autocommitted statements, so two writers folding different keys into one
+    # job's params each read the pre-merge value and the second overwrote the
+    # first. Safe today only because one thread owns a job, which nothing in
+    # the type system says and nothing enforces.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT params FROM ingest_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return
+        merged = _decode_params(row["params"]) or {}
+        merged.update(values)
+        conn.execute(
+            "UPDATE ingest_jobs SET params = ? WHERE id = ?", (json.dumps(merged), job_id)
+        )
+    except BaseException:
+        conn.rollback()
+        raise
     conn.commit()
 
 
@@ -411,14 +502,33 @@ def running_job_id(conn: sqlite3.Connection, kind: str = "ingest") -> str | None
     running, and vice versa; a study generation shares nothing with either and
     gets ``None`` unconditionally. See :data:`SLOT_GROUPS`.
     """
+    row = _blocking_row(conn, kind, "id")
+    return row["id"] if row else None
+
+
+def slot_capacity(kind: str) -> int:
+    """How many jobs of ``kind``'s group may run at once; 0 means unlimited."""
+    group = SLOT_GROUPS.get(kind)
+    return SLOT_CAPACITY.get(group, 1) if group else 0
+
+
+def _blocking_row(conn: sqlite3.Connection, kind: str, columns: str) -> Any:
+    """The job standing in ``kind``'s way, or ``None`` if there is room.
+
+    "In the way" is a question about the *group's* capacity, not about any one
+    job: with three generations allowed at once, the first two block nothing
+    and the oldest of three is what a fourth is waiting behind. For a group of
+    capacity one this is exactly the old behaviour -- the single active peer.
+    """
     peers = _slot_peers(kind)
     if not peers:
         return None
-    row = conn.execute(
-        f"SELECT id FROM ingest_jobs WHERE status IN {_in_clause(ACTIVE_STATUSES)} "
-        f"AND kind IN {_in_clause(peers)} ORDER BY rowid LIMIT 1"
-    ).fetchone()
-    return row["id"] if row else None
+    rows = conn.execute(
+        f"SELECT {columns} FROM ingest_jobs WHERE status IN {_in_clause(ACTIVE_STATUSES)} "
+        f"AND kind IN {_in_clause(peers)} ORDER BY rowid"
+    ).fetchall()
+    capacity = slot_capacity(kind)
+    return rows[0] if len(rows) >= capacity and rows else None
 
 
 def running_job(conn: sqlite3.Connection, kind: str = "ingest") -> dict[str, Any] | None:
@@ -428,13 +538,7 @@ def running_job(conn: sqlite3.Connection, kind: str = "ingest") -> dict[str, Any
     a second reindex trigger is an idempotent no-op that reports the rebuild
     already in flight, while an ingest in the way is a 409.
     """
-    peers = _slot_peers(kind)
-    if not peers:
-        return None
-    row = conn.execute(
-        f"SELECT * FROM ingest_jobs WHERE status IN {_in_clause(ACTIVE_STATUSES)} "
-        f"AND kind IN {_in_clause(peers)} ORDER BY rowid LIMIT 1"
-    ).fetchone()
+    row = _blocking_row(conn, kind, "*")
     return _job_row(row) if row else None
 
 
