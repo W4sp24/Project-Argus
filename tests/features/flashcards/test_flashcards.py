@@ -431,3 +431,56 @@ def test_a_qa_body_with_no_pairs_is_422_rather_than_a_silent_zero(client: TestCl
         json={"text": "just some prose with no pairs", "format": "qa"},
     )
     assert response.status_code == 422
+
+
+# --- mastery and its history ----------------------------------------------
+
+
+def test_a_deck_reports_what_has_been_mastered(client: TestClient) -> None:
+    """The number every progress ring in the Notebook is drawn from."""
+    deck = _imported(client)
+    detail = client.get(f"/api/flashcards/decks/{deck['id']}").json()
+    assert detail["cards"] == 3
+    assert detail["mastered"] == 0
+
+    # Grade one card up until it is scheduled three weeks out.
+    due = client.get(f"/api/flashcards/decks/{deck['id']}/due").json()
+    for _ in range(6):
+        client.post(
+            f"/api/flashcards/decks/{deck['id']}/cards/{due[0]['id']}/grade",
+            json={"grade": "easy"},
+        )
+    assert client.get(f"/api/flashcards/decks/{deck['id']}").json()["mastered"] == 1
+    listed = client.get("/api/flashcards/decks").json()
+    assert listed[0]["mastered"] == 1
+
+
+def test_a_card_carries_its_next_review_over_http(client: TestClient) -> None:
+    deck = _imported(client)
+    before = client.get(f"/api/flashcards/decks/{deck['id']}").json()["card_list"]
+    assert [card["due_at"] for card in before] == [None, None, None]
+    assert [card["state"] for card in before] == [None, None, None]
+
+    due = client.get(f"/api/flashcards/decks/{deck['id']}/due").json()
+    graded = client.post(
+        f"/api/flashcards/decks/{deck['id']}/cards/{due[0]['id']}/grade",
+        json={"grade": "good"},
+    ).json()
+
+    after = client.get(f"/api/flashcards/decks/{deck['id']}").json()["card_list"]
+    reviewed = next(card for card in after if card["ref"] == due[0]["id"])
+    assert reviewed["due_at"] == graded["due_at"]
+    assert reviewed["state"] == graded["state"]
+
+
+def test_history_returns_one_entry_per_day(client: TestClient) -> None:
+    history = client.get("/api/flashcards/history?days=7").json()
+    assert len(history) == 7
+    assert history[-1]["date"] == datetime.now(UTC).date().isoformat()
+    assert all(day["mastered"] == 0 for day in history)
+
+
+def test_history_defaults_to_a_week_and_refuses_nonsense(client: TestClient) -> None:
+    assert len(client.get("/api/flashcards/history").json()) == 7
+    assert client.get("/api/flashcards/history?days=0").status_code == 422
+    assert client.get("/api/flashcards/history?days=500").status_code == 422

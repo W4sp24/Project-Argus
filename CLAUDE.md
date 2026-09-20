@@ -120,21 +120,44 @@ Next rewrite and would work without them.
 
 Enforced by review, invisible to tooling.
 
-- **Named type scale only** — `text-micro`/`meta`/`label`/`body`/`lead`/
-  `title`/`display`. Never `text-[13px]`; ~320 arbitrary sizes were codemodded
-  away.
+- **Named type scale only** — `text-micro`/`meta`/`label`/`ctl`/`body`/`read`/
+  `lead`/`title`/`display`. Never `text-[13px]`; ~320 arbitrary sizes were
+  codemodded away. (`ctl` 14px and `read` 16px belong to the Notebook.)
 - **Never `focus:outline-none`.** Tailwind emits it at specificity (0,2,0),
   which beats the bare `:focus-visible` rule in `globals.css`.
 - `components/ui/Dialog.tsx` is the **only** overlay implementation (focus
   trap, Escape stack, refcounted scroll lock). Use `useConfirm`, never
-  `window.confirm`/`prompt` — none are left.
+  `window.confirm`/`prompt` — none are left. Every overlay portals to
+  `document.body`, so it sits outside `ModeProvider`'s wrapper — which is why
+  that provider also mirrors `--ac`/`--ac-bg` onto `:root`.
 - `.shell` is the one content width; `lg:grid-cols-shell` the one content+rail
   split. Don't reintroduce `max-w-6xl` or a literal `340px`.
-- **The e2e suite is coupled to visible text, uppercase accessible names, and
-  `Panel.tsx`'s `▍` glyph.** Change classes freely; preserve those.
+- **The e2e suite is coupled to visible text and accessible names.** Change
+  classes freely; preserve those. `getByRole` matches names **by substring**,
+  so two controls on one screen must never share one — a deck called "Imported
+  deck" once made its rename button answer to `IMPORT`, and the redesign hit
+  the same trap three more times (`New deck`, `Add card`, `Generate`).
 - Card faces and anything rendering markdown must carry **no `aria-label`** —
   it overrides descendant content, so a screen reader reads LaTeX source
   instead of the MathML KaTeX emits.
+
+**The Notebook has its own skin, and only the Notebook.** `/notebook` is a cool
+slate (`nb.*` in `tailwind.config.ts`) with 8–12px radii (`rounded-ctl`/`tile`/
+`card`) and sentence-case headings; every other mode keeps the violet-black
+terminal surfaces, `Panel.tsx` and its `▍LABEL` eyebrow. The split is a
+`.notebook-skin` wrapper mounted in `app/(dashboard)/notebook/layout.tsx`.
+
+- Notebook components use `nb-*` and `components/notebook/NotebookPanel.tsx`.
+  Everything else uses `void`/`panel`/`line`/`ink` and `components/Panel.tsx`.
+- The radii are named for their role, not their size, because `borderRadius` is
+  **overridden** rather than extended — adding `md`/`lg` back would silently
+  switch on every `rounded-md` written before the scale was flattened.
+- `ui/Button`, `ui/Field`, `ui/SegmentedControl` and the chat components still
+  wear the violet chrome and are shared with other modes. Notebook screens
+  declare their own shapes rather than adding a variant axis to any of them.
+  The Course Hub's chat pane is the one place this is still visible.
+- `npm run a11y:contrast` audits both ramps. `nb.raised` is the binding surface
+  — it is lighter than `nb.panel` and carries the densest metadata.
 
 ## Testing conventions
 

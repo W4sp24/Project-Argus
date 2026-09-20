@@ -247,8 +247,8 @@ test("the course hub shows one pane at a time on a narrow screen", async ({ page
   const tabs = page.getByRole("tablist", { name: "Course hub pane" });
   await expect(tabs).toBeVisible();
 
-  const sources = page.locator("section").filter({ hasText: "▍SOURCES" });
-  const studio = page.locator("section").filter({ hasText: "▍STUDIO" });
+  const sources = page.locator("section").filter({ hasText: "Sources" });
+  const studio = page.locator("section").filter({ hasText: "Make something" });
   await expect(sources).toBeHidden();
 
   await tabs.getByRole("tab", { name: "sources" }).click();

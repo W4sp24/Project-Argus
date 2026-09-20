@@ -1,38 +1,40 @@
 import { EngineTrigger } from "@/components/EnginePicker";
 import PopOutButton from "@/components/notebook/PopOutButton";
 
-function formatToday(): string {
-  return new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
+/**
+ * "Monday, 14 September". Built by hand rather than with a locale string
+ * because the design fixes the order — weekday, day, month, no year — and
+ * `toLocaleDateString` picks day/month order from the locale, so en-US would
+ * silently render "Monday, September 14" instead.
+ */
+function formatToday(now: Date = new Date()): string {
+  const weekday = now.toLocaleDateString("en-US", { weekday: "long" });
+  const month = now.toLocaleDateString("en-US", { month: "long" });
+  return `${weekday}, ${now.getDate()} ${month}`;
 }
 
 /**
- * `// SYS.NOTEBOOK :: {date}` status line (§4). No typed greeting on Notebook
- * pages — Overview is already stat-tile + two-panel dense, and Flashcards /
- * Practice Exam are workspace pages where a re-typing greeting on every mode
- * switch would just be noise (§10: one typewriter interval at a time is a
- * budget, not a mandate to use one everywhere).
+ * The Notebook's page header (Notebook Redesign v2).
  *
- * Carries the same engine trigger as /chat (§7): study guides and practice
+ * Replaces the `// SYS.NOTEBOOK :: {date}` mono status line: inside the
+ * Notebook, mono is reserved for numbers and keys, and a date is a phrase.
+ *
+ * Carries the same engine trigger as /chat: study guides, decks and practice
  * exams are model calls too, and generating a whole exam is exactly where
  * someone wants to pick a cheaper — or a local — model deliberately.
  */
 export default function NotebookStatusLine({ title }: { title: string }) {
   return (
-    <header className="mb-6 animate-rise">
-      <p className="eyebrow mb-2">{`// SYS.NOTEBOOK :: ${formatToday()}`}</p>
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="min-w-0 flex-1 font-mono text-display font-semibold tracking-tight text-ink-bright">
+    <header className="mb-6 flex animate-rise flex-wrap items-end gap-4">
+      <div className="min-w-0 flex-1">
+        <p className="mb-1.5 text-label text-nb-faint">{formatToday()}</p>
+        <h1 className="min-w-0 font-body text-display font-semibold tracking-tight text-nb-ink">
           {title}
         </h1>
-        {/* Renders nothing once this window *is* the pop-out. */}
-        <PopOutButton />
-        <EngineTrigger />
       </div>
+      {/* Renders nothing once this window *is* the pop-out. */}
+      <PopOutButton />
+      <EngineTrigger />
     </header>
   );
 }

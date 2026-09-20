@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Panel from "@/components/Panel";
+import NotebookPanel from "@/components/notebook/NotebookPanel";
 import { useToast } from "@/components/Toast";
 import ChatPanel from "@/components/chat/ChatPanel";
 import {
@@ -58,20 +58,26 @@ export function CourseChat({ code }: { code: string }) {
   const scoped = paths.length < available.length;
   return (
     <ChatProvider course={code} sources={paths}>
-      <Panel label={`ARGUS.CHAT · ${code}`} className="flex h-full flex-col">
+      <NotebookPanel heading="Ask this course" scale="body" className="flex h-full flex-col">
         <ChatPanel
           variant="dock"
           suggestions={SUGGESTIONS}
           placeholder={
             paths.length === 0
-              ? `ask ${code} · no sources selected`
-              : `ask ${code} · grounded in ${scoped ? `${paths.length} selected source${paths.length === 1 ? "" : "s"}` : "its materials & notes"}`
+              ? "Ask about this course — no sources selected"
+              : scoped
+                ? `Ask about the ${paths.length} file${paths.length === 1 ? "" : "s"} you have selected`
+                : "Ask about this course's materials and notes"
           }
         />
-        <p className="mt-2 font-mono text-meta text-ink-faint">
-          model :: {model} · sources :: {paths.length}/{available.length}
+        {/* Neither "reading N of M files" nor the word "sources": the first is
+            the Sources rail's own status line word for word, and the second is
+            its heading. Two panels on one screen saying the same sentence about
+            different things is confusing to read and ambiguous to address. */}
+        <p className="mt-2.5 text-label text-nb-faint">
+          {model} · grounded in {paths.length} of {available.length} files
         </p>
-      </Panel>
+      </NotebookPanel>
     </ChatProvider>
   );
 }
@@ -106,18 +112,20 @@ function StudioAction({
         onClick={onClick}
         disabled={disabled}
         aria-busy={running}
-        className="w-full border border-line px-3 py-2 text-left font-mono text-label uppercase tracking-wide text-ink-muted transition-colors hover:border-lineHi hover:text-ink disabled:cursor-not-allowed disabled:opacity-70"
+        className={`w-full rounded-ctl border px-3.5 py-2.5 text-left text-ctl transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
+          running
+            ? "border-[var(--ac)] bg-nb-acBg text-[var(--ac)]"
+            : "border-nb-line bg-nb-raised text-nb-ink hover:border-nb-lineHi"
+        }`}
       >
         {running ? `${runningLabel}…` : label}
       </button>
       {running && (
-        <div className="mt-1 h-0.5 w-full bg-line" aria-hidden>
+        <div className="mt-1.5 h-[3px] w-full overflow-hidden rounded-bar bg-nb-track" aria-hidden>
           <span className="block h-full w-1/3 animate-blink bg-[var(--ac)]" />
         </div>
       )}
-      {note && !running && (
-        <p className="mt-1 font-mono text-micro text-ink-faint">{note}</p>
-      )}
+      {note && !running && <p className="mt-1 text-label text-nb-faint">{note}</p>}
     </div>
   );
 }
@@ -298,46 +306,99 @@ export function CourseStudio({ code }: { code: string }) {
     refreshSelection();
   }, [inFlight, refreshSources, refreshExams, refreshDecks, refreshSelection]);
 
-  const scopeNote = scoped ? ` · ${paths.length} source${paths.length === 1 ? "" : "s"}` : "";
-
   return (
-    <Panel label="STUDIO">
-      <div className="flex flex-col gap-2">
-        <StudioAction
-          label={`study guide${scopeNote}`}
-          running={busy("guide")}
-          runningLabel="writing the guide"
-          disabled={busy("guide") || nothingSelected}
-          onClick={() => void startGuide()}
-        />
-        <StudioAction
-          label={`flashcard deck${scopeNote}`}
-          running={busy("deck")}
-          runningLabel="writing cards"
-          disabled={busy("deck") || nothingSelected}
-          onClick={() => setGenerating("deck")}
-        />
-        <StudioAction
-          label={`practice exam${scopeNote}`}
-          running={busy("exam")}
-          runningLabel="generating questions"
-          disabled={busy("exam") || nothingSelected}
-          onClick={() => setGenerating("exam")}
-        />
-      </div>
+    <>
+      <NotebookPanel
+        heading="Make something"
+        scale="body"
+        pad="md"
+        // The scope moves here from the button labels. It was appended to all
+        // three ("study guide · 3 sources"), which said the same thing three
+        // times and made every accessible name depend on how many files
+        // happened to be ticked.
+        subheading={
+          nothingSelected
+            ? undefined
+            : scoped
+              ? `From the ${paths.length} file${paths.length === 1 ? "" : "s"} you have ticked.`
+              : "From everything in this course."
+        }
+      >
+        {nothingSelected && (
+          <p className="mb-3.5 text-label text-warn">
+            Nothing is selected — tick a source to generate from it.
+          </p>
+        )}
 
-      {nothingSelected && (
-        <p className="mt-2 font-mono text-meta text-warn">
-          Nothing is selected — tick a source to generate from it.
-        </p>
-      )}
+        <div className="flex flex-col gap-2">
+          <StudioAction
+            label="Study guide"
+            running={busy("guide")}
+            runningLabel="Writing the guide"
+            disabled={busy("guide") || nothingSelected}
+            onClick={() => void startGuide()}
+          />
+          <StudioAction
+            label="Flashcard deck"
+            running={busy("deck")}
+            runningLabel="Writing cards"
+            disabled={busy("deck") || nothingSelected}
+            onClick={() => setGenerating("deck")}
+          />
+          <StudioAction
+            label="Practice exam"
+            running={busy("exam")}
+            runningLabel="Generating questions"
+            disabled={busy("exam") || nothingSelected}
+            onClick={() => setGenerating("exam")}
+          />
+        </div>
 
-      <div className="mt-4 border-t border-line pt-3">
-        <p className="mb-2 font-mono text-meta uppercase tracking-[0.16em] text-ink-faint">generated</p>
+        {weakTopics.length > 0 && (
+          <div className="mt-4 border-t border-nb-line pt-3.5">
+            <p className="mb-2 text-label text-nb-faint">Worth another look</p>
+            <div className="flex flex-wrap gap-1.5">
+              {weakTopics.slice(0, showAllTopics ? undefined : CAP).map((topic) => (
+                <span
+                  key={topic.topic}
+                  className="rounded-full border border-nb-line px-2.5 py-0.5 text-label text-nb-body"
+                >
+                  {topic.topic}
+                </span>
+              ))}
+            </div>
+            {weakTopics.length > CAP && !showAllTopics && (
+              <button
+                type="button"
+                onClick={() => setShowAllTopics(true)}
+                className="mt-2 text-label text-nb-body underline underline-offset-2 transition-colors hover:text-nb-ink"
+              >
+                {CAP} of {weakTopics.length} · show all
+              </button>
+            )}
+          </div>
+        )}
+
+        {generating && (
+          <GenerateDialog
+            kind={generating}
+            course={code}
+            sources={paths}
+            onClose={() => setGenerating(null)}
+          />
+        )}
+      </NotebookPanel>
+
+      {/* A second panel, per the artboard: what you can make and what you have
+          already made are different questions, and the deck panel sits between
+          them because a deck is the one artifact with a number that changes
+          every day. Rendered from here rather than as its own export so the
+          post-job refresh stays in one place. */}
+      <NotebookPanel heading="Already made" scale="body" pad="md" className="order-last">
         {generated.length === 0 ? (
-          <p className="text-label text-ink-faint">Nothing generated for {code} yet.</p>
+          <p className="text-label text-nb-faint">Nothing generated for {code} yet.</p>
         ) : (
-          <ul className="space-y-1.5">
+          <ul className="flex flex-col gap-1.5">
             {generated.slice(0, showAllGenerated ? undefined : CAP).map((item) =>
               item.href ? (
                 <li key={item.key}>
@@ -348,23 +409,21 @@ export function CourseStudio({ code }: { code: string }) {
                   <LinkOrAnchor
                     href={item.href}
                     external={item.external}
-                    className="flex items-center justify-between gap-2 text-label transition-colors hover:text-[var(--ac)]"
+                    className="block text-ctl text-nb-body transition-colors hover:text-[var(--ac)]"
                   >
-                    <span className="min-w-0 truncate text-ink-muted">
-                      {item.kind} · {item.label}
-                    </span>
-                    <span className="shrink-0 font-mono text-meta text-ink-faint">
-                      {item.date.slice(0, 10)}
+                    <span className="truncate">{item.label}</span>
+                    <span className="text-nb-faint">
+                      {" · "}
+                      {item.kind.toLowerCase()} · {item.date.slice(0, 10)}
                     </span>
                   </LinkOrAnchor>
                 </li>
               ) : (
-                <li key={item.key} className="flex items-center justify-between gap-2 text-label">
-                  <span className="min-w-0 truncate text-ink-muted">
-                    {item.kind} · {item.label}
-                  </span>
-                  <span className="shrink-0 font-mono text-meta text-ink-faint">
-                    {item.date.slice(0, 10)}
+                <li key={item.key} className="text-ctl text-nb-body">
+                  <span className="truncate">{item.label}</span>
+                  <span className="text-nb-faint">
+                    {" · "}
+                    {item.kind.toLowerCase()} · {item.date.slice(0, 10)}
                   </span>
                 </li>
               ),
@@ -375,43 +434,12 @@ export function CourseStudio({ code }: { code: string }) {
           <button
             type="button"
             onClick={() => setShowAllGenerated(true)}
-            className="mt-2 font-mono text-meta text-ink-muted underline underline-offset-2 transition-colors hover:text-ink"
+            className="mt-2 text-label text-nb-body underline underline-offset-2 transition-colors hover:text-nb-ink"
           >
             {CAP} of {generated.length} · show all
           </button>
         )}
-      </div>
-
-      {generating && (
-        <GenerateDialog
-          kind={generating}
-          course={code}
-          sources={paths}
-          onClose={() => setGenerating(null)}
-        />
-      )}
-
-      {weakTopics.length > 0 && (
-        <div className="mt-4 border-t border-line pt-3">
-          <p className="mb-2 font-mono text-meta uppercase tracking-[0.16em] text-ink-faint">weak topics</p>
-          <div className="flex flex-wrap gap-1.5">
-            {weakTopics.slice(0, showAllTopics ? undefined : CAP).map((topic) => (
-              <span key={topic.topic} className="border border-line px-1.5 py-0.5 font-mono text-meta text-ink-muted">
-                {topic.topic}
-              </span>
-            ))}
-          </div>
-          {weakTopics.length > CAP && !showAllTopics && (
-            <button
-              type="button"
-              onClick={() => setShowAllTopics(true)}
-              className="mt-2 font-mono text-meta text-ink-muted underline underline-offset-2 transition-colors hover:text-ink"
-            >
-              {CAP} of {weakTopics.length} · show all
-            </button>
-          )}
-        </div>
-      )}
-    </Panel>
+      </NotebookPanel>
+    </>
   );
 }

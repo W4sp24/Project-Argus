@@ -874,6 +874,11 @@ export interface FlashcardDeck {
   created_at: string;
   updated_at: string;
   cards: number;
+  /** Cards whose current interval has reached three weeks — Anki's "mature"
+   * threshold. Derived from the review history, never stored, so it re-derives
+   * correctly if the scheduler's parameters change. Every progress ring and bar
+   * in the Notebook is `mastered / cards`. */
+  mastered: number;
 }
 
 export interface FlashcardCard {
@@ -886,6 +891,12 @@ export interface FlashcardCard {
   suspended: boolean;
   /** The vault note an imported card came from; null if typed in. */
   source_path: string | null;
+  /** When this card next comes up, and its FSRS state. Both null for a card
+   * with no review yet, which is new and due immediately. `DueCard` answers the
+   * same question for the *due* subset; the editor needs it for every card,
+   * including ones scheduled weeks out. */
+  due_at: string | null;
+  state: string | null;
 }
 
 export interface FlashcardDeckDetail extends FlashcardDeck {
@@ -1159,6 +1170,25 @@ export interface DueSummary {
  */
 export function useDueSummary() {
   return useSWR<DueSummary>("/api/flashcards/due-summary", fetcher);
+}
+
+export interface MasteredDay {
+  /** `YYYY-MM-DD`. */
+  date: string;
+  mastered: number;
+}
+
+/**
+ * Cards mastered on each of the last `days` days — the Notebook overview's bar
+ * chart. Every day in the window comes back, including the empty ones: a chart
+ * with days missing reads as a shorter history rather than a quieter one.
+ *
+ * This counts reviews that landed at or past the threshold, so it answers "how
+ * much did this day do", not "how many cards are mature" — that is
+ * `FlashcardDeck.mastered`.
+ */
+export function useMasteredHistory(days = 7) {
+  return useSWR<MasteredDay[]>(`/api/flashcards/history?days=${days}`, fetcher);
 }
 
 // --- Search (command palette) -----------------------------------------

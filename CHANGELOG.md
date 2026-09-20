@@ -8,6 +8,52 @@ Argus is currently pre-1.0 (0.x releases).
 
 ## [Unreleased]
 
+### Changed
+
+- **The Notebook has been redesigned.** It moves off the app's violet-black
+  terminal surfaces onto a cool slate in its own cyan accent's hue family,
+  softens its corners, and swaps `▍MONO.EYEBROW` chrome for sentence-case
+  headings and Inter prose — mono is kept for numbers and keys. The rest of
+  Argus is untouched: same top bar, same six modes, same surfaces everywhere
+  else.
+  - The overview leads with what is actually due and how much of your material
+    has reached mastery, instead of five stat tiles.
+  - The deck library is a grid of cards, each with a mastery bar, and has a
+    search box.
+  - A deck page puts the four study modes in a row that says, on the tile,
+    whether each one touches your schedule.
+  - Review shows what the grade you pressed actually bought ("✓ Banked · Good
+    — back in 10m") where the card was, instead of a toast that left before
+    the interval could be read.
+  - Learn's typed stage shows a **word-level diff** of what you typed against
+    what the card says. "Close enough" used to tell you that you were nearly
+    right and leave you to find the gap.
+  - The Course Hub splits its rail into "Make something" and "Already made",
+    with the course's decks between them.
+  - The practice exam gains a question palette and lettered options at reading
+    size.
+
+### Added
+
+- **Decks report what you have mastered, and cards say when they are next due.**
+  A card counts as mastered once its interval reaches three weeks — Anki's
+  "mature" threshold. Both are derived from the review history you already
+  have: no migration, no new column, and they re-derive correctly if the
+  scheduler's parameters ever change.
+- `GET /api/flashcards/history` — cards mastered per day, behind the overview's
+  seven-day chart.
+- An exam countdown on a course, matched from the task text that names it.
+
+### Fixed
+
+- **A dialog opened from any mode but General drew the wrong accent colour.**
+  Overlays portal to `document.body`, outside the wrapper carrying `--ac`, so
+  every one of them fell back to General's violet — cyan checkboxes and
+  buttons in the Notebook were violet, and had been since modes shipped.
+- **A flipped flashcard's hidden face stayed focusable.** React 18 refuses to
+  write `true` to an attribute it does not know is boolean, so `inert` was
+  dropped entirely — silently, apart from a console warning on every render.
+
 ## [0.4.0]
 
 The Notebook becomes a mode of its own with a window to match, flashcards

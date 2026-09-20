@@ -52,9 +52,9 @@ export default function PopOutButton() {
         // this window now re-focuses that one, so nothing is lost.
         router.push("/dashboard");
       }}
-      className="min-h-8 shrink-0 border border-line px-2 py-1 font-mono text-label uppercase tracking-[0.12em] text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+      className="min-h-8 shrink-0 rounded-ctl border border-nb-line bg-nb-panel px-3 py-2 text-label text-nb-body transition-colors hover:border-nb-lineHi hover:text-nb-ink"
     >
-      pop out ↗
+      Open in its own window ↗
     </button>
   );
 }

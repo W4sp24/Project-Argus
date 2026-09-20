@@ -103,6 +103,26 @@ body {
   color: var(--ac);
 }
 
+/* The Notebook's ground (Notebook Redesign v2).
+   Scoped to a wrapper rather than applied to `body` on purpose: the design's own
+   boundary is "Argus's shell is untouched — same top bar, same six modes, same
+   cyan", so the slate palette must not reach the top bar or any other mode. The
+   wrapper is mounted in app/(dashboard)/notebook/layout.tsx and nowhere else.
+
+   `--ac-bg` is re-pointed here, not in lib/mode.tsx's ACCENTS: that value also
+   paints the top bar's active mode tab, which sits *outside* this wrapper and
+   keeps the violet-era value. */
+.notebook-skin {
+  --ac-bg: theme(colors.nb.acBg);
+  background: theme(colors.nb.void);
+  color: theme(colors.nb.body);
+  min-height: 100%;
+}
+/* Paint the viewport behind a short Notebook page too — `body` is bg-void. */
+body:has(.notebook-skin) {
+  background: theme(colors.nb.void);
+}
+
 /* Flashcard flip (§5, /study/flashcards [PREVIEW]): transform-only 3D flip.
    Reduced-motion just removes the transition — rotateY still applies, so the
    face swap is instant instead of animated (no separate JS branch needed). */

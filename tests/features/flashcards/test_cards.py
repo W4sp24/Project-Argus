@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -266,3 +266,165 @@ def test_a_nonsense_match_score_is_refused(conn: sqlite3.Connection) -> None:
     deck_id = _deck_with(conn, "a")
     with pytest.raises(FlashcardsError, match="positive"):
         store.record_match_score(conn, deck_id, 0, 6)
+
+
+# --- mastery ---------------------------------------------------------------
+
+
+def _reviewed(
+    conn: sqlite3.Connection,
+    deck_id: int,
+    ref: str,
+    *,
+    interval_days: float,
+    on: datetime | None = None,
+) -> None:
+    """Write one review row with a chosen interval.
+
+    Direct insertion rather than `grade_card`, on purpose: the threshold is the
+    thing under test, and driving FSRS to land exactly on it would be asserting
+    against the scheduler's parameters instead of against our own rule.
+    `test_grading_eventually_masters_a_card` covers the real path.
+    """
+    at = on or datetime.now(UTC)
+    conn.execute(
+        "INSERT INTO flashcard_reviews"
+        " (card_id, deck_id, grade, state, step, stability, difficulty,"
+        "  due_at, last_review_at, created_at)"
+        " VALUES (?, ?, 'good', 2, NULL, 10.0, 5.0, ?, ?, ?)",
+        (
+            ref,
+            deck_id,
+            (at + timedelta(days=interval_days)).isoformat(),
+            at.isoformat(),
+            at.strftime("%Y-%m-%d %H:%M:%S"),
+        ),
+    )
+    conn.commit()
+
+
+def test_a_card_is_mastered_at_three_weeks(conn: sqlite3.Connection) -> None:
+    """The threshold is the rule, so pin both sides of it."""
+    deck_id = _deck_with(conn, "just short", "just over")
+    short, over = (card.ref for card in store.load_deck(conn, deck_id).card_list)
+    _reviewed(conn, deck_id, short, interval_days=store.MASTERED_INTERVAL_DAYS - 0.01)
+    _reviewed(conn, deck_id, over, interval_days=store.MASTERED_INTERVAL_DAYS)
+
+    assert store.load_deck(conn, deck_id).mastered == 1
+
+
+def test_a_new_card_is_not_mastered(conn: sqlite3.Connection) -> None:
+    """New is not mastered — and a deck nobody has studied reads as zero."""
+    deck_id = _deck_with(conn, "a", "b")
+    deck = store.load_deck(conn, deck_id)
+    assert deck.mastered == 0
+    assert deck.cards == 2
+
+
+def test_mastery_reaches_the_library_listing(conn: sqlite3.Connection) -> None:
+    """`list_decks` counts every deck in one pass; prove it keeps them apart."""
+    first = _deck_with(conn, "a", "b")
+    second = _deck_with(conn, "c")
+    for card in store.load_deck(conn, first).card_list:
+        _reviewed(conn, first, card.ref, interval_days=40)
+
+    by_id = {deck.id: deck for deck in store.list_decks(conn)}
+    assert by_id[first].mastered == 2
+    assert by_id[second].mastered == 0
+
+
+def test_mastery_follows_the_latest_review_not_the_best_one(conn: sqlite3.Connection) -> None:
+    """A card you have forgotten stops being mastered."""
+    deck_id = _deck_with(conn, "a")
+    ref = store.load_deck(conn, deck_id).card_list[0].ref
+    _reviewed(conn, deck_id, ref, interval_days=40)
+    assert store.load_deck(conn, deck_id).mastered == 1
+    _reviewed(conn, deck_id, ref, interval_days=0.007)  # ~10 minutes: back to square one
+    assert store.load_deck(conn, deck_id).mastered == 0
+
+
+def test_deleting_a_card_takes_its_mastery_with_it(conn: sqlite3.Connection) -> None:
+    deck_id = _deck_with(conn, "a", "b")
+    refs = [card.ref for card in store.load_deck(conn, deck_id).card_list]
+    for ref in refs:
+        _reviewed(conn, deck_id, ref, interval_days=40)
+    store.delete_card(conn, deck_id, refs[0])
+    assert store.load_deck(conn, deck_id).mastered == 1
+
+
+def test_grading_eventually_masters_a_card(conn: sqlite3.Connection) -> None:
+    """The real path: repeated `easy` grades push a card past three weeks."""
+    deck_id = _deck_with(conn, "a")
+    ref = store.load_deck(conn, deck_id).card_list[0].ref
+    at = _due_base(conn, deck_id)
+    for _ in range(6):
+        result = store.grade_card(conn, deck_id, ref, "easy", now=at)
+        at = scheduler.parse_dt(result.due_at)
+    assert store.load_deck(conn, deck_id).mastered == 1
+
+
+# --- a card's next review --------------------------------------------------
+
+
+def test_an_unreviewed_card_has_no_next_review(conn: sqlite3.Connection) -> None:
+    """`None` rather than the deck's creation time: the editor renders "Due now"
+    for a new card, and inventing a timestamp would make that a lie it has to
+    decode."""
+    deck_id = _deck_with(conn, "a")
+    card = store.load_deck(conn, deck_id).card_list[0]
+    assert card.due_at is None
+    assert card.state is None
+
+
+def test_a_reviewed_card_carries_its_next_review(conn: sqlite3.Connection) -> None:
+    """`due_cards` answers this for the due subset; the editor needs every card,
+    including the ones scheduled weeks out."""
+    deck_id = _deck_with(conn, "a")
+    ref = store.load_deck(conn, deck_id).card_list[0].ref
+    result = store.grade_card(conn, deck_id, ref, "good", now=_due_base(conn, deck_id))
+
+    card = store.load_deck(conn, deck_id).card_list[0]
+    assert card.due_at == result.due_at
+    assert card.state == result.state
+    # And it survives an edit, which returns a CardInfo of its own.
+    edited = store.update_card(conn, deck_id, ref, starred=True)
+    assert edited.due_at == result.due_at
+
+
+# --- mastered per day ------------------------------------------------------
+
+
+def test_mastered_history_covers_every_day_in_the_window(conn: sqlite3.Connection) -> None:
+    """Empty days are present. A chart with days missing reads as a shorter
+    history rather than a quieter one."""
+    deck_id = _deck_with(conn, "a")
+    history = store.mastered_history(conn, days=7)
+    assert len(history) == 7
+    assert [day.mastered for day in history] == [0] * 7
+    # Ascending, ending today.
+    assert [day.date for day in history] == sorted(day.date for day in history)
+    assert history[-1].date == datetime.now(UTC).date().isoformat()
+    assert deck_id  # the deck exists; nothing has been studied in it
+
+
+def test_mastered_history_counts_the_day_the_card_crossed(conn: sqlite3.Connection) -> None:
+    deck_id = _deck_with(conn, "a", "b")
+    refs = [card.ref for card in store.load_deck(conn, deck_id).card_list]
+    now = datetime.now(UTC)
+    _reviewed(conn, deck_id, refs[0], interval_days=40, on=now - timedelta(days=2))
+    # Same day, but a ten-minute interval is not mastery.
+    _reviewed(conn, deck_id, refs[1], interval_days=0.007, on=now - timedelta(days=2))
+
+    history = {day.date: day.mastered for day in store.mastered_history(conn, days=7)}
+    assert history[(now - timedelta(days=2)).date().isoformat()] == 1
+    assert sum(history.values()) == 1
+
+
+def test_mastered_history_ignores_what_falls_out_of_the_window(
+    conn: sqlite3.Connection,
+) -> None:
+    deck_id = _deck_with(conn, "a")
+    ref = store.load_deck(conn, deck_id).card_list[0].ref
+    _reviewed(conn, deck_id, ref, interval_days=40, on=datetime.now(UTC) - timedelta(days=30))
+    assert sum(day.mastered for day in store.mastered_history(conn, days=7)) == 0
+    assert sum(day.mastered for day in store.mastered_history(conn, days=60)) == 1

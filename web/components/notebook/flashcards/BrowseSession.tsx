@@ -3,12 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ActivityChrome from "@/components/notebook/flashcards/ActivityChrome";
 import CardFace from "@/components/notebook/flashcards/CardFace";
-import Button from "@/components/ui/Button";
-import SegmentedControl from "@/components/ui/SegmentedControl";
+import NotebookSegmented from "@/components/notebook/NotebookSegmented";
 import { updateCard, type FlashcardCard, type FlashcardDeckDetail } from "@/lib/api";
 
 const FILTERS = ["all", "starred"] as const;
-const FILTER_LABELS = { all: "ALL", starred: "★ STARRED" } as const;
+const FILTER_LABELS = { all: "All", starred: "★ Starred" } as const;
 type Filter = (typeof FILTERS)[number];
 
 /** Fisher–Yates. `sort(() => Math.random() - 0.5)` is not a shuffle. */
@@ -130,16 +129,42 @@ export default function BrowseSession({
     onStarred();
   }
 
+  const quiet =
+    "rounded-ctl border border-nb-line px-3.5 py-2 text-ctl text-nb-ink transition-colors hover:border-nb-lineHi disabled:opacity-40";
+
   return (
     <ActivityChrome
       deckId={deck.id}
       deckTitle={deck.title}
-      activity={round === 1 ? "flashcards" : `flashcards · round ${round}`}
-      progress={pool.length === 0 ? "0 / 0" : `${Math.min(index + 1, pool.length)} / ${pool.length}`}
-      keys="space flip · ← → move · nothing here changes your schedule"
+      activity="browse"
+      badge={round > 1 ? <span className="text-label text-nb-faint">Round {round}</span> : undefined}
+      progress={
+        pool.length === 0 ? (
+          "0 / 0"
+        ) : (
+          <>
+            {Math.min(index + 1, pool.length)}
+            <span className="text-nb-faint"> / {pool.length}</span>
+          </>
+        )
+      }
+      segments={
+        tracking
+          ? [
+              { value: known.length, tone: "ok" },
+              { value: learning.length, tone: "warn" },
+              { value: Math.max(0, pool.length - known.length - learning.length), tone: "track" },
+            ]
+          : [
+              { value: index, tone: "ac" },
+              { value: Math.max(0, pool.length - index), tone: "track" },
+            ]
+      }
+      caption="Nothing here changes your schedule."
+      keys="space flip · ← → move"
     >
-      <div className="mb-3 flex flex-wrap items-center gap-3">
-        <SegmentedControl
+      <div className="mb-3.5 flex flex-wrap items-center gap-3">
+        <NotebookSegmented
           options={FILTERS}
           labels={FILTER_LABELS}
           value={filter}
@@ -152,7 +177,7 @@ export default function BrowseSession({
             setRound(1);
           }}
         />
-        <label className="flex items-center gap-2 font-mono text-label uppercase tracking-[0.12em] text-ink-muted">
+        <label className="flex items-center gap-2 text-ctl text-nb-body">
           <input
             type="checkbox"
             checked={tracking}
@@ -161,68 +186,70 @@ export default function BrowseSession({
           />
           Track progress
         </label>
-        <Button variant="quiet" onClick={() => restart(true)}>
-          ⇄ SHUFFLE
-        </Button>
+        <button type="button" onClick={() => restart(true)} className={`${quiet} ml-auto`}>
+          ⇄ Shuffle
+        </button>
       </div>
 
       {pool.length === 0 ? (
-        <p className="text-body text-ink-faint">
+        <p className="text-body text-nb-faint">
           {filter === "starred" ? "No starred cards in this deck yet." : "This deck has no cards."}
         </p>
       ) : atEnd ? (
-        <div className="border border-line p-5">
-          <p className="font-mono text-label uppercase tracking-[0.16em] text-[var(--ac)]">
-            end of the deck
-          </p>
+        <div className="rounded-card border border-nb-line bg-nb-panel p-6">
+          <p className="text-label font-semibold tracking-[0.06em] text-ok">End of the deck</p>
           {tracking ? (
             <>
-              <p className="mt-2 text-lead text-ink-bright">
+              <p className="mt-1 text-title font-semibold text-nb-ink">
                 {known.length} known · {learning.length} still learning
               </p>
-              <p className="mt-1 font-mono text-meta text-ink-faint">
+              <p className="mt-1.5 text-body text-nb-body">
                 None of this touched your review schedule.
               </p>
-              <div className="mt-4 flex flex-wrap gap-2">
+              <div className="mt-5 flex flex-wrap gap-2.5">
                 {learning.length > 0 && (
-                  <Button onClick={reviewStillLearning}>
-                    REVIEW THE {learning.length} STILL LEARNING
-                  </Button>
+                  <button
+                    type="button"
+                    onClick={reviewStillLearning}
+                    className="rounded-ctl bg-[var(--ac)] px-4 py-3 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90"
+                  >
+                    Review the {learning.length} still learning
+                  </button>
                 )}
-                <Button variant="quiet" onClick={() => restart(false)}>
-                  START OVER
-                </Button>
+                <button type="button" onClick={() => restart(false)} className={quiet}>
+                  Start over
+                </button>
               </div>
             </>
           ) : (
-            <div className="mt-4 flex gap-2">
-              <Button variant="quiet" onClick={() => restart(false)}>
-                START OVER
-              </Button>
-              <Button variant="quiet" onClick={() => restart(true)}>
-                SHUFFLE AND RESTART
-              </Button>
+            <div className="mt-5 flex flex-wrap gap-2.5">
+              <button type="button" onClick={() => restart(false)} className={quiet}>
+                Start over
+              </button>
+              <button type="button" onClick={() => restart(true)} className={quiet}>
+                Shuffle and restart
+              </button>
             </div>
           )}
         </div>
       ) : (
         <>
           <div className="mb-2 flex items-center justify-end">
-            <Button
-              variant="quiet"
+            <button
+              type="button"
               aria-label={current.starred ? "Unstar this card" : "Star this card"}
               aria-pressed={current.starred}
               onClick={() => void toggleStar()}
-              className={current.starred ? "text-[var(--ac)]" : ""}
+              className={`px-1.5 ${current.starred ? "text-warn" : "text-nb-faint"}`}
             >
               {current.starred ? "★" : "☆"}
-            </Button>
+            </button>
           </div>
 
           <CardFace
             front={current.front}
             back={current.back}
-            hint={flipped ? null : current.hint}
+            hint={current.hint}
             flipped={flipped}
             onFlip={() => setFlipped((value) => !value)}
           />
@@ -232,36 +259,60 @@ export default function BrowseSession({
             data-testid="flashcard-flip"
             aria-pressed={flipped}
             onClick={() => setFlipped((value) => !value)}
-            className="mt-2 w-full border border-line py-2 font-mono text-meta uppercase tracking-[0.12em] text-ink-muted transition-colors hover:border-lineHi hover:text-ink"
+            className="mt-3 w-full rounded-ctl bg-[var(--ac)] py-3 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90"
           >
-            {flipped ? "SHOW QUESTION" : "SHOW ANSWER"}
+            {flipped ? "Show question" : "Show answer"}
+            <span className="font-normal opacity-60"> · space</span>
           </button>
 
-          <div className="mt-4 flex items-center justify-center gap-3 border-t border-line pt-4">
+          <div className="mt-3 flex items-center justify-center gap-2.5">
             {tracking ? (
               <>
-                <Button
+                <button
+                  type="button"
                   aria-label="Still learning"
                   onClick={() => advance("learning")}
-                  className="border-danger text-danger"
+                  className="rounded-ctl border border-nb-dangerLine px-4 py-2.5 text-ctl font-semibold text-danger transition-colors hover:bg-nb-dangerBg"
                 >
-                  ✗ STILL LEARNING
-                </Button>
-                <Button variant="quiet" aria-label="Undo" disabled={index === 0} onClick={undo}>
+                  ✗ Still learning
+                </button>
+                <button
+                  type="button"
+                  aria-label="Undo"
+                  disabled={index === 0}
+                  onClick={undo}
+                  className={quiet}
+                >
                   ↺
-                </Button>
-                <Button aria-label="Know it" onClick={() => advance("known")} className="border-ok text-ok">
-                  ✓ KNOW IT
-                </Button>
+                </button>
+                <button
+                  type="button"
+                  aria-label="Know it"
+                  onClick={() => advance("known")}
+                  className="rounded-ctl border border-nb-okLine px-4 py-2.5 text-ctl font-semibold text-ok transition-colors hover:bg-nb-okBg"
+                >
+                  ✓ Know it
+                </button>
               </>
             ) : (
               <>
-                <Button aria-label="Previous card" disabled={index === 0} onClick={back}>
+                <button
+                  type="button"
+                  aria-label="Previous card"
+                  disabled={index === 0}
+                  onClick={back}
+                  className={quiet}
+                >
                   ←
-                </Button>
-                <Button aria-label="Next card" onClick={() => advance()}>
+                </button>
+                <button
+                  type="button"
+                  aria-label="Next card"
+                  onClick={() => advance()}
+                  className={quiet}
+                >
                   →
-                </Button>
+                </button>
               </>
             )}
           </div>

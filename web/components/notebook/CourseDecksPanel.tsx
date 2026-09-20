@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import Panel from "@/components/Panel";
+import NotebookPanel from "@/components/notebook/NotebookPanel";
 import { useDueSummary, useFlashcardDecks } from "@/lib/api";
 
 /** How many decks the panel shows before it offers the rest. */
@@ -41,52 +41,49 @@ export default function CourseDecksPanel({ code }: { code: string }) {
     due?.decks.find((entry) => entry.deck_id === deckId)?.due ?? 0;
 
   return (
-    <Panel label={`DECKS · ${code}`}>
+    <NotebookPanel heading="Decks" scale="body" pad="md">
       {!decks ? (
-        <p className="text-label text-ink-faint">Loading decks…</p>
+        <p className="text-label text-nb-faint">Loading decks…</p>
       ) : decks.length === 0 ? (
-        <p className="text-label text-ink-faint">
-          No decks for {code} yet. STUDIO&apos;s{" "}
-          <span className="font-mono text-meta uppercase">flashcard deck</span> writes one from
-          the sources you have ticked.
+        <p className="text-label text-nb-faint">
+          No decks for {code} yet. &ldquo;Flashcard deck&rdquo; under Make something writes one
+          from the sources you have ticked.
         </p>
       ) : (
-        <ul className="space-y-1.5">
+        <ul className="flex flex-col gap-2">
           {decks.slice(0, CAP).map((deck) => {
             const dueCount = dueFor(deck.id);
             return (
-              <li key={deck.id} className="border border-line px-2.5 py-2">
-                <div className="flex items-start gap-2">
-                  <Link
-                    href={`/notebook/flashcards/${deck.id}`}
-                    className="min-w-0 flex-1 transition-colors hover:text-[var(--ac)]"
+              <li key={deck.id}>
+                <Link
+                  href={`/notebook/flashcards/${dueCount > 0 ? `${deck.id}/review` : deck.id}`}
+                  className={`block rounded-tile border px-3 py-2.5 transition-colors ${
+                    dueCount > 0
+                      ? "border-[var(--ac)] bg-nb-acBg"
+                      : "border-nb-line hover:border-nb-lineHi"
+                  }`}
+                >
+                  <span className="block truncate text-ctl font-medium text-nb-ink">
+                    {deck.title}
+                  </span>
+                  <span
+                    className={`mt-0.5 block truncate text-meta ${
+                      dueCount > 0 ? "text-[var(--ac)]" : "text-nb-faint"
+                    }`}
                   >
-                    <span className="block truncate text-label text-ink">{deck.title}</span>
-                    <span className="mt-0.5 block truncate font-mono text-micro text-ink-faint">
-                      {deck.cards} card{deck.cards === 1 ? "" : "s"}
-                      {deck.source_paths.length > 0
-                        ? ` · from ${filename(deck.source_paths[0])}${
-                            deck.source_paths.length > 1
-                              ? ` +${deck.source_paths.length - 1}`
-                              : ""
+                    {[
+                      dueCount > 0 ? `${dueCount} due` : null,
+                      deck.cards > 0 ? `${deck.mastered} of ${deck.cards} mastered` : "no cards",
+                      deck.source_paths.length > 0
+                        ? `from ${filename(deck.source_paths[0])}${
+                            deck.source_paths.length > 1 ? ` +${deck.source_paths.length - 1}` : ""
                           }`
-                        : ""}
-                    </span>
-                  </Link>
-                  {dueCount > 0 && (
-                    <span className="shrink-0 border border-[var(--ac)] bg-[var(--ac-bg)] px-1 py-px font-mono text-micro text-[var(--ac)]">
-                      {dueCount} due
-                    </span>
-                  )}
-                </div>
-                {deck.cards > 0 && (
-                  <Link
-                    href={`/notebook/flashcards/${deck.id}/review`}
-                    className="mt-1 inline-block font-mono text-micro uppercase tracking-[0.14em] text-ink-muted underline underline-offset-2 transition-colors hover:text-ink"
-                  >
-                    review{dueCount > 0 ? ` ${dueCount}` : ""} →
-                  </Link>
-                )}
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </Link>
               </li>
             );
           })}
@@ -95,11 +92,11 @@ export default function CourseDecksPanel({ code }: { code: string }) {
       {(decks?.length ?? 0) > CAP && (
         <Link
           href="/notebook/flashcards"
-          className="mt-2 inline-block font-mono text-meta text-ink-muted underline underline-offset-2 transition-colors hover:text-ink"
+          className="mt-2.5 inline-block text-label text-nb-body underline underline-offset-2 transition-colors hover:text-nb-ink"
         >
           {CAP} of {decks?.length} · all decks
         </Link>
       )}
-    </Panel>
+    </NotebookPanel>
   );
 }

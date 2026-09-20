@@ -1,7 +1,7 @@
 "use client";
 
 import MiniLineChart from "@/components/charts/MiniLineChart";
-import Panel from "@/components/Panel";
+import NotebookPanel from "@/components/notebook/NotebookPanel";
 import { useInsights } from "@/lib/api";
 
 /**
@@ -15,35 +15,54 @@ export default function ScoresHistoryPanel() {
   const courses = insights?.study.courses ?? [];
 
   return (
-    <Panel label="SCORES.HISTORY">
+    <NotebookPanel heading="Your scores" scale="body" pad="md">
       {courses.length === 0 ? (
-        <p className="text-body text-ink-faint">No graded attempts yet.</p>
+        <p className="text-body text-nb-faint">No graded attempts yet.</p>
       ) : (
-        <div className="space-y-4">
-          {courses.map((course) => (
-            <div key={course.course} className="border-b border-line pb-3 last:border-b-0 last:pb-0">
-              <p className="mb-1.5 font-mono text-meta uppercase tracking-wide text-ink-faint">
-                {course.course}
-              </p>
-              {course.attempts.length >= 2 ? (
-                <MiniLineChart
-                  values={course.attempts.map((a) => a.pct)}
-                  labels={[course.attempts[0].date, course.attempts[course.attempts.length - 1].date]}
-                />
-              ) : (
-                <ul className="space-y-1">
-                  {course.attempts.map((attempt) => (
-                    <li key={attempt.date} className="flex items-center justify-between font-mono text-label">
-                      <span className="text-ink-faint">{attempt.date}</span>
-                      <span className="text-ink-muted">{attempt.pct}%</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ))}
+        <div className="flex flex-col gap-4">
+          {courses.map((course) => {
+            const first = course.attempts[0];
+            const last = course.attempts[course.attempts.length - 1];
+            return (
+              <div
+                key={course.course}
+                className="border-b border-nb-line pb-4 last:border-b-0 last:pb-0"
+              >
+                <p className="mb-1.5 text-label text-nb-faint">
+                  {course.course} · {course.attempts.length} attempt
+                  {course.attempts.length === 1 ? "" : "s"}
+                </p>
+                {course.attempts.length >= 2 ? (
+                  <>
+                    <MiniLineChart
+                      values={course.attempts.map((a) => a.pct)}
+                      labels={[first.date, last.date]}
+                    />
+                    {/* The number the chart is drawn from, said plainly — a
+                        sparkline shows a shape, not a figure. */}
+                    <p className="mt-1.5 text-ctl text-nb-body">
+                      {first.pct}% →{" "}
+                      <b className={last.pct >= first.pct ? "text-ok" : "text-warn"}>{last.pct}%</b>
+                    </p>
+                  </>
+                ) : (
+                  <ul className="flex flex-col gap-1">
+                    {course.attempts.map((attempt) => (
+                      <li
+                        key={attempt.date}
+                        className="flex items-center justify-between text-label"
+                      >
+                        <span className="text-nb-faint">{attempt.date}</span>
+                        <span className="font-mono tabular-nums text-nb-body">{attempt.pct}%</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
-    </Panel>
+    </NotebookPanel>
   );
 }
