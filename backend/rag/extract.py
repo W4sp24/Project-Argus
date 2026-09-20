@@ -13,6 +13,7 @@ from typing import Any
 
 import frontmatter
 
+from backend.rag.extractors.ocr import OcrPolicy, page_needs_ocr
 from backend.vault.privacy import is_no_ai
 
 logger = logging.getLogger("argus.rag")
@@ -37,16 +38,44 @@ def _extract_markdown(file_path: Path) -> list[Block]:
     return [Block(text=post.content, meta={"frontmatter": dict(post.metadata)})]
 
 
-def _extract_pdf(file_path: Path) -> list[Block]:
+def _extract_pdf(file_path: Path, ocr: OcrPolicy | None = None) -> list[Block]:
+    """One block per page, falling back to OCR where there is no text layer.
+
+    A slide deck exported to PDF is a stack of pictures, and asking such a
+    page for its text correctly returns nothing. Without ``ocr`` that is still
+    where this stops -- every existing caller passes nothing and keeps the old
+    behaviour.
+    """
     import pdfplumber  # heavy import kept lazy
 
     blocks: list[Block] = []
+    # A one-element list so read_page_image can spend from it: the vision cap
+    # is per document, not per page.
+    budget = [ocr.max_vision_pages if ocr else 0]
     with pdfplumber.open(file_path) as pdf:
         for number, page in enumerate(pdf.pages, start=1):
             text = (page.extract_text() or "").strip()
+            meta: dict[str, Any] = {"page": number, "extraction": {"method": "text"}}
+            if ocr is not None and page_needs_ocr(text, min_chars=ocr.min_native_chars):
+                text, method = _read_page_image(file_path, number - 1, ocr, budget)
+                meta["extraction"] = method
             if text:
-                blocks.append(Block(text=text, meta={"page": number}))
+                blocks.append(Block(text=text, meta=meta))
     return blocks
+
+
+def _read_page_image(
+    file_path: Path, index: int, ocr: OcrPolicy, budget: list[int]
+) -> tuple[str, dict[str, Any]]:
+    """Render and read one page, degrading to silence if anything fails."""
+    from backend.rag.extractors.ocr import read_page_image, render_page
+
+    try:
+        png = render_page(file_path, index, dpi=ocr.dpi)
+    except Exception as exc:  # noqa: BLE001 - one bad page must not stop the file
+        logger.warning("failed to render %s page %s: %s", file_path, index + 1, exc)
+        return "", {"method": "none"}
+    return read_page_image(png, ocr, vision_budget=budget)
 
 
 def _extract_pptx(file_path: Path) -> list[Block]:
@@ -123,7 +152,12 @@ _EXTRACTORS = {
 }
 
 
-def extract_blocks(file_path: Path, *, errors: list[str] | None = None) -> list[Block]:
+def extract_blocks(
+    file_path: Path,
+    *,
+    errors: list[str] | None = None,
+    ocr: OcrPolicy | None = None,
+) -> list[Block]:
     """Extract text blocks from a supported file; unsupported types yield [].
 
     ``errors``, when given, receives one message on failure. The empty-list
@@ -131,11 +165,18 @@ def extract_blocks(file_path: Path, *, errors: list[str] | None = None) -> list[
     a caller that extracts many (e.g. a full reindex) — but a caller that
     wants to know *why* a file came back empty (rather than assume it was
     legitimately blank) can pass a list and inspect it afterward.
+
+    ``ocr`` turns on reading of image-only PDF pages. It is injected rather
+    than constructed here so that ``rag/`` keeps out of ``agent/``: see
+    :mod:`backend.rag.extractors.ocr`. Omitting it — which every caller did
+    before it existed — leaves the behaviour exactly as it was.
     """
     extractor = _EXTRACTORS.get(file_path.suffix.lower())
     if extractor is None:
         return []
     try:
+        if extractor is _extract_pdf:
+            return _extract_pdf(file_path, ocr)
         return extractor(file_path)
     except Exception as exc:
         logger.warning("failed to extract %s: %s", file_path, exc)
