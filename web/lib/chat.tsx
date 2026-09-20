@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSWRConfig } from "swr";
-import { apiFetch, getChatThread, wsBase } from "@/lib/api";
+import { apiFetch, fetcher, getChatThread, wsBase, type ThreadInfo } from "@/lib/api";
 import { applyToolFrame, foldToolFrames, type ToolStep } from "@/lib/chat/tools";
 import { selectedModel } from "@/lib/models";
 
@@ -463,6 +463,45 @@ export function ChatProvider({
     },
     [stop],
   );
+
+  // Resume this course's most recent conversation on mount.
+  //
+  // The backend has persisted every thread and every turn since threads
+  // existed -- `chat_threads.course` is set at creation and
+  // `store.list_threads(course=)` already filters on it. Nothing asked for
+  // them: `openThread` was called only from `/chat`'s ThreadRail, so the
+  // Course Hub started at `messages: []` every time. Reloading the page, or
+  // clicking a deck and coming back, wiped the transcript and the next
+  // message opened a brand new thread, leaving one course with a trail of
+  // one-turn conversations and no way to continue yesterday's.
+  //
+  // Only for a course-scoped provider. Global `/chat` has a rail for picking
+  // a thread, and auto-opening one there would fight the user's choice.
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (!course || resumedRef.current) return;
+    resumedRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const threads = await fetcher<ThreadInfo[]>(
+          `/api/chat/threads?course=${encodeURIComponent(course)}`,
+        );
+        // Newest first, and a thread nobody said anything in is not worth
+        // resuming into -- it would show an empty transcript that looks
+        // exactly like the bug this fixes.
+        const latest = threads.find((thread) => thread.message_count > 0);
+        if (latest && !cancelled) await openThread(latest.id);
+      } catch {
+        // A hub that cannot reach the thread list still has to be usable;
+        // the next message simply starts a new conversation, which is the
+        // behaviour this replaces.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [course, openThread]);
 
   const meta = useMemo(
     () => ({ threadId, threadTitle, busy, offline }),

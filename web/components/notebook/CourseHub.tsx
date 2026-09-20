@@ -12,7 +12,7 @@ import {
   useStudyExams,
   useVault,
 } from "@/lib/api";
-import { ChatProvider } from "@/lib/chat";
+import { ChatProvider, useChatActions, useChatMessages, useChatMeta } from "@/lib/chat";
 import { obsidianUri } from "@/lib/citations";
 import GenerateDialog, { type GenerateKind } from "@/components/notebook/GenerateDialog";
 import { useCourseSelection } from "@/lib/courseSelection";
@@ -25,6 +25,35 @@ const SUGGESTIONS = [
   "What's likely to be on the exam?",
   "Explain the hardest concept so far",
 ];
+
+/**
+ * "New conversation", and a note saying which one you are in.
+ *
+ * Must live *inside* the ChatProvider, because that is where the thread is.
+ * Without it a hub that now resumes yesterday's conversation would have no
+ * way to deliberately start a fresh one — and a resumed transcript with no
+ * label looks like the old bug in reverse, where a course's whole history
+ * appears unasked.
+ */
+function CourseThreadBar() {
+  const { threadTitle, busy } = useChatMeta();
+  const { newThread } = useChatActions();
+  const messages = useChatMessages();
+  if (messages.length === 0) return null;
+  return (
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <p className="truncate text-label text-nb-faint">{threadTitle || "this conversation"}</p>
+      <button
+        type="button"
+        onClick={newThread}
+        disabled={busy}
+        className="shrink-0 rounded-ctl px-2 py-1 text-label text-nb-faint hover:text-nb-ink disabled:opacity-40"
+      >
+        New conversation
+      </button>
+    </div>
+  );
+}
 
 /**
  * Course Hub center pane — the shared chat surface, scoped to one course.
@@ -52,6 +81,7 @@ const SUGGESTIONS = [
  * files and forgotten needs to be able to see why the answer looks thin,
  * without opening the rail to count checkboxes.
  */
+
 export function CourseChat({ code }: { code: string }) {
   const model = useSelectedModel();
   const { paths, available } = useCourseSelection();
@@ -59,6 +89,7 @@ export function CourseChat({ code }: { code: string }) {
   return (
     <ChatProvider course={code} sources={paths}>
       <NotebookPanel heading="Ask this course" scale="body" className="flex h-full flex-col">
+        <CourseThreadBar />
         <ChatPanel
           variant="dock"
           suggestions={SUGGESTIONS}

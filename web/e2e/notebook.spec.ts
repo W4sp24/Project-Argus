@@ -1280,3 +1280,27 @@ test("a course's decks are one click away from the course", async ({ page, reque
   await page.getByRole("link", { name: "← e2e hub deck" }).click();
   await expect(page).toHaveURL(new RegExp(`/notebook/flashcards/${deck.id}$`));
 });
+
+test("the course hub resumes its own conversation instead of starting over", async ({ page }) => {
+  // The backend has persisted every thread and turn since threads existed,
+  // and `chat_threads.course` has always been set from the hub. Nothing ever
+  // asked for them back: `openThread` was called only from /chat's rail, so
+  // the hub started empty every time. Reloading — or clicking a deck and
+  // coming back — wiped the transcript, and the next message opened a brand
+  // new thread, leaving one course with a trail of one-turn conversations.
+  //
+  // `seed_chat_threads.py` writes "CS000 exam prep" with one user turn.
+  await page.goto("/notebook/course/CS000");
+
+  const chat = page.locator("section").filter({ hasText: "Ask this course" });
+  await expect(chat.getByText("What is on the exam?")).toBeVisible({ timeout: 15_000 });
+  await expect(chat.getByText("CS000 exam prep")).toBeVisible();
+
+  // …and it survives a reload, which is the half that was actually broken.
+  await page.reload();
+  await expect(chat.getByText("What is on the exam?")).toBeVisible({ timeout: 15_000 });
+
+  // Starting fresh is still possible, and clears the transcript.
+  await chat.getByRole("button", { name: "New conversation" }).click();
+  await expect(chat.getByText("What is on the exam?")).toBeHidden();
+});
