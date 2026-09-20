@@ -99,7 +99,7 @@ def test_the_default_index_factory_is_shared_across_threads(vault: Path, monkeyp
     """
     built: list[int] = []
 
-    def fake_make_index_factory(_db_dir, *, taxonomy=None):
+    def fake_make_index_factory(_db_dir, *, taxonomy=None, ocr=None):
         built.append(1)
         sentinel = object()
         return lambda: sentinel
