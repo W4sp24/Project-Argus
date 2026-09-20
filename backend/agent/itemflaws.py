@@ -355,16 +355,29 @@ from functools import cache  # noqa: E402 - kept beside its one user
 from pathlib import Path  # noqa: E402
 
 _RULES = Path(__file__).parent / "prompts" / "item_writing.md"
+_CARD_RULES = Path(__file__).parent / "prompts" / "card_writing.md"
 
 
 @cache
 def item_writing_rules() -> str:
-    """The rules, stated to the model as well as checked afterwards.
+    """The exam rules, stated to the model as well as checked afterwards.
 
     Checking alone would mean regenerating constantly. Saying them first is
     what makes the validator mostly a safety net rather than a second pass.
     """
     return _RULES.read_text(encoding="utf-8").strip()
+
+
+@cache
+def card_writing_rules() -> str:
+    """The card rules -- a different document, because a card is not a question.
+
+    An exam item is judged on whether a test-wise student could game it. A
+    card is judged on whether someone who has forgotten the material can
+    retrieve it in a few seconds, months later, which is why these are
+    SuperMemo's rules and not the NBME's.
+    """
+    return _CARD_RULES.read_text(encoding="utf-8").strip()
 
 
 @dataclass(frozen=True)

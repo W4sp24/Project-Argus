@@ -519,3 +519,53 @@ def test_generate_options_names_exactly_what_the_module_accepts(client: TestClie
     assert options["styles"] == list(generate.CARD_STYLES)
     assert options["default_difficulty"] == generate.DEFAULT_DIFFICULTY
     assert options["max_cards"] == generate.MAX_CARDS
+
+
+# --- card quality -----------------------------------------------------------
+
+
+def test_a_card_about_the_document_is_dropped() -> None:
+    """The failure that made a generated deck useless in review.
+
+    A card asking which theorem appears on slide 14 tests navigation of a
+    document the reader will not have in front of them. The good card beside
+    it survives.
+    """
+    reply = (
+        "Q:: Which theorem does slide 14 state?\n"
+        "A:: Rolle's Theorem\n"
+        "Q:: What does Rolle's Theorem conclude?\n"
+        "A:: There is an interior point where the derivative is zero.\n"
+    )
+    cards = asyncio.run(generate.generate_cards(_generator(reply), _corpus(), "CS201", n=5))
+
+    fronts = [card["front"] for card in cards]
+    assert fronts == ["What does Rolle's Theorem conclude?"]
+
+
+def test_a_deck_of_nothing_but_document_questions_says_so() -> None:
+    """Better a named failure than a deck of one card nobody can review."""
+    reply = (
+        "Q:: Which theorem is listed in the excerpt?\n"
+        "A:: Rolle's Theorem\n"
+        "Q:: What is on slide 20?\n"
+        "A:: Taylor's formula\n"
+    )
+    with pytest.raises(generate.FlashcardsError, match="rather than the subject"):
+        asyncio.run(generate.generate_cards(_generator(reply), _corpus(), "CS201", n=5))
+
+
+def test_a_long_answer_is_kept_with_a_warning_rather_than_dropped() -> None:
+    """A card a student can still learn from beats no card; decks are editable."""
+    long_answer = " ".join(["word"] * 40)
+    reply = f"Q:: What is dynamic programming?\nA:: {long_answer}\n"
+    cards = asyncio.run(generate.generate_cards(_generator(reply), _corpus(), "CS201", n=5))
+
+    assert len(cards) == 1
+
+
+def test_the_card_rules_reach_the_model() -> None:
+    generator = _generator("Q:: a\nA:: b\n")
+    asyncio.run(generate.generate_cards(generator, _corpus(), "CS201", n=1))
+
+    assert "One card, one fact" in generator.prompt

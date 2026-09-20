@@ -20,6 +20,8 @@ from typing import Any
 
 from backend.agent.formatting import compose, math_contract
 from backend.agent.generate import Generator
+from backend.agent.itemflaws import Item as FlawItem
+from backend.agent.itemflaws import card_writing_rules, check_card, rejected
 from backend.features.flashcards.parsing import parse_qa_pairs
 from backend.features.flashcards.store import FlashcardsError
 from backend.rag.select import pack_excerpts
@@ -152,6 +154,9 @@ Rules:
 - One fact per card. A card testing two things tests neither.
 - The question must be answerable from the excerpts alone.
 - No card may repeat another's question.
+- Never ask about the source itself. "Which theorem does slide 14 state?" and
+  "What does the excerpt list?" test navigation of a document the reader will
+  not have in front of them. Ask about the subject.
 - Do not number the cards, do not add headings, do not add commentary."""
 
     extra = instructions.strip()[:MAX_INSTRUCTIONS]
@@ -163,7 +168,13 @@ Rules:
         else ""
     )
 
-    return compose(task, math_contract(), user_block, f"SOURCES:\n{pack_excerpts(corpus)}")
+    return compose(
+        task,
+        card_writing_rules(),
+        math_contract(),
+        user_block,
+        f"SOURCES:\n{pack_excerpts(corpus)}",
+    )
 
 
 def validate_options(difficulty: str, styles: list[str]) -> None:
@@ -225,12 +236,27 @@ async def generate_cards(
 
     cards: list[dict[str, str]] = []
     seen: set[str] = set()
+    rejected_cards = 0
     for front, back in pairs:
         key = front.strip().casefold()
         if key in seen:
             continue
         seen.add(key)
+        # A card that asks about the document is worthless in review: the
+        # reader will not have the document. Everything else the validator
+        # finds -- a paragraph for an answer, a list, two facts in one card --
+        # is a warning, because a card a student can still learn from beats no
+        # card, and a deck is cheap to edit.
+        if rejected(check_card(FlawItem(stem=front, answer=back))):
+            rejected_cards += 1
+            continue
         cards.append({"front": front, "back": back})
         if len(cards) >= wanted:
             break
+
+    if not cards and rejected_cards:
+        raise FlashcardsError(
+            f"all {rejected_cards} generated cards asked about the source document "
+            "rather than the subject — regenerate, or pick different sources"
+        )
     return cards
