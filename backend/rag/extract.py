@@ -50,17 +50,33 @@ def _extract_pdf(file_path: Path) -> list[Block]:
 
 
 def _extract_pptx(file_path: Path) -> list[Block]:
+    """One block per slide, with equations, groups, tables and notes.
+
+    ``slide.shapes`` is not used: it is a shallow iterator over recognised
+    shape elements and it skips ``mc:AlternateContent`` (where every equation
+    lives), group contents, and tables. See
+    :mod:`backend.rag.extractors.pptx_shapes`.
+    """
     from pptx import Presentation  # heavy import kept lazy
+
+    from backend.rag.extractors.pptx_shapes import slide_lines, speaker_notes
 
     blocks: list[Block] = []
     for number, slide in enumerate(Presentation(file_path).slides, start=1):
-        texts = [
-            shape.text_frame.text
-            for shape in slide.shapes
-            if shape.has_text_frame and shape.text_frame.text.strip()
-        ]
-        if texts:
-            blocks.append(Block(text="\n".join(texts), meta={"slide": number}))
+        lines = slide_lines(slide)
+        notes = speaker_notes(slide)
+        if notes:
+            # Marked rather than merged: a note is the lecturer talking, not
+            # something the slide claims, and a reader revising from the block
+            # needs to be able to tell those apart.
+            lines.append(f"[notes] {notes}")
+        if lines:
+            blocks.append(
+                Block(
+                    text="\n".join(lines),
+                    meta={"slide": number, "extraction": {"method": "text"}},
+                )
+            )
     return blocks
 
 
