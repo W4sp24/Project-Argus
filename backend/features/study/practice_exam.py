@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from collections.abc import Awaitable, Callable
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
@@ -20,11 +19,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from backend.agent.formatting import compose, json_math_contract
+from backend.agent.generate import Generator
 from backend.core.taxonomy import Taxonomy, active_taxonomy
+from backend.rag.select import MAX_PROMPT_CHARS, pack_excerpts
 
-Generator = Callable[[str], Awaitable[str]]
-
-MAX_PROMPT_CHARS = 60_000
+# Re-exported: this module was where `Generator` and the prompt budget lived,
+# and several callers (and their tests) still import them from here.
+__all__ = ["MAX_PROMPT_CHARS", "Exam", "Generator", "Question", "StudyError"]
 
 
 class StudyError(RuntimeError):
@@ -286,20 +287,6 @@ def render_key_md(exam: Exam) -> str:
 def exam_prompt(
     course: str, corpus: list[dict[str, Any]], topics: str | None, n: int, difficulty: str
 ) -> str:
-    excerpts: list[str] = []
-    used = 0
-    for chunk in corpus:
-        meta = chunk["meta"]
-        where = (
-            f"page {meta['page']}"
-            if meta.get("page")
-            else (f"slide {meta['slide']}" if meta.get("slide") else "note")
-        )
-        block = f"[SOURCE path={meta.get('path')} {where}]\n{chunk['text']}\n"
-        if used + len(block) > MAX_PROMPT_CHARS:
-            break
-        excerpts.append(block)
-        used += len(block)
 
     topic_line = f"Focus on: {topics}." if topics else "Cover the material broadly."
     task = f"""Create a {difficulty} practice exam with exactly {n} questions for course {course},
@@ -321,7 +308,7 @@ Citation rules (questions violating them will be discarded):
     # because the grader compares it to what a person typed. Handing over the
     # markdown contract here would instruct the model to produce exactly what
     # this feature cannot consume.
-    return compose(task, json_math_contract(), f"SOURCES:\n{''.join(excerpts)}")
+    return compose(task, json_math_contract(), f"SOURCES:\n{pack_excerpts(corpus)}")
 
 
 async def generate_practice_exam(

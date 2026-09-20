@@ -19,9 +19,10 @@ from __future__ import annotations
 from typing import Any
 
 from backend.agent.formatting import compose, math_contract
+from backend.agent.generate import Generator
 from backend.features.flashcards.parsing import parse_qa_pairs
 from backend.features.flashcards.store import FlashcardsError
-from backend.features.study.practice_exam import MAX_PROMPT_CHARS, Generator
+from backend.rag.select import pack_excerpts
 
 #: Refuse to write a deck larger than this in one pass. A model asked for 200
 #: cards produces filler long before it produces 200 good ones.
@@ -110,9 +111,9 @@ def deck_prompt(
 ) -> str:
     """Ask for ``n`` cards grounded only in the excerpts.
 
-    Packs excerpts to the same ``MAX_PROMPT_CHARS`` budget the exam uses, and
-    stops at the same boundary, so the two features fill a context window the
-    same way.
+    Packing goes through :func:`backend.rag.select.pack_excerpts`, so this
+    fills a context window exactly the way the guide and the exam do -- one
+    budget, one ``[SOURCE ...]`` spelling, one rule about an oversized chunk.
 
     ``instructions`` is the user's own free text and goes **last**, where a
     later instruction beats an earlier one for most models — that is the point
@@ -122,20 +123,6 @@ def deck_prompt(
     which is a robustness problem rather than a safety one: the text is the
     user's, going to the user's model.
     """
-    excerpts: list[str] = []
-    used = 0
-    for chunk in corpus:
-        meta = chunk["meta"]
-        where = (
-            f"page {meta['page']}"
-            if meta.get("page")
-            else (f"slide {meta['slide']}" if meta.get("slide") else "note")
-        )
-        block = f"[SOURCE path={meta.get('path')} {where}]\n{chunk['text']}\n"
-        if used + len(block) > MAX_PROMPT_CHARS:
-            break
-        excerpts.append(block)
-        used += len(block)
 
     chosen = list(styles) if styles else list(DEFAULT_STYLES)
     style_block = "\n\n".join(CARD_STYLES[style] for style in chosen)
@@ -176,7 +163,7 @@ Rules:
         else ""
     )
 
-    return compose(task, math_contract(), user_block, f"SOURCES:\n{''.join(excerpts)}")
+    return compose(task, math_contract(), user_block, f"SOURCES:\n{pack_excerpts(corpus)}")
 
 
 def validate_options(difficulty: str, styles: list[str]) -> None:

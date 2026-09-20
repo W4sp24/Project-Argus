@@ -11,6 +11,7 @@ invariant I5); naming a registry model routes through
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from backend.agent.adapters import (
@@ -25,6 +26,13 @@ from backend.agent.adapters import (
 MODEL = "claude-opus-4-8"
 # No tools, and no filesystem access either — this is a pure text call.
 DISALLOWED_TOOLS = ("Bash", "Write", "Edit", "Read", "Glob", "Grep", "WebSearch")
+
+#: What a feature accepts in place of a real model call, so tests can inject a
+#: fake. It lives here rather than in a feature because both study and
+#: flashcards need it, and no feature may import another — flashcards reached
+#: into ``features.study.practice_exam`` for this and for the prompt budget,
+#: which is the one cross-feature import in the backend.
+Generator = Callable[[str], Awaitable[str]]
 
 
 async def agent_generate(

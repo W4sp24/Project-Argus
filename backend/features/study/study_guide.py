@@ -13,11 +13,11 @@ import frontmatter
 from backend.agent.formatting import compose, math_contract, note_quality, topics_tail
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.study.practice_exam import (
-    MAX_PROMPT_CHARS,
     Generator,
     StudyError,
     unique_base,
 )
+from backend.rag.select import pack_excerpts
 from backend.vault import relations
 from backend.vault.sources import GENERATED_BY, generated_kind
 
@@ -97,26 +97,13 @@ def _unwrap_fenced_reply(raw: str) -> str:
 
 
 def guide_prompt(course: str, scope: str, corpus: list[dict[str, Any]]) -> str:
-    excerpts: list[str] = []
-    used = 0
-    for chunk in corpus:
-        meta = chunk["meta"]
-        where = (
-            f"p.{meta['page']}"
-            if meta.get("page")
-            else (f"slide {meta['slide']}" if meta.get("slide") else "note")
-        )
-        block = f"[SOURCE {meta.get('path')} {where}]\n{chunk['text']}\n"
-        if used + len(block) > MAX_PROMPT_CHARS:
-            break
-        excerpts.append(block)
-        used += len(block)
     structure = f"""Write a study guide for course {course}, scope: {scope}.
 Use ONLY the source excerpts below. Structure (markdown):
 
 1. `## Outline` — the topic map.
-2. `## Key concepts` — each with a one-line definition and a citation like
-   [<file> p.N] / [<file> slide N] / [<path>] taken from the SOURCE markers.
+2. `## Key concepts` — each with a one-line definition and a citation copied
+   from the SOURCE marker above the excerpt it came from: write `[<path> p.N]`
+   for a page, `[<path> slide N]` for a slide, `[<path>]` for a note.
 3. `## Worked examples` — 2-3 step-by-step examples from the material, each
    step saying *why* it follows from the one above it.
 4. `## Common mistakes` — the errors this material invites, where the sources
@@ -141,7 +128,7 @@ Every factual claim needs a citation."""
         note_quality(),
         math_contract(),
         topics_tail(),
-        f"SOURCES:\n{''.join(excerpts)}",
+        f"SOURCES:\n{pack_excerpts(corpus)}",
     )
 
 
