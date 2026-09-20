@@ -369,8 +369,13 @@ def test_without_replace_a_collision_still_dedupes(client: TestClient, vault: Pa
 def test_note_styles_are_served_not_hardcoded_in_the_dialog(client: TestClient) -> None:
     payload = client.get("/api/ingest/note-styles").json()
 
+    from backend.agent.doctypes import DOC_TYPES
+
+    # Asserted against the registry rather than a second copy of the list:
+    # the point of this endpoint is that the dialog does not hardcode one,
+    # and a test that hardcodes one has the same defect it is checking for.
     keys = [style["key"] for style in payload["styles"]]
-    assert keys == ["summary", "study-guide", "cornell", "key-terms"]
+    assert keys == list(DOC_TYPES)
     assert all(style["label"] and style["description"] for style in payload["styles"])
 
 

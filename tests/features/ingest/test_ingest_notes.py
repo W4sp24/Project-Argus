@@ -50,7 +50,7 @@ def test_the_note_name_follows_the_deduped_source_not_the_upload():
     )
 
 
-@pytest.mark.parametrize("key", ["summary", "study-guide", "cornell", "key-terms"])
+@pytest.mark.parametrize("key", sorted(notes.NOTE_STYLES))
 def test_every_style_contributes_its_structure_to_the_prompt(key):
     style = notes.NOTE_STYLES[key]
     prompt = notes.build_prompt(style, "", "a/b.pdf", "TEXT")
@@ -62,11 +62,19 @@ def test_every_style_contributes_its_structure_to_the_prompt(key):
 #: The section headings each style is responsible for. The self-test tail is
 #: absent on purpose -- see the test below it.
 STYLE_SECTIONS = {
-    "summary": ["## Key points", "## Takeaways"],
-    "study-guide": ["## Outline", "## Key concepts", "## Worked examples", "## Common mistakes"],
-    "cornell": ["## Cues", "## Notes", "## Summary"],
+    "briefing": ["## What it covers", "## The claims", "## What to take away"],
+    "study-guide": ["## The spine", "## Worked examples", "## Traps"],
+    "concept-map": ["## The ideas", "## How they connect", "## The through-line"],
+    "faq": ["## Questions"],
+    "timeline": ["## Sequence", "## Turning points"],
     "key-terms": ["## Key terms"],
+    "cornell": ["## Cues", "## Notes", "## Summary"],
 }
+
+
+def test_every_offered_style_is_covered_here() -> None:
+    """A new shape with no section assertions is an untested shape."""
+    assert sorted(STYLE_SECTIONS) == sorted(notes.NOTE_STYLES)
 
 
 @pytest.mark.parametrize(("key", "sections"), sorted(STYLE_SECTIONS.items()))
@@ -106,7 +114,7 @@ def test_the_prompt_asks_for_notation_in_a_form_both_renderers_accept():
     These three are where KaTeX and MathJax disagree; getting them wrong makes
     a note that renders in the app and not in Obsidian, or the reverse.
     """
-    prompt = notes.build_prompt(notes.NOTE_STYLES["summary"], "", "a/b.pdf", "TEXT")
+    prompt = notes.build_prompt(notes.NOTE_STYLES["briefing"], "", "a/b.pdf", "TEXT")
 
     assert "$$" in prompt, "display maths must be specified"
     assert chr(92) + "(" in prompt, "the \\(...\\) form must be ruled out by name"

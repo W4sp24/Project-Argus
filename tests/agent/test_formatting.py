@@ -33,7 +33,7 @@ def test_the_chat_agent_and_a_note_are_handed_the_same_contract() -> None:
     contract = math_contract()
 
     chat = _load_system_prompt(Taxonomy())
-    note = notes.build_prompt(notes.NOTE_STYLES["summary"], "", "a/b.pdf", "TEXT")
+    note = notes.build_prompt(notes.NOTE_STYLES["briefing"], "", "a/b.pdf", "TEXT")
     guide = guide_prompt("CS201", "everything", CORPUS)
 
     assert contract in chat

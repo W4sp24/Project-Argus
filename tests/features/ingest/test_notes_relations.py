@@ -42,7 +42,7 @@ BODY = (
 def test_the_topics_section_becomes_links_not_a_second_list():
     _, markdown = note_styles.note_markdown(
         "15-Courses/ETHICS/materials/wk1.pdf",
-        note_styles.NOTE_STYLES["summary"],
+        note_styles.NOTE_STYLES["briefing"],
         "",
         BODY,
         resolve=_resolver({"Determinism": "60-Knowledge/General/Determinism.md"}),
@@ -59,7 +59,7 @@ def test_the_source_link_resolves_to_the_pdf_rather_than_to_nothing():
     """The pre-existing bug: ``[[wk1]]`` for ``wk1.pdf`` is a hollow node."""
     _, markdown = note_styles.note_markdown(
         "15-Courses/ETHICS/materials/wk1.pdf",
-        note_styles.NOTE_STYLES["summary"],
+        note_styles.NOTE_STYLES["briefing"],
         "",
         BODY,
     )
@@ -70,7 +70,7 @@ def test_the_source_link_resolves_to_the_pdf_rather_than_to_nothing():
 def test_frontmatter_carries_topics_tags_and_related():
     _, markdown = note_styles.note_markdown(
         "15-Courses/ETHICS/materials/wk1.pdf",
-        note_styles.NOTE_STYLES["summary"],
+        note_styles.NOTE_STYLES["briefing"],
         "",
         BODY,
         resolve=_resolver({}),
@@ -88,7 +88,7 @@ def test_a_model_that_ignores_the_tail_still_produces_todays_note():
     """The degradation path. No topics, no crash, still a source and a course."""
     _, markdown = note_styles.note_markdown(
         "15-Courses/ETHICS/materials/wk1.pdf",
-        note_styles.NOTE_STYLES["summary"],
+        note_styles.NOTE_STYLES["briefing"],
         "",
         "Just a summary with no topics section.\n",
     )
@@ -114,7 +114,7 @@ def test_the_course_link_follows_a_renamed_courses_zone():
     tax = Taxonomy(courses="Modules")
     destination, markdown = note_styles.note_markdown(
         "Modules/ETHICS/materials/wk1.pdf",
-        note_styles.NOTE_STYLES["summary"],
+        note_styles.NOTE_STYLES["briefing"],
         "",
         BODY,
         taxonomy=tax,

@@ -443,7 +443,7 @@ def test_a_style_alone_is_enough_to_ask_for_a_note(settings, conn, tmp_path, vau
 
     assert (vault / "00-Inbox" / "files" / "lecture.summary.md").is_file()
     assert len(generator.prompts) == 1
-    assert "## Outline" in generator.prompts[0], "the style's structure reached the model"
+    assert "## The spine" in generator.prompts[0], "the style's structure reached the model"
 
 
 def test_no_style_and_no_prompt_still_skips_the_note_stage(settings, conn, tmp_path, vault) -> None:

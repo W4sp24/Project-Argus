@@ -10,7 +10,8 @@ from typing import Any
 
 import frontmatter
 
-from backend.agent.formatting import compose, math_contract, note_quality, topics_tail
+from backend.agent import doctypes
+from backend.agent.formatting import compose, note_contract
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.study.practice_exam import (
     Generator,
@@ -96,38 +97,40 @@ def _unwrap_fenced_reply(raw: str) -> str:
     return match.group(1) if match else raw
 
 
-def guide_prompt(course: str, scope: str, corpus: list[dict[str, Any]]) -> str:
-    structure = f"""Write a study guide for course {course}, scope: {scope}.
-Use ONLY the source excerpts below. Structure (markdown):
+def guide_prompt(
+    course: str, scope: str, corpus: list[dict[str, Any]], doc_type: Any = None
+) -> str:
+    """The prompt for one course-wide guide.
 
-1. `## Outline` — the topic map.
-2. `## Key concepts` — each with a one-line definition and a citation copied
-   from the SOURCE marker above the excerpt it came from: write `[<path> p.N]`
-   for a page, `[<path> slide N]` for a slide, `[<path>]` for a note.
-3. `## Worked examples` — 2-3 step-by-step examples from the material, each
-   step saying *why* it follows from the one above it.
-4. `## Common mistakes` — the errors this material invites, where the sources
-   name or imply them. Omit the section rather than inventing one.
+    The sections come from the same doc-type contract the per-document notes
+    use. They used to be written out here as a numbered list, which is how a
+    guide and the note sitting next to it in the vault ended up held to two
+    different sets of rules — and how the guide's own instructions came to
+    disagree with `note_quality.md` and `topics.md` about which section was
+    last, in a pipeline that discards everything after `## Topics`.
+    """
+    resolved = doc_type or doctypes.resolve("study-guide")
+    structure = f"""Write a {resolved.label.lower()} for course {course}, scope: {scope}.
+Use ONLY the source excerpts below.
 
-Every factual claim needs a citation."""
+Every factual claim needs a citation, copied from the SOURCE marker above the
+excerpt it came from: write `[<path> p.N]` for a page, `[<path> slide N]` for
+a slide, `[<path>]` for a note."""
 
-    # The same three contracts the per-document note styles get
+    # The same contract the per-document note styles get
     # (backend/features/ingest/notes.py). A course guide and the note sitting
-    # next to it in the vault are the same kind of artefact and are held to the
-    # same rules; two copies of "here is how to write a note" is how they stop
-    # being. `topics_tail` is the newest of the three and the one a guide most
-    # obviously needs: a guide covers a whole course, so the concepts it names
-    # are the concepts the course is about.
+    # next to it in the vault are the same kind of artefact and are held to
+    # the same rules; two copies of "here is how to write a note" is how they
+    # stop being. `note_contract` also owns section *order*, which the three
+    # blocks this replaces disagreed about.
     #
-    # The tail goes above SOURCES rather than below it because every contract
-    # block belongs to the instruction and the excerpts are the material -- and
-    # because `parse_topics` reads the *last* "## Topics" heading, so a source
-    # excerpt that happens to contain one costs nothing.
+    # The contract goes above SOURCES rather than below it because it belongs
+    # to the instruction and the excerpts are the material -- and because
+    # `parse_topics` reads the *last* "## Topics" heading, so a source excerpt
+    # that happens to contain one costs nothing.
     return compose(
         structure,
-        note_quality(),
-        math_contract(),
-        topics_tail(),
+        note_contract(resolved),
         f"SOURCES:\n{pack_excerpts(corpus)}",
     )
 

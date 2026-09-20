@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 _PROMPTS = Path(__file__).parent / "prompts"
 
@@ -42,6 +43,11 @@ JSON_MATH_PROMPT = _PROMPTS / "formatting_json.md"
 #: Notes and study guides only, for the same reason NOTE_QUALITY_PROMPT is --
 #: a chat answer has nowhere to put links, and an exam is JSON.
 TOPICS_PROMPT = _PROMPTS / "topics.md"
+
+#: The ``Q::``/``A::`` self-test. Its own file because it is a *section*,
+#: and which sections a note has is the doc type's decision, not a rule
+#: that applies to every note whatever its shape.
+SELF_TEST_PROMPT = _PROMPTS / "self_test.md"
 
 
 @cache
@@ -93,6 +99,57 @@ def json_math_contract() -> str:
     actively instruct it to produce something the exam cannot use.
     """
     return JSON_MATH_PROMPT.read_text(encoding="utf-8").strip()
+
+
+@cache
+def self_test_tail() -> str:
+    """Ask for the ``Q::``/``A::`` pairs a note's flashcards are parsed from.
+
+    Split out of :func:`note_quality` because it is a *section*, and sections
+    are owned by the doc type. Left inside the quality rules it applied to
+    every note whatever its shape, so an FAQ was asked for its questions twice
+    and Cornell notes got a self-test under their own Cues.
+    """
+    return SELF_TEST_PROMPT.read_text(encoding="utf-8").strip()
+
+
+def note_contract(doc_type: Any = None) -> str:
+    """The whole contract for one generated note, in the one correct order.
+
+    This function exists because section order is load-bearing and was
+    previously decided by three prompt files that disagreed.
+    :func:`backend.vault.relations.parse_topics` keeps everything *before* the
+    last ``## Topics`` heading and discards the rest -- so a note that took
+    "end every note with a self-test" literally had its self-test deleted on
+    the way into the vault, along with the flashcards it would have become.
+
+    Order, therefore, is stated once, here:
+
+    1. the doc type's own sections
+    2. how to write a note worth keeping
+    3. how to write notation that renders in both engines
+    4. the self-test, if this type has one
+    5. ``## Topics``, always last, because everything after it is thrown away
+
+    ``doc_type`` of ``None`` means "no prescribed sections" -- a note written
+    from a free-text instruction alone. It still gets everything from (2)
+    down, because those are house rules rather than properties of a shape:
+    a note asked for in the user's own words is still a note, and still has
+    to render in Obsidian and still seeds a deck. Defaulting to a shape
+    instead would silently impose sections nobody asked for.
+    """
+    from backend.agent.doctypes import contract
+
+    sections = contract(doc_type.key) if doc_type else ""
+    wants_self_test = doc_type.wants_self_test if doc_type else True
+    wants_topics = doc_type.wants_topics if doc_type else True
+    return compose(
+        sections,
+        note_quality(),
+        math_contract(),
+        self_test_tail() if wants_self_test else "",
+        topics_tail() if wants_topics else "",
+    )
 
 
 def compose(*blocks: str) -> str:
