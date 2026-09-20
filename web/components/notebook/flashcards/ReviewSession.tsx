@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import ActivityChrome from "@/components/notebook/flashcards/ActivityChrome";
@@ -93,8 +93,19 @@ export default function ReviewSession({
   const [grading, setGrading] = useState(false);
   const [startedAt] = useState(() => Date.now());
 
+  // Seeded once, not on every identity change.
+  //
+  // `due` is SWR data, and nothing configures `revalidateOnFocus: false`, so
+  // alt-tabbing away and back handed this a fresh array — and reset the queue
+  // mid-session, re-inserting cards already graded in this sitting and
+  // desyncing the `done.length + queue.length` total the progress bar reads.
+  // A review session is a snapshot by nature: the point of `due` is what was
+  // due when you sat down.
+  const seeded = useRef(false);
   useEffect(() => {
-    if (due) setQueue(due);
+    if (!due || seeded.current) return;
+    seeded.current = true;
+    setQueue(due);
   }, [due]);
 
   const current = queue[0];
@@ -136,6 +147,13 @@ export default function ReviewSession({
       await refresh();
       setFlipped(false);
       show("undone :: that card is due again now");
+    } catch (error) {
+      // `finally` without `catch` made a failed undo an unhandled rejection,
+      // and left the session silent about it — the local state correctly did
+      // not change, so the UI simply looked like nothing had happened.
+      show(`undo failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
     } finally {
       setGrading(false);
     }

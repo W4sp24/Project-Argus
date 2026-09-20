@@ -47,10 +47,22 @@ export default function MatchGame({ deck }: { deck: FlashcardDeckDetail }) {
   const [elapsed, setElapsed] = useState(0);
   const [finishedMs, setFinishedMs] = useState<number | null>(null);
 
+  // Dealt from a snapshot, so only a new seed re-deals.
+  //
+  // `deck.card_list` is SWR data and nothing sets `revalidateOnFocus: false`,
+  // so alt-tabbing away and back gave it a fresh identity — and re-dealt the
+  // board mid-game while `cleared` (which holds card refs) survived. The
+  // completion check `next.length === cards.length` could then never fire, or
+  // fire against a board that no longer existed.
+  const listRef = useRef(deck.card_list);
   const cards = useMemo(() => {
     void seed; // a new seed deals a new board
-    return shuffle(deck.card_list.filter((card) => !card.suspended)).slice(0, PAIRS);
-  }, [deck.card_list, seed]);
+    listRef.current = deck.card_list;
+    return shuffle(listRef.current.filter((card) => !card.suspended)).slice(0, PAIRS);
+    // Deliberately not depending on `deck.card_list`: a revalidation is not a
+    // reason to reshuffle a game in progress.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed]);
 
   const tiles = useMemo(
     () =>

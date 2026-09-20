@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import ExamWorkspace from "@/components/notebook/ExamWorkspace";
 import ScoresHistoryPanel from "@/components/notebook/ScoresHistoryPanel";
 import NotebookStatusLine from "@/components/notebook/NotebookStatusLine";
@@ -15,7 +16,13 @@ export default function PracticeExamPage() {
           extra width. 20rem = the artboard's 320px. */}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0">
-          <ExamWorkspace />
+          {/* ExamWorkspace reads `?id=` so the Course Hub's per-exam links
+              open the exam they name. `useSearchParams` opts a route out of
+              static prerendering unless it sits under a Suspense boundary,
+              and this page is otherwise fully static. */}
+          <Suspense fallback={<p className="text-body text-nb-faint">Loading exams…</p>}>
+            <ExamWorkspace />
+          </Suspense>
         </div>
         <div className="min-w-0">
           <ScoresHistoryPanel />

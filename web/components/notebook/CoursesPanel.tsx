@@ -194,7 +194,7 @@ export default function CoursesPanel() {
       show(`${kind} failed: ${payload.detail}`, { tone: "error" });
       return;
     }
-    track(payload.job_id);
+    track(payload.job_id, { kind, params: { course } });
     show(`${kind} queued for ${course} — it keeps running if you leave this tab`);
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Markdown from "@/components/Markdown";
 import ActivityChrome from "@/components/notebook/flashcards/ActivityChrome";
@@ -50,6 +50,9 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
   const [verdict, setVerdict] = useState<"correct" | "close" | "wrong" | null>(null);
   const [usedHint, setUsedHint] = useState(false);
   const [overrode, setOverrode] = useState(false);
+  // A ref, not state: it has to be readable and writable synchronously
+  // inside one click handler, before React has committed anything.
+  const gradingRef = useRef<string | null>(null);
   const [mastered, setMastered] = useState<string[]>([]);
   const [round, setRound] = useState(1);
 
@@ -73,8 +76,19 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
     return "good";
   }
 
+  /**
+   * One grade per answer.
+   *
+   * The four choice buttons are all live while a grade is in flight, so a
+   * fast double-tap posted two grades for one card. FSRS derives a card's
+   * state from its newest review, so the second scheduled from the first and
+   * the card advanced twice as far as one answer earned. `grading` closes
+   * that window here; `store.grade_card` closes it on the server too, because
+   * two windows can do the same thing.
+   */
   async function settle(result: "correct" | "close" | "wrong") {
-    if (!current) return;
+    if (!current || gradingRef.current) return;
+    gradingRef.current = current.ref;
     setVerdict(result);
     const grade = gradeFor(result);
     try {
@@ -82,6 +96,8 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
     } catch {
       // A failed post must not strand the session: the card still advances,
       // and the schedule simply does not learn from this answer.
+    } finally {
+      gradingRef.current = null;
     }
   }
 
@@ -320,8 +336,18 @@ export default function LearnSession({ deck }: { deck: FlashcardDeckDetail }) {
               <button
                 type="button"
                 onClick={() => {
+                  // Once. The button re-renders away on `overrode`, but a
+                  // double-click lands both handlers before React commits —
+                  // and this card has already been graded by `settle`, so a
+                  // second post is a third review for one answer.
+                  if (overrode || gradingRef.current) return;
                   setOverrode(true);
-                  void gradeFlashcard(deck.id, current.ref, "hard").catch(() => {});
+                  gradingRef.current = current.ref;
+                  void gradeFlashcard(deck.id, current.ref, "hard")
+                    .catch(() => {})
+                    .finally(() => {
+                      gradingRef.current = null;
+                    });
                 }}
                 className="rounded-ctl border border-nb-line px-4 py-3 text-ctl text-nb-body transition-colors hover:border-nb-lineHi hover:text-nb-ink"
               >

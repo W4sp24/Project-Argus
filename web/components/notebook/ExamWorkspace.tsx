@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Markdown from "@/components/Markdown";
 import NotebookPanel from "@/components/notebook/NotebookPanel";
 import { useToast } from "@/components/Toast";
 import { apiFetch, fetcher, useStudyCourses, useStudyExams } from "@/lib/api";
+import { useJobs } from "@/lib/jobs";
 import { selectedModel } from "@/lib/models";
 
 interface QuizQuestion {
@@ -43,8 +45,42 @@ export default function ExamWorkspace() {
   const { data: exams, mutate: refreshExams } = useStudyExams();
   const { show } = useToast();
 
+  const { track, isBusy } = useJobs();
+  const searchParams = useSearchParams();
+
   const [genCourse, setGenCourse] = useState("");
+  // Covers only the moment between the click and the 202. The job's own
+  // running state lives in the registry, so it survives leaving this page.
   const [generating, setGenerating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  // Monotonic, so a slower earlier response cannot overwrite a later one.
+  const quizRequest = useRef(0);
+
+  const busy = (kind: string) => isBusy((job) => job.kind === kind);
+
+  // `CourseHub` has linked to /notebook/exam?id=<n> since it was written, with
+  // a comment saying it fixes "clicking EXAM opened whatever exam the page
+  // happened to load". Nothing ever read the parameter, so it never did.
+  const deepLink = searchParams.get("id");
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!deepLink || opened.current === deepLink || !exams) return;
+    const wanted = Number(deepLink);
+    if (!exams.some((exam) => exam.id === wanted)) return;
+    opened.current = deepLink;
+    void startQuiz(wanted);
+    // startQuiz is stable enough for this: it is only ever called for a fresh
+    // id, guarded by `opened`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLink, exams]);
+
+  // A generation finishing is what makes a new exam appear in the list. The
+  // registry is the only thing that knows, now that the request no longer
+  // waits for it.
+  const examJobs = isBusy((job) => job.kind === "exam");
+  useEffect(() => {
+    if (!examJobs) void refreshExams();
+  }, [examJobs, refreshExams]);
 
   const [quiz, setQuiz] = useState<{
     examId: number;
@@ -56,29 +92,53 @@ export default function ExamWorkspace() {
   const [current, setCurrent] = useState(0);
   const [result, setResult] = useState<AttemptResult | null>(null);
 
+  /**
+   * Generation goes through the job store, like every other long job.
+   *
+   * This was the last caller holding a multi-minute model call open inside a
+   * component local — the antipattern `lib/jobs.tsx` was written to remove,
+   * and CLAUDE.md names. Leaving `/notebook/exam` unmounted the component:
+   * the exam was still generated and still written to the vault, and nothing
+   * in the UI ever said so. It also created no job row, so `isBusy` could not
+   * see it and the Course Hub's own "Practice exam" button stayed live
+   * alongside it.
+   */
   async function generateExam(event: React.FormEvent) {
     event.preventDefault();
-    if (!genCourse) return;
+    if (!genCourse || generating || busy("exam")) return;
     setGenerating(true);
-    show(`generating exam for ${genCourse} — this can take a few minutes…`);
-    const response = await apiFetch("/api/study/exam", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // Same model selection chat uses (§7); omitted means the registry default.
-      body: JSON.stringify({ course: genCourse, n: 10, model: selectedModel() }),
-    });
-    const payload = await response.json();
-    setGenerating(false);
-    if (!response.ok) {
-      show(`exam generation failed: ${payload.detail}`);
-      return;
+    try {
+      const response = await apiFetch("/api/study/exam", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Same model selection chat uses (§7); omitted means the registry default.
+        body: JSON.stringify({
+          course: genCourse,
+          n: 10,
+          model: selectedModel(),
+          background: true,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        show(`exam generation failed: ${payload.detail}`);
+        return;
+      }
+      track(payload.job_id, { kind: "exam", params: { course: genCourse } });
+      show(`generating exam for ${genCourse} — this can take a few minutes…`);
+    } finally {
+      // Only the *request* is held here now; the job's running state comes
+      // from the registry, which survives leaving this page.
+      setGenerating(false);
     }
-    show(`exam ready: ${payload.questions} cited questions`);
-    refreshExams();
   }
 
   async function startQuiz(examId: number) {
+    // Clicking exam A then exam B fired two requests and whichever resolved
+    // last won, so you could end up sitting the one you clicked first.
+    const request = ++quizRequest.current;
     const questions = await fetcher<QuizQuestion[]>(`/api/study/exams/${examId}`);
+    if (request !== quizRequest.current) return;
     // Carried on the quiz so the header can name the exam you are sitting.
     // `exams` is the same SWR list the picker rendered, so this costs nothing.
     const summary = exams?.find((exam) => exam.id === examId);
@@ -93,15 +153,33 @@ export default function ExamWorkspace() {
     setResult(null);
   }
 
+  /**
+   * One attempt per submit.
+   *
+   * There was no busy flag and no `response.ok` check. Two clicks meant two
+   * `POST /attempt` calls, and `grade_attempt` both inserts an `attempts` row
+   * *and* appends to `review-queue.md` — so a double-submit doubled the score
+   * history and wrote the vault twice, taking two git snapshots. A 422 body
+   * was cast to `AttemptResult` and rendered as `undefined / undefined`.
+   */
   async function submitQuiz() {
-    if (!quiz) return;
-    const response = await apiFetch(`/api/study/exams/${quiz.examId}/attempt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ answers }),
-    });
-    const payload: AttemptResult = await response.json();
-    setResult(payload);
+    if (!quiz || submitting) return;
+    setSubmitting(true);
+    try {
+      const response = await apiFetch(`/api/study/exams/${quiz.examId}/attempt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        show(`could not submit: ${payload.detail ?? "the attempt was not recorded"}`);
+        return;
+      }
+      setResult(payload as AttemptResult);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   // ---- Results ----
@@ -306,7 +384,7 @@ export default function ExamWorkspace() {
           ) : (
             <button
               onClick={submitQuiz}
-              disabled={!answered}
+              disabled={!answered || submitting}
               className="rounded-ctl bg-[var(--ac)] px-5 py-3 text-body font-semibold text-nb-onAc transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               Grade me
@@ -342,10 +420,10 @@ export default function ExamWorkspace() {
           </select>
           <button
             type="submit"
-            disabled={!genCourse || generating}
+            disabled={!genCourse || generating || busy("exam")}
             className="min-h-10 rounded-ctl bg-[var(--ac)] px-4 py-2 text-ctl font-semibold text-nb-onAc transition-opacity hover:opacity-90 disabled:opacity-70"
           >
-            {generating ? "Generating…" : "＋ Generate exam"}
+            {generating || busy("exam") ? "Generating…" : "＋ Generate exam"}
           </button>
         </form>
       }

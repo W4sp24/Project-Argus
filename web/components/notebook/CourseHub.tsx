@@ -308,7 +308,7 @@ export function CourseStudio({ code }: { code: string }) {
         sources: paths,
         background: true,
       });
-      track(job_id);
+      track(job_id, { kind: "guide", params: { course: code } });
       show("study guide queued — it keeps running if you leave this tab");
     } catch (error) {
       // A 422 here is about the *request* (nothing selected, nothing indexed)

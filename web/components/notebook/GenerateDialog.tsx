@@ -282,7 +282,7 @@ export default function GenerateDialog({
             styles,
             instructions,
           });
-          track(job_id);
+          track(job_id, { kind: "deck", params: { course } });
           // Keeping the file is a vault write, so it goes through the normal
           // ingest flow rather than being smuggled in on the generate request.
           if (alsoSave && course) {
@@ -302,7 +302,7 @@ export default function GenerateDialog({
             instructions,
             title: chosenTitle || null,
           });
-          track(job_id);
+          track(job_id, { kind: "deck", params: { course } });
         }
       } else {
         const { job_id } = await mutateJSON<{ job_id: string }>("/api/study/exam", {
@@ -316,7 +316,7 @@ export default function GenerateDialog({
           topics: instructions.trim() || null,
           background: true,
         });
-        track(job_id);
+        track(job_id, { kind: "exam", params: { course } });
       }
       show(
         `${kind === "deck" ? "flashcard deck" : "practice exam"} queued — it keeps running if you leave this tab`,

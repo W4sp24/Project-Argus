@@ -44,6 +44,10 @@ export default function DeckEditor({
   // Collapsed by default: the list is what you came for, and a permanently
   // open three-field form pushed the first card below the fold on every deck.
   const [addOpen, setAddOpen] = useState(false);
+  // One mutation at a time. Star and reorder both derive their payload
+  // from the deck as it was rendered, so two in flight together compute
+  // from the same stale array and the later one wins.
+  const [pending, setPending] = useState(false);
 
   async function add(event: React.FormEvent) {
     event.preventDefault();
@@ -81,21 +85,61 @@ export default function DeckEditor({
     }
   }
 
+  /**
+   * One star toggle at a time.
+   *
+   * Rapid clicking sent two PATCHes with opposite values and whichever landed
+   * last won — and the `onChanged()` refetch from the first could arrive
+   * after the second committed, flipping the star back visually while the
+   * server held the other value. It also had no `catch`, so a failure was an
+   * unhandled rejection.
+   */
   async function toggleStar(card: FlashcardCard) {
-    await updateCard(deck.id, card.ref, { starred: !card.starred });
-    onChanged();
+    if (pending) return;
+    setPending(true);
+    try {
+      await updateCard(deck.id, card.ref, { starred: !card.starred });
+      onChanged();
+    } catch (error) {
+      show(`could not save: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
+      onChanged();
+    } finally {
+      setPending(false);
+    }
   }
 
+  /**
+   * One reorder at a time.
+   *
+   * The new order was computed from `deck.card_list` as captured at render,
+   * so two fast arrow clicks built two orders from the *same* stale array and
+   * posted both — the second overwriting the first, and one of the two moves
+   * silently vanishing. `reorderCards` also demands every ref exactly once,
+   * so a concurrent add or delete made it a 422 with no handler.
+   */
   async function move(index: number, delta: number) {
+    if (pending) return;
     const next = [...deck.card_list];
     const target = index + delta;
     if (target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
-    await reorderCards(
-      deck.id,
-      next.map((card) => card.ref),
-    );
-    onChanged();
+    setPending(true);
+    try {
+      await reorderCards(
+        deck.id,
+        next.map((card) => card.ref),
+      );
+      onChanged();
+    } catch (error) {
+      show(`could not reorder: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
+      onChanged();
+    } finally {
+      setPending(false);
+    }
   }
 
   async function remove(card: FlashcardCard) {
@@ -231,6 +275,7 @@ export default function DeckEditor({
                     aria-label={card.starred ? `Unstar card ${index + 1}` : `Star card ${index + 1}`}
                     aria-pressed={card.starred}
                     onClick={() => void toggleStar(card)}
+                    disabled={pending}
                     className={`shrink-0 ${card.starred ? "text-warn" : "text-nb-faint"}`}
                   >
                     {card.starred ? "★" : "☆"}
@@ -262,7 +307,7 @@ export default function DeckEditor({
                     <button
                       type="button"
                       aria-label={`Move card ${index + 1} up`}
-                      disabled={index === 0}
+                      disabled={index === 0 || pending}
                       onClick={() => void move(index, -1)}
                       className={iconButton}
                     >
@@ -271,7 +316,7 @@ export default function DeckEditor({
                     <button
                       type="button"
                       aria-label={`Move card ${index + 1} down`}
-                      disabled={index === deck.card_list.length - 1}
+                      disabled={index === deck.card_list.length - 1 || pending}
                       onClick={() => void move(index, 1)}
                       className={iconButton}
                     >

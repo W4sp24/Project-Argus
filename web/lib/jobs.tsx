@@ -14,6 +14,23 @@ import { useToast } from "@/components/Toast";
 import { type IngestJob, useAllJobs } from "@/lib/api";
 import { isRunning, jobsSignature, reconcile } from "@/lib/jobs/reducer";
 
+/** The shape an optimistic entry takes before the server has said anything.
+ *  Every field is what a just-created job is actually true of. */
+const OPTIMISTIC_JOB: IngestJob = {
+  id: "",
+  created_at: "",
+  finished_at: null,
+  status: "queued",
+  kind: "",
+  params: null,
+  target: "",
+  summary_prompt: "",
+  note_style: "",
+  total: 0,
+  done: 0,
+  error: null,
+};
+
 /**
  * Long-running work, owned above the router.
  *
@@ -43,8 +60,9 @@ const ACTIVE_POLL_MS = 900;
 interface JobsState {
   /** Every job currently in flight, whatever started it. */
   jobs: IngestJob[];
-  /** Follow a job id returned by a 202. */
-  track: (id: string) => void;
+  /** Start watching a job id returned by a 202. `optimistic` lets the caller say what kind and
+   *  course it is, so `isBusy` can match on it before the first poll. */
+  track: (id: string, optimistic?: Partial<IngestJob>) => void;
   /** Is some in-flight job matching `predicate`? Replaces per-component busy flags. */
   isBusy: (predicate: (job: IngestJob) => boolean) => boolean;
 }
@@ -108,9 +126,48 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     }
   }, [data, tracked, show]);
 
-  const track = useCallback((id: string) => {
+  /**
+   * Jobs this window has tracked but has not yet seen in a poll.
+   *
+   * `isBusy` reads `running`, which is built from the last poll intersected
+   * with `tracked` — so a job that was *just* tracked is in neither, and
+   * every `disabled={busy(kind)}` button stayed live for up to one poll
+   * interval after the click that started the job. That is the whole
+   * double-click window, and it is wide enough to hit by accident: ~900ms
+   * once the interval flips, longer if the flip lands late.
+   *
+   * The optimistic entry carries the kind and params the caller already
+   * knows, so a Course Hub button can match on its own course rather than
+   * merely on "something is running". It is dropped as soon as the server
+   * reports the job, and after a grace period if the server never does.
+   */
+  const [pending, setPending] = useState<IngestJob[]>([]);
+
+  const track = useCallback((id: string, optimistic?: Partial<IngestJob>) => {
     setTracked((current) => (current.includes(id) ? current : [...current, id]));
+    setPending((current) =>
+      current.some((job) => job.id === id)
+        ? current
+        : [...current, { ...OPTIMISTIC_JOB, ...optimistic, id }],
+    );
+    // A job the server never reports -- pruned, or a 202 for a row that
+    // failed immediately -- would otherwise leave its button disabled for the
+    // life of the window. Two idle polls is long enough that this never
+    // races a slow first poll.
+    window.setTimeout(
+      () => setPending((current) => current.filter((job) => job.id !== id)),
+      IDLE_POLL_MS * 2,
+    );
   }, []);
+
+  // Drop an optimistic entry once the server has actually reported the job,
+  // so its real status (including "already finished") takes over.
+  useEffect(() => {
+    if (!data || pending.length === 0) return;
+    const known = new Set(data.jobs.map((job) => job.id));
+    const stillPending = pending.filter((job) => !known.has(job.id));
+    if (stillPending.length !== pending.length) setPending(stillPending);
+  }, [data, pending]);
 
   // SWR reparses the response on every poll, so `data` changes identity every
   // 900ms while anything is in flight even when the backend said the same
@@ -119,13 +176,15 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   // CoursesPanel on a timer.
   const stable = useRef<IngestJob[]>([]);
   const running = useMemo(() => {
-    const next = (data?.jobs ?? []).filter(
+    const seen = (data?.jobs ?? []).filter(
       (job) => tracked.includes(job.id) && isRunning(job.status),
     );
+    const known = new Set(seen.map((job) => job.id));
+    const next = [...seen, ...pending.filter((job) => !known.has(job.id))];
     if (jobsSignature(next) === jobsSignature(stable.current)) return stable.current;
     stable.current = next;
     return next;
-  }, [data, tracked]);
+  }, [data, tracked, pending]);
 
   const isBusy = useCallback(
     (predicate: (job: IngestJob) => boolean) => running.some(predicate),
