@@ -75,7 +75,7 @@ def conn(tmp_path: Path) -> sqlite3.Connection:
 
 
 def test_build_exam_drops_uncited_questions() -> None:
-    exam, dropped = build_exam("ES101", RAW_EXAM, CORPUS)
+    exam, dropped, _reasons = build_exam("ES101", RAW_EXAM, CORPUS)
 
     assert len(exam.questions) == 2, "cited questions must survive"
     assert dropped == 1, "I6 violation: hallucinated question kept"
@@ -84,7 +84,7 @@ def test_build_exam_drops_uncited_questions() -> None:
 
 def test_build_exam_handles_code_fences_and_renders() -> None:
     fenced = f"```json\n{RAW_EXAM}\n```"
-    exam, _ = build_exam("ES101", fenced, CORPUS)
+    exam, _dropped, _reasons = build_exam("ES101", fenced, CORPUS)
 
     exam_md = render_exam_md(exam)
     key_md = render_key_md(exam)
@@ -100,7 +100,7 @@ def test_grade_attempt_scores_and_writes_review_queue(
     vault = tmp_path / "vault"
     (vault / "15-Courses" / "ES101" / "study").mkdir(parents=True)
 
-    exam, _ = build_exam("ES101", RAW_EXAM, CORPUS)
+    exam, _dropped, _reasons = build_exam("ES101", RAW_EXAM, CORPUS)
     conn.execute(
         "INSERT INTO exams (course, title, questions_json) VALUES (?, ?, ?)",
         ("ES101", exam.title, exam.model_dump_json()),
@@ -126,7 +126,7 @@ def test_grade_attempt_scores_and_writes_review_queue(
 def test_grade_attempt_accepts_mcq_letters(conn: sqlite3.Connection, tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     (vault / "15-Courses" / "ES101" / "study").mkdir(parents=True)
-    exam, _ = build_exam("ES101", RAW_EXAM, CORPUS)
+    exam, _dropped, _reasons = build_exam("ES101", RAW_EXAM, CORPUS)
     conn.execute(
         "INSERT INTO exams (course, title, questions_json) VALUES (?, ?, ?)",
         ("ES101", exam.title, exam.model_dump_json()),

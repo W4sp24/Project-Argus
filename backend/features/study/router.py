@@ -11,11 +11,11 @@ import re
 import sqlite3
 import threading
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
@@ -43,6 +43,11 @@ logger = logging.getLogger("argus.study")
 
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ -]")
 
+#: The most questions one generation may be asked for. A model asked for
+#: 200 writes filler long before it writes 200 good ones, and the number
+#: goes into the prompt verbatim.
+MAX_EXAM_QUESTIONS = 50
+
 
 class GuideRequest(BaseModel):
     course: str
@@ -62,8 +67,13 @@ class GuideRequest(BaseModel):
 class ExamRequest(BaseModel):
     course: str
     topics: str | None = None
-    n: int = 10
-    difficulty: str = "medium"
+    # Bounded, because both reach a prompt by interpolation. `n=5000` went in
+    # verbatim as "exactly 5000 questions", and `difficulty` was interpolated
+    # raw into a sentence. `flashcards/generate.py` fixed the same two things
+    # for decks by naming the behaviour rather than the adjective; this is the
+    # request-level half of that.
+    n: int = Field(default=10, ge=1, le=MAX_EXAM_QUESTIONS)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
     model: str | None = None
     sources: list[str] | None = None
     background: bool = False

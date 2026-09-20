@@ -107,3 +107,82 @@ def test_inline_maths_in_a_question_survives_into_both_renderings() -> None:
     assert "$" + B + "nabla f(x)$" in render_exam_md(exam)
     assert "$" + B + "nabla f(x)$" in render_key_md(exam)
     assert "It is $0$." in render_key_md(exam)
+
+
+# --- the paper reads like a paper -------------------------------------------
+
+
+def _exam_with(**overrides) -> Exam:
+    question = Question(
+        q="A function $f$ is continuous on $[0,2]$. Which result applies?",
+        type="mcq",
+        options=["Rolle's Theorem", "The MVT", "The IVT", "The EVT"],
+        answer="Rolle's Theorem",
+        explanation="All three hypotheses hold.",
+        citation=Citation(path="wk9.pdf", slide=14, quote="Rolle's Theorem"),
+    )
+    return Exam(course="CS26110", title="Preliminaries", questions=[question], **overrides)
+
+
+def test_an_exam_carries_frontmatter() -> None:
+    """A bare `# H1` is invisible to relink, to the WRITTEN badge and to Obsidian."""
+    body = render_exam_md(_exam_with(), course="CS26110", rel_path="15-Courses/CS26110/study/e.md")
+
+    assert body.startswith("---")
+    assert "generated_by: argus" in body
+    assert "course: CS26110" in body
+    assert "type: exam" in body
+
+
+def test_the_key_links_back_to_its_paper_and_the_paper_to_its_key() -> None:
+    """It used to say "the matching `-key.md` file" as literal, unclickable text."""
+    rel = "15-Courses/CS26110/study/exam-2026-09-14-10q.md"
+    paper = render_exam_md(_exam_with(), course="CS26110", rel_path=rel)
+    key = render_key_md(_exam_with(), course="CS26110", rel_path=rel)
+
+    assert "[[exam-2026-09-14-10q-key|answer key]]" in paper
+    assert "[[exam-2026-09-14-10q|the paper]]" in key
+
+
+def test_the_paper_says_how_long_it_should_take() -> None:
+    assert "minutes" in render_exam_md(_exam_with())
+
+
+def test_a_short_question_gets_somewhere_to_write() -> None:
+    """It used to render as a heading and then nothing at all."""
+    exam = Exam(
+        course="CS26110",
+        title="T",
+        questions=[
+            Question(
+                q="State the conclusion of Rolle's Theorem.",
+                type="short",
+                answer="$f'(c)=0$",
+                citation=Citation(path="wk9.pdf", slide=14, quote="Rolle"),
+            )
+        ],
+    )
+    assert "_Answer:_" in render_exam_md(exam)
+
+
+def test_balanced_inline_maths_is_left_alone() -> None:
+    """The contract asks for LaTeX in `q`; escaping it would print the dollars."""
+    body = render_exam_md(_exam_with())
+    assert "$f$" in body and B + "$f" not in body
+
+
+def test_an_unbalanced_dollar_is_neutralised() -> None:
+    """One stray `$` opens a span that swallows the next several questions."""
+    exam = Exam(
+        course="CS26110",
+        title="T",
+        questions=[
+            Question(
+                q="A licence costs $200 per seat. What is the total for 3 seats?",
+                type="short",
+                answer="600",
+                citation=Citation(path="wk1.pdf", page=2, quote="licence"),
+            )
+        ],
+    )
+    assert B + "$200" in render_exam_md(exam)

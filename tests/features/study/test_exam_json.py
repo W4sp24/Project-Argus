@@ -74,7 +74,7 @@ def _exam_json(explanation: str) -> str:
 @pytest.mark.parametrize("command", LONE_BACKSLASH_COMMANDS)
 def test_a_lone_backslash_latex_command_survives_intact(command: str) -> None:
     """Neither a hard failure nor a silent control character."""
-    exam, dropped = build_exam("MATH210", _exam_json(B + command), CORPUS)
+    exam, dropped, _reasons = build_exam("MATH210", _exam_json(B + command), CORPUS)
 
     assert dropped == 0, f"{B + command} cost us the question"
     explanation = exam.questions[0].explanation
@@ -88,7 +88,7 @@ def test_correctly_escaped_latex_is_left_alone() -> None:
     """A model that does it right must not be 'repaired' into double backslashes."""
     raw = _exam_json(B + B + "frac{1}{2}")
 
-    exam, dropped = build_exam("MATH210", raw, CORPUS)
+    exam, dropped, _reasons = build_exam("MATH210", raw, CORPUS)
 
     assert dropped == 0
     assert exam.questions[0].explanation == B + "frac{1}{2}"
@@ -102,7 +102,8 @@ def test_a_genuine_newline_escape_stays_a_newline() -> None:
     of ``\neq``. The exam contract tells the model to double its backslashes
     for exactly this case.
     """
-    exam, _ = build_exam("MATH210", _exam_json("Step one." + B + "nStep two."), CORPUS)
+    exam, _dropped, _reasons = build_exam(
+        "MATH210", _exam_json("Step one." + B + "nStep two."), CORPUS)
 
     assert exam.questions[0].explanation == "Step one.\nStep two."
 
@@ -111,7 +112,7 @@ def test_latex_inside_a_fenced_block_still_parses() -> None:
     """The two tolerances compose: fence extraction, then backslash repair."""
     fenced = "```json\n" + _exam_json(B + "sum_{i=1}^n") + "\n```"
 
-    exam, dropped = build_exam("MATH210", fenced, CORPUS)
+    exam, dropped, _reasons = build_exam("MATH210", fenced, CORPUS)
 
     assert dropped == 0
     assert B + "sum_{i=1}^n" in exam.questions[0].explanation
@@ -119,7 +120,8 @@ def test_latex_inside_a_fenced_block_still_parses() -> None:
 
 def test_a_quote_is_still_an_escape() -> None:
     """Repair must not break the one escape the schema genuinely needs."""
-    exam, _ = build_exam("MATH210", _exam_json("He said " + B + '"hi' + B + '".'), CORPUS)
+    exam, _dropped, _reasons = build_exam(
+        "MATH210", _exam_json("He said " + B + '"hi' + B + '".'), CORPUS)
 
     assert exam.questions[0].explanation == 'He said "hi".'
 
@@ -134,7 +136,7 @@ def test_the_repair_does_not_disturb_a_clean_payload() -> None:
     """No backslashes at all: byte-identical behaviour to plain json.loads."""
     raw = json.dumps(json.loads(_exam_json("Plain prose, no notation.")))
 
-    exam, dropped = build_exam("MATH210", raw, CORPUS)
+    exam, dropped, _reasons = build_exam("MATH210", raw, CORPUS)
 
     assert dropped == 0
     assert exam.questions[0].explanation == "Plain prose, no notation."
