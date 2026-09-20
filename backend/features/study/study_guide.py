@@ -113,9 +113,12 @@ def guide_prompt(
     structure = f"""Write a {resolved.label.lower()} for course {course}, scope: {scope}.
 Use ONLY the source excerpts below.
 
-Every factual claim needs a citation, copied from the SOURCE marker above the
-excerpt it came from: write `[<path> p.N]` for a page, `[<path> slide N]` for
-a slide, `[<path>]` for a note."""
+Every factual claim needs a citation taken from the SOURCE marker above the
+excerpt it came from. Cite the **file name only, never the folders**, and put
+the location after it: `[lecture3.pdf p.7]`, `[week2.pptx slide 14]`,
+`[graphs.md]`. A citation is read in the middle of a sentence and in table
+cells, so a full vault path repeated forty times is the difference between a
+guide you can read and one you cannot."""
 
     # The same contract the per-document note styles get
     # (backend/features/ingest/notes.py). A course guide and the note sitting
