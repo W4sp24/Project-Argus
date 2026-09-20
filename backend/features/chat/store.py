@@ -177,6 +177,36 @@ def touch_thread(
     conn.commit()
 
 
+def get_summary(conn: sqlite3.Connection, thread_id: int) -> tuple[str, int]:
+    """The compacted prefix of a thread, and the last message it covers.
+
+    ``("", 0)`` for a thread nothing has been compacted out of yet, which is
+    every thread until it passes the history budget.
+    """
+    row = conn.execute(
+        "SELECT summary, summary_upto_id FROM chat_threads WHERE id = ?", (thread_id,)
+    ).fetchone()
+    if row is None:
+        return "", 0
+    return str(row["summary"] or ""), int(row["summary_upto_id"] or 0)
+
+
+def set_summary(conn: sqlite3.Connection, thread_id: int, summary: str, upto_id: int) -> None:
+    """Cache a thread's compacted prefix so it costs one model call, not one per turn.
+
+    ``upto_id`` is the highest ``chat_messages.id`` folded into ``summary``,
+    so a later turn can tell whether anything new has fallen off the budget
+    since. Deliberately does **not** touch ``updated_at``: compaction is
+    bookkeeping, and letting it reorder the thread rail would move a
+    conversation to the top for something the user did not do.
+    """
+    conn.execute(
+        "UPDATE chat_threads SET summary = ?, summary_upto_id = ? WHERE id = ?",
+        (summary, upto_id, thread_id),
+    )
+    conn.commit()
+
+
 def set_session(
     conn: sqlite3.Connection,
     thread_id: int,

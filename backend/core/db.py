@@ -663,6 +663,23 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if "failed_stage" not in item_columns:  # migration for pre-failed-stage DBs
         conn.execute("ALTER TABLE ingest_job_items ADD COLUMN failed_stage TEXT")
 
+    # A long conversation used to forget its own beginning: `budget_history`
+    # drops the oldest turns past 20 messages / 24k characters, so the
+    # transcript on screen stayed complete while the model stopped being able
+    # to see what was originally asked. The dropped span is now summarised,
+    # and the summary is cached here so it costs one model call per compaction
+    # rather than one per turn.
+    #
+    # Both defaults are constants, so the ALTER fills every existing row and
+    # no backfill is needed: `''` and `0` are exactly true of every thread
+    # that predates compaction -- nothing has been compacted yet.
+    thread_columns = {row["name"] for row in conn.execute("PRAGMA table_info(chat_threads)")}
+    if "summary" not in thread_columns:
+        conn.execute("ALTER TABLE chat_threads ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            "ALTER TABLE chat_threads ADD COLUMN summary_upto_id INTEGER NOT NULL DEFAULT 0"
+        )
+
     # Decks became authorable: they can be renamed, described, and can belong
     # to no course at all (course = '', since relaxing a NOT NULL in SQLite
     # would cost a table rebuild to buy nothing a value cannot say).

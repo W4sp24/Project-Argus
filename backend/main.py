@@ -362,7 +362,18 @@ def create_app(
     # The shared index, not one of chat's own: ChatAgent used to build a second
     # VaultIndex (and so a second embedding model) alongside the one every
     # other router already shares.
-    app.include_router(build_chat_router(resolved, chat_runner, index))
+    # The summarizer is the plain generator under a different feature label,
+    # so compaction shows up in token usage as its own line rather than
+    # inflating chat's. A test app passing `chat_runner` gets no summarizer at
+    # all, which leaves history budgeted the way it always was.
+    app.include_router(
+        build_chat_router(
+            resolved,
+            chat_runner,
+            index,
+            summarizer=None if chat_runner else _default_generator("chat-summary"),
+        )
+    )
     app.include_router(build_automations_router(resolved))
     app.include_router(build_calendar_router(resolved))
 

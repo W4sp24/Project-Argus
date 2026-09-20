@@ -8,8 +8,15 @@ adapters grew a message list instead of a bare string.
 
 from __future__ import annotations
 
+import pytest
+
 from backend.agent.adapters import Message
-from backend.agent.history import budget_history, serialize_history
+from backend.agent.history import (
+    SUMMARY_PREFIX,
+    budget_history,
+    compact_history,
+    serialize_history,
+)
 
 
 def msgs(*texts: str) -> list[Message]:
@@ -99,3 +106,87 @@ def test_serialize_history_multi_message_contains_prior_and_current_turns() -> N
     # The current turn must be identifiable as the live question, not buried
     # inside the delimited prior-turns block.
     assert rendered.rstrip().endswith("and what about A*?")
+
+
+# --- compaction -------------------------------------------------------------
+
+
+def _turns(count: int, size: int = 100) -> list[Message]:
+    return [
+        Message("user" if index % 2 == 0 else "assistant", f"turn {index} " + "x" * size)
+        for index in range(count)
+    ]
+
+
+async def _summarizer(dropped):
+    return f"we covered {len(dropped)} earlier turns"
+
+
+@pytest.mark.anyio
+async def test_a_short_conversation_is_not_compacted(anyio_backend) -> None:
+    """Summarising two turns costs a model call to save nothing."""
+    calls: list[int] = []
+
+    async def counting(dropped):
+        calls.append(len(dropped))
+        return "never"
+
+    messages = _turns(4)
+    sent, summary = await compact_history(messages, summarize=counting)
+
+    assert calls == []
+    assert sent == messages
+    assert summary == ""
+
+
+@pytest.mark.anyio
+async def test_what_falls_off_the_budget_is_summarised_rather_than_lost(anyio_backend) -> None:
+    """The defect: a long session silently forgot its own beginning.
+
+    The transcript on screen stayed complete while the model stopped being
+    able to see what the conversation was originally about — so a student who
+    explained their confusion on turn three got asked again on turn forty.
+    """
+    sent, summary = await compact_history(
+        _turns(40), summarize=_summarizer, max_messages=6, max_chars=100_000
+    )
+
+    assert summary == "we covered 34 earlier turns"
+    assert sent[0].text.startswith(SUMMARY_PREFIX)
+    assert summary in sent[0].text
+    assert len(sent) == 7, "the summary rides in front of the budgeted turns"
+
+
+@pytest.mark.anyio
+async def test_the_live_turn_is_still_last(anyio_backend) -> None:
+    """A summary in front must not displace the question being asked."""
+    messages = _turns(40)
+    sent, _ = await compact_history(
+        messages, summarize=_summarizer, max_messages=6, max_chars=100_000
+    )
+    assert sent[-1] == messages[-1]
+
+
+@pytest.mark.anyio
+async def test_an_earlier_summary_is_kept_when_nothing_new_falls_off(anyio_backend) -> None:
+    """It is written once per compaction, not rebuilt every turn."""
+    sent, summary = await compact_history(
+        _turns(4), summarize=_summarizer, prior_summary="what came before"
+    )
+    assert summary == "what came before"
+    assert sent[0].text.startswith(SUMMARY_PREFIX)
+
+
+@pytest.mark.anyio
+async def test_a_failing_summarizer_costs_the_summary_not_the_turn(anyio_backend) -> None:
+    """Forgetting the start of a conversation is bad; failing the turn is worse."""
+
+    async def boom(dropped):
+        raise RuntimeError("provider down")
+
+    sent, summary = await compact_history(
+        _turns(40), summarize=boom, max_messages=6, max_chars=100_000
+    )
+    assert summary == ""
+    assert len(sent) == 6
+    assert not sent[0].text.startswith(SUMMARY_PREFIX)

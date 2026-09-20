@@ -199,3 +199,33 @@ def test_derive_title_double_check_stored_json(conn) -> None:
         "SELECT tools_json FROM chat_messages WHERE thread_id = ?", (thread["id"],)
     ).fetchone()
     assert json.loads(row["tools_json"]) == trace
+
+
+def test_a_thread_starts_with_nothing_compacted(conn) -> None:
+    thread = store.create_thread(conn, title="t")
+    assert store.get_summary(conn, thread["id"]) == ("", 0)
+
+
+def test_a_summary_round_trips(conn) -> None:
+    """Cached so compaction costs one model call, not one per turn."""
+    thread = store.create_thread(conn, title="t")
+    store.set_summary(conn, thread["id"], "they are stuck on Taylor series", 12)
+
+    assert store.get_summary(conn, thread["id"]) == ("they are stuck on Taylor series", 12)
+
+
+def test_compacting_does_not_reorder_the_thread_rail(conn) -> None:
+    """Bookkeeping must not look like activity.
+
+    `updated_at` drives the rail's ordering, so touching it here would float a
+    conversation to the top for something the user did not do.
+    """
+    thread = store.create_thread(conn, title="t", now=_clock(datetime(2026, 9, 1, tzinfo=UTC)))
+    before = store.get_thread(conn, thread["id"])["updated_at"]
+    store.set_summary(conn, thread["id"], "notes", 4)
+
+    assert store.get_thread(conn, thread["id"])["updated_at"] == before
+
+
+def test_a_missing_thread_reports_no_summary_rather_than_raising(conn) -> None:
+    assert store.get_summary(conn, 9999) == ("", 0)

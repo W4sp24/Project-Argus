@@ -11,7 +11,7 @@ import inspect
 import logging
 import sqlite3
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
 from backend.agent.adapters import Message, Notice, ToolFinished, ToolStarted
+from backend.agent.history import compact_history
 from backend.agent.text_tool_calls import is_only_a_tool_call
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
@@ -237,6 +238,65 @@ def _open_turn(
         conn.close()
 
 
+#: What a summarizer is asked for. Short and blunt on purpose: this text
+#: rides in front of every later turn, so a long summary costs more context
+#: than the turns it replaced.
+_SUMMARY_PROMPT = """Summarise this part of a tutoring conversation in at most
+120 words, for your own later reference. Keep: what the student is working on,
+anything they said they find confusing, decisions reached, and facts about them
+that a tutor should not have to ask twice. Drop pleasantries and anything you
+can look up again. Write it as notes, not prose.
+
+<conversation>
+{transcript}
+</conversation>"""
+
+
+async def _compact(
+    db: Callable[[], sqlite3.Connection],
+    thread_id: int,
+    history: list[Message],
+    summarizer: Callable[[str], Any] | None,
+) -> list[Message]:
+    """Summarise what the history budget would otherwise silently drop.
+
+    Done here rather than in :mod:`backend.agent.history` because the summary
+    is cached on the thread, and ``agent/`` does not reach into a feature's
+    store. The summarizer is injected for the same reason the generator is:
+    a test that had to stand up a model to send one chat message would be
+    testing the model.
+
+    Returns the history to send. A missing summarizer, or a failing one,
+    leaves the plain budgeted history -- a thread that forgets its beginning
+    is a worse conversation, and a turn that fails is not a conversation.
+    """
+    if summarizer is None:
+        return history
+
+    conn = db()
+    try:
+        prior, prior_upto = store.get_summary(conn, thread_id)
+    finally:
+        conn.close()
+
+    async def summarize(dropped: Sequence[Message]) -> str:
+        transcript = "\n".join(f"{turn.role}: {turn.text}" for turn in dropped)
+        return await summarizer(_SUMMARY_PROMPT.format(transcript=transcript))
+
+    sent, summary = await compact_history(history, summarize=summarize, prior_summary=prior)
+    if summary and summary != prior:
+        conn = db()
+        try:
+            # `len(history)` rather than a message id: the caller holds
+            # `Message` objects, which carry no row id. The number only has to
+            # be monotonic per thread for a later turn to tell that something
+            # new was folded in.
+            store.set_summary(conn, thread_id, summary, max(prior_upto, len(history)))
+        finally:
+            conn.close()
+    return sent
+
+
 #: Shown in place of a tool call that reached the transcript anyway. See
 #: `_persistable_text`.
 LEAKED_CALL_REPLACEMENT = (
@@ -321,6 +381,7 @@ def build_chat_router(
     settings: Settings,
     chat_runner: ChatRunner | None,
     index_factory: Callable[[], Any] | None = None,
+    summarizer: Callable[[str], Any] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -395,6 +456,7 @@ def build_chat_router(
                     await websocket.send_json(
                         {"type": "thread", "thread_id": thread["id"], "title": thread["title"]}
                     )
+                    history = await _compact(db, thread["id"], history, summarizer)
                     text_parts: list[str] = []
                     steps: list[dict] = []
                     try:

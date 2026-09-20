@@ -10,7 +10,7 @@ touching every adapter.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from backend.agent.adapters import Message
 
@@ -53,6 +53,68 @@ def budget_history(
     if len(kept) == 1 and len(current.text) > max_chars:
         return [current]
     return kept
+
+
+#: Turns the summary of an earlier span of conversation into a message the
+#: model reads as context. Injected rather than imported: this module is
+#: policy, and keeping it model-free is what lets ``tests/agent/test_history``
+#: run with no model, no vault and no database.
+Summarizer = Callable[[Sequence[Message]], Awaitable[str]]
+
+#: How the compacted prefix is introduced. A ``user`` turn because
+#: :class:`Message` has only two roles and an ``assistant`` turn would read as
+#: something the model itself said.
+SUMMARY_PREFIX = "Earlier in this conversation:"
+
+#: Never compact below this many real turns. Summarising two messages costs a
+#: model call to save a few hundred characters, and the summary is longer than
+#: what it replaces as often as not.
+MIN_COMPACTABLE = 6
+
+
+async def compact_history(
+    messages: Sequence[Message],
+    *,
+    summarize: Summarizer,
+    prior_summary: str = "",
+    max_messages: int = MAX_HISTORY_MESSAGES,
+    max_chars: int = MAX_HISTORY_CHARS,
+) -> tuple[list[Message], str]:
+    """Budget history, but summarise what falls off instead of losing it.
+
+    :func:`budget_history` drops the oldest turns and nothing else, so a long
+    session silently forgets its own beginning: the transcript on screen stays
+    complete while the model stops being able to see what the conversation was
+    originally about. For a tutor that is the whole problem -- a student who
+    explained on turn three what they find confusing gets asked again on turn
+    forty.
+
+    Returns the messages to send and the summary to persist. The summary
+    covers everything dropped *so far*, including whatever a previous call
+    already folded in, so it is written once per compaction rather than
+    rebuilt per turn.
+
+    A summarizer that fails returns the plain budgeted history: forgetting the
+    start of a conversation is bad, and failing the turn outright is worse.
+    """
+    if not messages:
+        return [], prior_summary
+
+    kept = budget_history(messages, max_messages=max_messages, max_chars=max_chars)
+    dropped = list(messages[: len(messages) - len(kept)])
+
+    summary = prior_summary
+    if len(dropped) >= MIN_COMPACTABLE:
+        try:
+            fresh = (await summarize(dropped)).strip()
+        except Exception:  # noqa: BLE001 - a lost summary must not lose the turn
+            fresh = ""
+        if fresh:
+            summary = fresh
+
+    if not summary:
+        return kept, prior_summary
+    return [Message("user", f"{SUMMARY_PREFIX}\n{summary}"), *kept], summary
 
 
 def serialize_history(messages: Sequence[Message]) -> str:
