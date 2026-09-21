@@ -570,3 +570,63 @@ def test_a_long_thread_sends_the_model_its_most_recent_turns(tmp_path: Path) -> 
     assert len(history) == HISTORY_FETCH_LIMIT
     assert history[-1].text == f"turn {HISTORY_FETCH_LIMIT + 19}", "the newest turn must be last"
     assert history[0].text == "turn 20", "the window slides, and stays oldest-first"
+
+
+def test_a_course_hub_turn_carries_what_the_tutor_remembers(tmp_path: Path) -> None:
+    """The tutor's own notes, from `notebook_memory`.
+
+    `grader.py` has computed `weak_topics` on every attempt since exams
+    existed and written them to a markdown file nothing reads back, so the
+    assistant in the Course Hub never knew what its student keeps getting
+    wrong. Now it arrives as context in front of the turn.
+    """
+    from backend.core import notebook_memory
+    from backend.core.db import connect, init_schema
+
+    seen: list[list[str]] = []
+
+    async def history_runner(message: str, history=None, **_kw) -> AsyncIterator[str]:
+        seen.append([m.text for m in (history or [])])
+        yield "ok"
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    settings = Settings(_vault_path=vault)
+    conn = connect(settings.db_path)
+    init_schema(conn)
+    notebook_memory.remember(conn, "CS000", "weak-topic", "Rolle", "missed in a practice exam")
+    conn.close()
+
+    app = create_app(settings, chat_runner=history_runner)
+    with TestClient(app).websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "explain the mean value theorem", "course": "CS000"})
+        _turn(ws)
+
+    assert any("Rolle" in text for text in seen[0]), "the tutor was not told what it knows"
+
+
+def test_global_chat_carries_no_course_memory(tmp_path: Path) -> None:
+    """A study aside does not belong in a conversation about the user's week."""
+    from backend.core import notebook_memory
+    from backend.core.db import connect, init_schema
+
+    seen: list[list[str]] = []
+
+    async def history_runner(message: str, history=None, **_kw) -> AsyncIterator[str]:
+        seen.append([m.text for m in (history or [])])
+        yield "ok"
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    settings = Settings(_vault_path=vault)
+    conn = connect(settings.db_path)
+    init_schema(conn)
+    notebook_memory.remember(conn, "CS000", "weak-topic", "Rolle", "missed twice")
+    conn.close()
+
+    app = create_app(settings, chat_runner=history_runner)
+    with TestClient(app).websocket_connect("/ws/chat") as ws:
+        ws.send_json({"message": "what does my week look like?"})
+        _turn(ws)
+
+    assert not any("Rolle" in text for text in seen[0])

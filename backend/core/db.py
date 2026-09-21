@@ -529,6 +529,36 @@ CREATE TABLE IF NOT EXISTS extraction_cache (
 );
 CREATE INDEX IF NOT EXISTS idx_extraction_cache_created
     ON extraction_cache(created_at);
+
+-- What Argus knows about a student in one course, across conversations.
+--
+-- `chat_threads.summary` remembers a conversation; this remembers the
+-- student. It outlives any thread, and most of it is *derived* rather than
+-- said: `grader.py` has computed `weak_topics` on every attempt since exams
+-- existed and written them to a markdown file nothing reads back, and the
+-- flashcard store knows exactly which cards keep being graded `again`. Both
+-- were facts about the student the tutor could not see.
+--
+-- `confidence` is what separates a slip from a pattern: the same subject seen
+-- again bumps it rather than writing a second row. UNIQUE on
+-- (course, kind, subject) is what makes that upsert possible.
+--
+-- No CHECK on `kind`: SQLite cannot alter one, and this vocabulary is
+-- expected to grow -- the same reason `ingest_jobs.kind` has none. It lives
+-- in `core/notebook_memory.py::KINDS`.
+CREATE TABLE IF NOT EXISTS notebook_memory (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    course      TEXT    NOT NULL,
+    kind        TEXT    NOT NULL,
+    subject     TEXT    NOT NULL,
+    detail      TEXT    NOT NULL DEFAULT '',
+    confidence  INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (course, kind, subject)
+);
+CREATE INDEX IF NOT EXISTS idx_notebook_memory_course
+    ON notebook_memory(course, confidence DESC, updated_at DESC);
 """
 
 

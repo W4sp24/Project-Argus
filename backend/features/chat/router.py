@@ -21,6 +21,7 @@ from starlette.websockets import WebSocketState
 from backend.agent.adapters import Message, Notice, ToolFinished, ToolStarted
 from backend.agent.history import compact_history
 from backend.agent.text_tool_calls import is_only_a_tool_call
+from backend.core import notebook_memory
 from backend.core.config import Settings
 from backend.core.db import connect, init_schema
 from backend.features.chat import store
@@ -297,6 +298,35 @@ async def _compact(
     return sent
 
 
+def _with_course_memory(
+    db: Callable[[], sqlite3.Connection], course: str | None, history: list[Message]
+) -> list[Message]:
+    """Prepend what Argus already knows about this student in this course.
+
+    Only in a Course Hub. Global ``/chat`` is not about one course and has no
+    student model to bring; injecting one there would put a study aside into
+    a conversation about the user's week.
+
+    It rides in the history rather than in the system prompt because the
+    system prompt is loaded once per agent while the course is per turn --
+    and because this is *context*, not instruction, which is the same reason
+    the compacted summary goes here.
+    """
+    if not course:
+        return history
+    conn = db()
+    try:
+        memories = notebook_memory.recall(conn, course)
+    except sqlite3.Error:
+        # A tutor without its notes is still a tutor.
+        return history
+    finally:
+        conn.close()
+
+    block = notebook_memory.as_prompt_block(memories)
+    return [Message("user", block), *history] if block else history
+
+
 #: Shown in place of a tool call that reached the transcript anyway. See
 #: `_persistable_text`.
 LEAKED_CALL_REPLACEMENT = (
@@ -457,6 +487,7 @@ def build_chat_router(
                         {"type": "thread", "thread_id": thread["id"], "title": thread["title"]}
                     )
                     history = await _compact(db, thread["id"], history, summarizer)
+                    history = _with_course_memory(db, course or thread["course"], history)
                     text_parts: list[str] = []
                     steps: list[dict] = []
                     try:

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from backend.core import notebook_memory
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.study.practice_exam import StudyError
 from backend.rag.deindex import forget_tree
@@ -42,6 +43,9 @@ class CourseDeleteResult:
     #: folder. Zero when nothing was purged, and zero (not an error) when
     #: there is no index to ask.
     chunks_removed: int = 0
+    #: Facts the tutor remembered about this course. Last because a
+    #: defaulted field cannot precede a required one.
+    memories_removed: int = 0
 
 
 def delete_exam(conn: sqlite3.Connection, exam_id: int) -> int:
@@ -118,6 +122,9 @@ def delete_course(
             f"DELETE FROM flashcard_reviews WHERE deck_id IN ({placeholders})", deck_ids
         ).rowcount
     decks_removed = conn.execute("DELETE FROM flashcard_decks WHERE course = ?", (code,)).rowcount
+    # Nothing in this schema cascades, so a deleted course would otherwise
+    # leave a tutor still remembering what its student struggled with in it.
+    memories_removed = notebook_memory.forget_course(conn, code)
 
     conn.commit()
 
@@ -126,6 +133,7 @@ def delete_course(
         attempts_removed=attempts_removed,
         decks_removed=decks_removed,
         reviews_removed=reviews_removed,
+        memories_removed=memories_removed,
         folder_removed=folder_removed,
         chunks_removed=chunks_removed,
     )

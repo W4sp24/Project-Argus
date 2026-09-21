@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.core import notebook_memory
 from backend.core.taxonomy import Taxonomy, active_taxonomy
 from backend.features.study.practice_exam import Exam, Question, StudyError
 
@@ -170,6 +171,22 @@ def grade_attempt(
 
     if weak_topics:
         _append_review_queue(vault_path, exam, weak_topics, score, taxonomy=taxonomy)
+        # …and tell the tutor, not only the markdown file.
+        #
+        # These have been computed on every attempt since exams existed and
+        # written somewhere nothing reads back, so the assistant in the Course
+        # Hub has never known what its student keeps getting wrong. Recorded
+        # per topic so a second miss reinforces the same row rather than
+        # adding another: that is what lets a tutor tell a slip from a
+        # pattern.
+        for topic in weak_topics:
+            notebook_memory.remember(
+                conn,
+                exam.course,
+                "weak-topic",
+                topic,
+                "missed in a practice exam",
+            )
 
     return AttemptResult(
         attempt_id=int(cursor.lastrowid),
