@@ -10,10 +10,8 @@ import {
   useCourseSources,
   useFlashcardDecks,
   useStudyExams,
-  useVault,
 } from "@/lib/api";
 import { ChatProvider, useChatActions, useChatMessages, useChatMeta } from "@/lib/chat";
-import { obsidianUri } from "@/lib/citations";
 import GenerateDialog, { type GenerateKind } from "@/components/notebook/GenerateDialog";
 import { useCourseSelection } from "@/lib/courseSelection";
 import { useJobs } from "@/lib/jobs";
@@ -229,7 +227,6 @@ export function CourseStudio({ code }: { code: string }) {
   // shared SWR key open and re-fetches it when this course's work lands.
   const { mutate: refreshDecks } = useFlashcardDecks(code);
   const { data: sources, mutate: refreshSources } = useCourseSources(code);
-  const { data: vault } = useVault();
   const { paths, available, refresh: refreshSelection } = useCourseSelection();
   const { jobs, track, isBusy } = useJobs();
   const [generating, setGenerating] = useState<GenerateKind | null>(null);
@@ -258,15 +255,17 @@ export function CourseStudio({ code }: { code: string }) {
     })),
     // A guide that took minutes to write used to render as unclickable text,
     // with its path announced only in a toast that had since auto-dismissed.
-    // It is a real file in the vault, so the obsidian link is the honest
-    // destination -- there is no in-app reader for it.
+    // It then linked to Obsidian, because there was no in-app reader and that
+    // was the only honest destination. There is one now: checking what came
+    // out of a generation should not require switching apps. The Obsidian
+    // link has not gone away -- it is on the reader, which is where you go
+    // when you actually want to annotate the file.
     ...guides.map((guide) => ({
       key: guide.path,
       label: guide.title,
       date: guide.modified,
       kind: "GUIDE" as const,
-      href: vault ? obsidianUri(vault.path, guide.path) : undefined,
-      external: true,
+      href: `/notebook/note?path=${encodeURIComponent(guide.path)}`,
     })),
   ].sort((a, b) => (a.date < b.date ? 1 : -1));
 
