@@ -72,6 +72,7 @@ definition. This is the decoder ring.
 | **I4** | Secrets live in the OS keyring only — never the repo, never the vault. |
 | **I5** | Omitting `model` keeps the Claude Code subscription path (no API key); naming a registry model routes through `backend/agent/adapters.py`. |
 | **I6** | Agent tools are read-only and every result carries citation metadata. Output whose citation cannot be verified is dropped, not shipped. |
+| **I7** | A generated question or card is about the **subject**, never about the document. `agent/itemflaws.py` states that to the model and rejects what violates it. The citation records where an answer came from; the reader will not have the file. |
 
 ## Architecture
 
@@ -87,16 +88,49 @@ configurable, and `Taxonomy` rejects duplicate names because aliasing anything
 onto `private` would breach I3. A hardcoded `15-Courses` is a bug that has
 shipped here before.
 
+**Generation reads through `rag/select.py`, never `index.all_chunks()`.**
+`select_corpus` either runs each topic through `rag/retrieve.py` or samples
+the course evenly across its source files; `pack_excerpts` renders the one
+`[SOURCE path=… slide N]` marker every generator uses. Before this, all three
+generators took every chunk in store order and packed a 60k *prefix* of it —
+so `topics` narrowed nothing and most of a long course was unreachable. The
+`[SOURCE …]` spelling and `practice_exam._citation_verified` have to agree;
+they are one function apart for that reason.
+
+**What a generated note contains is the doc type's decision**
+(`agent/doctypes.py`), and `formatting.note_contract()` is the only thing that
+orders its sections. That is not style: `relations.parse_topics` keeps
+everything *before* the last `## Topics` and discards the rest, so a contract
+that let the self-test land below it silently deleted the flashcards that
+section becomes. Add a section by giving a doc type one, never by appending a
+sentence to a prompt file.
+
+**Extraction is where note quality actually comes from.** `rag/extract.py`
+walks PPTX XML rather than `slide.shapes` (which skips `mc:AlternateContent`,
+where every equation lives), converts OMML to LaTeX (`extractors/omml.py`),
+and OCRs image-only PDF pages behind an injected `OcrPolicy`. `rag/` imports
+`agent/` nowhere — the dependency runs the other way — so the vision
+escalation and the page cache reach it as callables built in `main.py`.
+
 **Long-running work goes through the shared job store.** `ingest_jobs` carries
 `kind` + `params` and serves ingest, reindex, relink, guide, exam and deck.
 Such an endpoint answers `202 {"job_id": …}` and is polled at
-`GET /api/ingest/jobs/{id}`; contention is by slot group
-(`features/ingest/store.py::SLOT_GROUPS` — ingest/reindex/relink share the
-`index` slot because they all load the embedding model; generation takes none).
+`GET /api/ingest/jobs/{id}`. Contention is by slot group
+(`features/ingest/store.py::SLOT_GROUPS`): ingest/reindex/relink share the
+`index` slot (capacity 1 — one embedding model, one chroma dir, one
+`.git/index.lock`); guide/exam/deck share `generate` (capacity 3 — a guide
+*and* a deck at once is offered deliberately; a fourth is a double-click).
+**Claim a slot with `store.claim_job`, never `create_job` + a prior check** —
+the two-statement version let simultaneous requests both see an empty slot.
+Every job runs on one bounded pool built in `main.py`, injected through
+`ingest_job_runner`.
+
 On the frontend these are owned by `JobsProvider` (`web/lib/jobs.tsx`), mounted
 **above the router** in `(dashboard)/layout.tsx`, and recovered from the server
 rather than from `localStorage`. Holding a long request in a component local is
-the bug that machinery exists to prevent.
+the bug that machinery exists to prevent. `track(id, {kind, params})` marks a
+job busy *optimistically*; without the second argument a button stays live
+until the next poll, which is the whole double-click window.
 
 **One SQLite database**, at `<vault>/.argus/argus.db`. Migrations are additive
 `ALTER`s inside `core/db.py::init_schema`, which runs on **every** connection —

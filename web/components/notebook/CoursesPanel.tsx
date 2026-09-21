@@ -140,16 +140,33 @@ export default function CoursesPanel() {
     const body = new FormData();
     body.append("course", course);
     body.append("file", file);
-    const response = await apiFetch("/api/study/upload", { method: "POST", body });
-    const payload = await response.json();
-    show(response.ok ? `saved ${payload.path} — indexing in the background` : `upload failed: ${payload.detail}`);
-    setUploading(null);
-    refreshCourses();
+    try {
+      const response = await apiFetch("/api/study/upload", { method: "POST", body });
+      const payload = await response.json().catch(() => ({}));
+      show(
+        response.ok
+          ? `saved ${payload.path} — indexing in the background`
+          : `upload failed: ${payload.detail ?? "the file was not saved"}`,
+        response.ok ? undefined : { tone: "error" },
+      );
+      refreshCourses();
+    } catch (error) {
+      // A network failure mid-upload used to reject out of an async event
+      // handler with nothing to catch it: no toast, and `uploading` never
+      // cleared, so every course's button stayed disabled until a reload.
+      show(`upload failed: ${error instanceof Error ? error.message : "backend offline?"}`, {
+        tone: "error",
+      });
+    } finally {
+      setUploading(null);
+    }
   }
 
   function handleDragOver(course: string, event: DragEvent) {
     event.preventDefault();
-    if (uploading !== null) return;
+    // Per course, not global: one upload used to disable every course's
+    // button and dropzone, so a slow file blocked the whole panel.
+    if (uploading === course) return;
     setDragOverCourse(course);
   }
   function handleDragLeave(course: string, event: DragEvent) {
@@ -159,7 +176,8 @@ export default function CoursesPanel() {
   function handleDrop(course: string, event: DragEvent) {
     event.preventDefault();
     setDragOverCourse(null);
-    if (uploading !== null) return;
+    // Per course, as above.
+    if (uploading === course) return;
     const file = event.dataTransfer.files?.[0];
     if (file) upload(course, file);
   }
@@ -399,7 +417,7 @@ export default function CoursesPanel() {
                   />
                   <button
                     onClick={() => fileInputs.current[course.code]?.click()}
-                    disabled={uploading !== null}
+                    disabled={uploading === course.code}
                     className={
                       empty
                         ? "rounded-ctl border border-[var(--ac)] bg-nb-acBg px-3 py-2 text-ctl font-semibold text-[var(--ac)] transition-opacity hover:opacity-80 disabled:opacity-70"
